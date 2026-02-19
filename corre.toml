@@ -1,0 +1,33 @@
+[general]
+data_dir = "~/.local/share/corre"
+log_level = "info"
+
+[llm]
+provider = "openai-compatible"
+base_url = "https://api.venice.ai/api/v1"
+model = "llama-3.3-70b"
+api_key_env = "VENICE_API_KEY"
+temperature = 0.3
+max_tokens = 4096
+max_concurrent = 10        # parallel LLM requests; tune to your provider's rate limit
+
+[news]
+bind = "127.0.0.1:3200"
+title = "CorreNews"
+
+[mcp.servers.brave-search]
+command = "npx"
+args = ["-y", "@brave/brave-search-mcp-server"]
+env = { BRAVE_API_KEY = "BRAVE_API_KEY" }
+
+[mcp.servers.fetch]
+command = "mcp-server-fetch"
+args = []
+
+[[capabilities]]
+name = "daily-brief"
+description = "Researches topics and produces a daily news briefing"
+schedule = "0 5 * * *"
+mcp_servers = ["brave-search"]
+config_path = "config/topics.md"
+enabled = true

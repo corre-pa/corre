@@ -1,0 +1,69 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/corre-core",
+    "crates/corre-mcp",
+    "crates/corre-llm",
+    "crates/corre-news",
+    "crates/corre-capabilities",
+    "crates/corre-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+corre-core = { path = "crates/corre-core" }
+corre-mcp = { path = "crates/corre-mcp" }
+corre-llm = { path = "crates/corre-llm" }
+corre-news = { path = "crates/corre-news" }
+corre-capabilities = { path = "crates/corre-capabilities" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+
+# Templating
+askama = "0.13"
+
+# Time & scheduling
+chrono = { version = "0.4", features = ["serde"] }
+tokio-cron-scheduler = "0.13"
+
+# MCP
+rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
+
+# Search
+tantivy = "0.22"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Async trait
+async-trait = "0.1"
+
+# Misc
+futures = "0.3"
+dirs = "6"
+uuid = { version = "1", features = ["v4"] }
+url = "2"

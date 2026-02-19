@@ -1,0 +1,175 @@
+use anyhow::Context;
+use clap::{Parser, Subcommand};
+use corre_core::capability::CapabilityContext;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+#[derive(Parser)]
+#[command(name = "corre", about = "Personal AI task scheduler and newspaper")]
+struct Cli {
+    /// Path to config file
+    #[arg(short, long, default_value = "corre.toml")]
+    config: PathBuf,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the full daemon (scheduler + web server)
+    Run,
+    /// Run a single capability immediately and exit
+    RunNow {
+        /// Name of the capability to run
+        capability: String,
+    },
+    /// Start only the web server
+    Serve,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    let config = corre_core::config::CorreConfig::load(&cli.config)
+        .with_context(|| format!("Failed to load config from {}", cli.config.display()))?;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default()),
+        )
+        .init();
+
+    let data_dir = config.data_dir();
+    std::fs::create_dir_all(&data_dir)?;
+
+    match cli.command {
+        Commands::Run => cmd_run(config).await,
+        Commands::RunNow { capability } => cmd_run_now(config, &capability).await,
+        Commands::Serve => cmd_serve(config).await,
+    }
+}
+
+async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> {
+    // Start web server in background
+    let web_config = config.clone();
+    let web_handle = tokio::spawn(async move { start_web_server(&web_config).await });
+
+    // Start scheduler
+    let mut scheduler = corre_core::scheduler::Scheduler::new().await?;
+    let registry = Arc::new(corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities));
+
+    for cap_config in config.capabilities.iter().filter(|c| c.enabled) {
+        let cap_name = cap_config.name.clone();
+        let schedule = cap_config.schedule.clone();
+        let config = config.clone();
+        let registry = registry.clone();
+
+        tracing::info!("Scheduling capability `{cap_name}` with cron `{schedule}`");
+
+        let callback: Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> =
+            Box::new(move || {
+                let cap_name = cap_name.clone();
+                let config = config.clone();
+                let registry = registry.clone();
+                Box::pin(async move {
+                    if let Err(e) = execute_capability(&config, &registry, &cap_name).await {
+                        tracing::error!("Capability `{cap_name}` failed: {e:#}");
+                    }
+                })
+            });
+
+        scheduler.add_async_job(&schedule, callback).await?;
+    }
+
+    scheduler.start().await?;
+    tracing::info!("Scheduler started. Press Ctrl+C to stop.");
+
+    tokio::signal::ctrl_c().await?;
+    tracing::info!("Shutting down...");
+    scheduler.shutdown().await?;
+
+    web_handle.abort();
+    Ok(())
+}
+
+async fn cmd_run_now(config: corre_core::config::CorreConfig, capability_name: &str) -> anyhow::Result<()> {
+    let registry = corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities);
+    execute_capability(&config, &registry, capability_name).await
+}
+
+async fn cmd_serve(config: corre_core::config::CorreConfig) -> anyhow::Result<()> {
+    start_web_server(&config).await
+}
+
+async fn execute_capability(
+    config: &corre_core::config::CorreConfig,
+    registry: &corre_capabilities::registry::CapabilityRegistry,
+    cap_name: &str,
+) -> anyhow::Result<()> {
+    let capability = registry.get(cap_name).with_context(|| format!("Unknown capability: `{cap_name}`"))?.clone();
+
+    // Build MCP pool with required servers
+    let mcp_defs = capability
+        .manifest()
+        .mcp_servers
+        .iter()
+        .filter_map(|name| config.mcp.servers.get(name).map(|cfg| (name.clone(), corre_mcp::McpServerDef::from_config(name, cfg))))
+        .collect();
+
+    let mcp_pool = corre_mcp::McpPool::new(mcp_defs);
+
+    let llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
+
+    let config_dir = std::env::current_dir()?;
+    let ctx = CapabilityContext { mcp: Box::new(mcp_pool.clone()), llm, config_dir, max_concurrent_llm: config.llm.max_concurrent };
+
+    tracing::info!("Running capability `{cap_name}`");
+
+    let timeout = std::time::Duration::from_secs(300);
+    let output = tokio::time::timeout(timeout, capability.execute(&ctx))
+        .await
+        .with_context(|| format!("Capability `{cap_name}` timed out after {timeout:?}"))??;
+
+    // Store as edition
+    let data_dir = config.data_dir();
+    let archive = corre_news::archive::Archive::new(&data_dir);
+
+    let sections = group_articles_into_sections(output.articles);
+    let edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), sections);
+
+    let path = archive.store(&edition)?;
+    tracing::info!("Edition stored at {}", path.display());
+
+    // Index for search
+    if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
+        let _ = search.index_edition(&edition);
+    }
+
+    mcp_pool.shutdown().await;
+
+    tracing::info!("Done. {} articles produced.", edition.article_count());
+    Ok(())
+}
+
+async fn start_web_server(config: &corre_core::config::CorreConfig) -> anyhow::Result<()> {
+    let data_dir = config.data_dir();
+    let archive = corre_news::archive::Archive::new(&data_dir);
+    let search = corre_news::search::SearchIndex::open_or_create(&data_dir)?;
+
+    let static_dir = PathBuf::from("static");
+
+    let state = Arc::new(corre_news::server::AppState { archive, search, title: config.news.title.clone(), static_dir });
+
+    let addr: std::net::SocketAddr = config.news.bind.parse()?;
+    tracing::info!("CorreNews listening on http://{addr}");
+    corre_news::server::serve(state, addr).await
+}
+
+fn group_articles_into_sections(articles: Vec<corre_core::publish::Article>) -> Vec<corre_core::publish::Section> {
+    if articles.is_empty() {
+        return vec![];
+    }
+    vec![corre_core::publish::Section { title: "Daily Brief".into(), articles }]
+}

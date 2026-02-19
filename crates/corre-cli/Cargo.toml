@@ -1,0 +1,21 @@
+[package]
+name = "corre-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "corre"
+path = "src/main.rs"
+
+[dependencies]
+corre-core = { workspace = true }
+corre-mcp = { workspace = true }
+corre-llm = { workspace = true }
+corre-news = { workspace = true }
+corre-capabilities = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }

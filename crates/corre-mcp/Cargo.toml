@@ -1,0 +1,15 @@
+[package]
+name = "corre-mcp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+corre-core = { workspace = true }
+rmcp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
