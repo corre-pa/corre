@@ -1,5 +1,24 @@
+use ammonia::Builder;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+/// Sanitize HTML content, allowing only safe formatting tags.
+/// Strips scripts, event handlers, iframes, and other dangerous elements.
+pub fn sanitize_html(input: &str) -> String {
+    Builder::new()
+        .tags(HashSet::from(["p", "br", "b", "strong", "i", "em", "a", "ul", "ol", "li", "blockquote"]))
+        .link_rel(Some("noopener"))
+        .url_schemes(HashSet::from(["http", "https"]))
+        .clean(input)
+        .to_string()
+}
+
+/// Validate a URL, returning `"#"` for anything that isn't http or https.
+pub fn sanitize_url(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") { trimmed.to_string() } else { "#".to_string() }
+}
 
 /// A single news article produced by a capability.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +75,52 @@ impl Edition {
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+
+    #[test]
+    fn sanitize_html_strips_scripts_preserves_formatting() {
+        let dangerous = r#"<p>Hello</p><script>alert('xss')</script><b>bold</b>"#;
+        let result = sanitize_html(dangerous);
+        assert!(result.contains("<p>Hello</p>"));
+        assert!(result.contains("<b>bold</b>"));
+        assert!(!result.contains("<script>"));
+        assert!(!result.contains("alert"));
+    }
+
+    #[test]
+    fn sanitize_html_strips_event_handlers() {
+        let dangerous = r#"<img onerror="alert(1)" src="x"><p>safe</p>"#;
+        let result = sanitize_html(dangerous);
+        assert!(!result.contains("onerror"));
+        assert!(result.contains("<p>safe</p>"));
+    }
+
+    #[test]
+    fn sanitize_html_preserves_safe_links() {
+        let input = r#"<a href="https://example.com">link</a>"#;
+        let result = sanitize_html(input);
+        assert!(result.contains("https://example.com"));
+        assert!(result.contains("<a"));
+    }
+
+    #[test]
+    fn sanitize_html_strips_javascript_links() {
+        let input = r#"<a href="javascript:alert(1)">click</a>"#;
+        let result = sanitize_html(input);
+        assert!(!result.contains("javascript:"));
+    }
+
+    #[test]
+    fn sanitize_url_allows_http_and_https() {
+        assert_eq!(sanitize_url("https://example.com"), "https://example.com");
+        assert_eq!(sanitize_url("http://example.com"), "http://example.com");
+    }
+
+    #[test]
+    fn sanitize_url_rejects_javascript_protocol() {
+        assert_eq!(sanitize_url("javascript:alert(1)"), "#");
+        assert_eq!(sanitize_url("data:text/html,<script>"), "#");
+        assert_eq!(sanitize_url(""), "#");
+    }
 
     #[test]
     fn edition_picks_top_headline() {

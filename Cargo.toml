@@ -67,3 +67,4 @@ futures = "0.3"
 dirs = "6"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
+ammonia = "4"

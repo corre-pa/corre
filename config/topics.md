@@ -1,16 +1,18 @@
 # Daily Brief Topics
 
-Each section becomes a section in CorreNews. Queries under each section are searched independently.
+## Zero-knowledge
+Find the latest developments and papers on ZK-SNARKs, privacy, and scaling technologies for blockchains.
 
-## Technology
-- Rust programming language news
-- AI and machine learning developments
-- Open source software releases
+### Include 
+* https://arxiv.org/
+* Vitalik Buterin
+* Ian Miers
 
-## World News
-- Geopolitics and international relations
-- Economic developments and markets
+## AI automation and agents
+Looking for the latest developments, and hottest Github projects in AI automation, agents, and related tools.
 
-## Science
-- Space exploration and astronomy
-- Climate science and environment
+## Astronomy
+The latest interesting topics on astronomy, especially Atlas/3I.
+
+### Exclude
+* Avi Loeb

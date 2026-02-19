@@ -85,11 +85,7 @@ impl McpCaller for McpPool {
 
         if json_values.len() == text_blocks.len() && !json_values.is_empty() {
             // All blocks parsed as JSON
-            if json_values.len() == 1 {
-                Ok(json_values.into_iter().next().unwrap())
-            } else {
-                Ok(serde_json::Value::Array(json_values))
-            }
+            if json_values.len() == 1 { Ok(json_values.into_iter().next().unwrap()) } else { Ok(serde_json::Value::Array(json_values)) }
         } else {
             // Fall back to plain text
             let joined = text_blocks.join("\n");

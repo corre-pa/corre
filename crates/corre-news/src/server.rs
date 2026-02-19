@@ -1,5 +1,5 @@
 use crate::archive::Archive;
-use crate::render::{EditionTemplate, NewspaperTemplate};
+use crate::render::NewspaperTemplate;
 use crate::search::SearchIndex;
 use askama::Template;
 use axum::Router;
@@ -23,6 +23,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index_handler))
         .route("/edition/{date}", get(edition_handler))
+        .route("/api/dates", get(dates_handler))
         .route("/search", get(search_handler))
         .nest_service("/static", ServeDir::new(&state.static_dir))
         .with_state(state)
@@ -50,14 +51,23 @@ async fn edition_handler(State(state): State<Arc<AppState>>, Path(date_str): Pat
 
     match state.archive.load(date) {
         Ok(Some(edition)) => {
-            let dates = state.archive.list_dates().unwrap_or_default();
-            let template = EditionTemplate { title: &state.title, edition: &edition, dates: &dates };
+            let template = NewspaperTemplate { title: &state.title, edition: &edition };
             match template.render() {
                 Ok(html) => Html(html).into_response(),
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
             }
         }
         Ok(None) => (StatusCode::NOT_FOUND, format!("No edition for {date}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Archive error: {e}")).into_response(),
+    }
+}
+
+async fn dates_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.archive.list_dates() {
+        Ok(dates) => {
+            let date_strings: Vec<String> = dates.iter().map(|d| d.format("%Y-%m-%d").to_string()).collect();
+            axum::Json(date_strings).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Archive error: {e}")).into_response(),
     }
 }

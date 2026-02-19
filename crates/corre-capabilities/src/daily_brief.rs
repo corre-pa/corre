@@ -1,6 +1,6 @@
 use corre_core::capability::{Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmMessage, LlmRequest, LlmRole};
 use corre_core::config::CapabilityConfig;
-use corre_core::publish::{Article, Source};
+use corre_core::publish::{Article, Section, Source, sanitize_html, sanitize_url};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -131,11 +131,8 @@ fn parse_search_results(value: &serde_json::Value) -> Vec<SearchResultItem> {
         if let Ok(items) = serde_json::from_str::<Vec<SearchResultItem>>(text) {
             return items.into_iter().filter(|i| !i.url.is_empty()).collect();
         }
-        let items: Vec<SearchResultItem> = text
-            .lines()
-            .filter_map(|line| serde_json::from_str::<SearchResultItem>(line).ok())
-            .filter(|i| !i.url.is_empty())
-            .collect();
+        let items: Vec<SearchResultItem> =
+            text.lines().filter_map(|line| serde_json::from_str::<SearchResultItem>(line).ok()).filter(|i| !i.url.is_empty()).collect();
         if !items.is_empty() {
             return items;
         }
@@ -267,9 +264,9 @@ impl Capability for DailyBrief {
                             section_name,
                             Article {
                                 title: item.title.clone(),
-                                summary: item.description.clone(),
-                                body: response.content,
-                                sources: vec![Source { title: item.title, url: item.url }],
+                                summary: sanitize_html(&item.description),
+                                body: sanitize_html(&response.content),
+                                sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
                                 score,
                             },
                         ))
@@ -292,9 +289,13 @@ impl Capability for DailyBrief {
             article_map.entry(pair.0).or_default().push(pair.1);
         }
 
-        let articles: Vec<Article> = article_map.values().flatten().cloned().collect();
+        // Preserve section ordering from the original topics file
+        let output_sections: Vec<Section> = sections
+            .iter()
+            .filter_map(|s| article_map.remove(&s.name).map(|articles| Section { title: s.name.clone(), articles }))
+            .collect();
 
-        Ok(CapabilityOutput { capability_name: self.manifest.name.clone(), produced_at: chrono::Utc::now(), articles })
+        Ok(CapabilityOutput { capability_name: self.manifest.name.clone(), produced_at: chrono::Utc::now(), sections: output_sections })
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::publish::Article;
+use crate::publish::Section;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
@@ -83,7 +83,7 @@ pub struct CapabilityContext {
 pub struct CapabilityOutput {
     pub capability_name: String,
     pub produced_at: DateTime<Utc>,
-    pub articles: Vec<Article>,
+    pub sections: Vec<Section>,
 }
 
 /// Trait implemented by each capability (daily brief, stock review, etc.).

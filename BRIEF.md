@@ -17,7 +17,7 @@
 * Flexibility and modularity. Not tied to a single platform / LLM. Allow multiple APIs, models etc. Let people do what they want to do.
 * Security. Only perform actions explicitly authorized by the user. Look out for and prevent prompt injection and other attacks.
 * Complex capabilities are similar to Skills in Claude Code. A natural-language description offloads tasks to MCP servers, and
-  then a output is sent to a publishing pipeline that converts the output into beautifully rendered newspaper style HTML for
+  then the output is sent to a publishing pipeline that converts the output into beautifully rendered newspaper style HTML for
   CorreNews.
 * The heartbeat and scheduling should NOT be done through LLM calls. CronJobs or similar scheduling tools should be used.
 * First-class support for helping to write build and deploy MCP servers is a core part of the project.

@@ -136,8 +136,7 @@ async fn execute_capability(
     let data_dir = config.data_dir();
     let archive = corre_news::archive::Archive::new(&data_dir);
 
-    let sections = group_articles_into_sections(output.articles);
-    let edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), sections);
+    let edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
 
     let path = archive.store(&edition)?;
     tracing::info!("Edition stored at {}", path.display());
@@ -165,11 +164,4 @@ async fn start_web_server(config: &corre_core::config::CorreConfig) -> anyhow::R
     let addr: std::net::SocketAddr = config.news.bind.parse()?;
     tracing::info!("CorreNews listening on http://{addr}");
     corre_news::server::serve(state, addr).await
-}
-
-fn group_articles_into_sections(articles: Vec<corre_core::publish::Article>) -> Vec<corre_core::publish::Section> {
-    if articles.is_empty() {
-        return vec![];
-    }
-    vec![corre_core::publish::Section { title: "Daily Brief".into(), articles }]
 }
