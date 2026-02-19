@@ -35,7 +35,10 @@ impl DailyBrief {
 #[derive(Debug)]
 struct TopicSection {
     name: String,
+    context: String,
     queries: Vec<String>,
+    includes: Vec<String>,
+    excludes: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -51,30 +54,88 @@ struct SearchResultItem {
     extra_snippets: Vec<String>,
 }
 
+/// Sub-heading state for parsing `### Include` / `### Exclude` blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubHeading {
+    None,
+    Include,
+    Exclude,
+}
+
 fn parse_topics(content: &str) -> Vec<TopicSection> {
     let mut sections = Vec::new();
     let mut current_section: Option<TopicSection> = None;
+    let mut sub = SubHeading::None;
 
     for line in content.lines() {
         let trimmed = line.trim();
+
+        // New ## section heading
         if let Some(heading) = trimmed.strip_prefix("## ") {
             if let Some(section) = current_section.take() {
-                if !section.queries.is_empty() {
-                    sections.push(section);
+                sections.push(section);
+            }
+            current_section = Some(TopicSection {
+                name: heading.trim().to_string(),
+                context: String::new(),
+                queries: Vec::new(),
+                includes: Vec::new(),
+                excludes: Vec::new(),
+            });
+            sub = SubHeading::None;
+            continue;
+        }
+
+        // ### sub-headings toggle the sub-state
+        if let Some(sub_heading) = trimmed.strip_prefix("### ") {
+            match sub_heading.trim().to_lowercase().as_str() {
+                "include" => sub = SubHeading::Include,
+                "exclude" => sub = SubHeading::Exclude,
+                _ => sub = SubHeading::None,
+            }
+            continue;
+        }
+
+        // Skip lines outside a section
+        let Some(ref mut section) = current_section else { continue };
+
+        match sub {
+            SubHeading::None => {
+                // `- ` bullets are backward-compat queries
+                if let Some(query) = trimmed.strip_prefix("- ") {
+                    let query = query.trim();
+                    if !query.is_empty() {
+                        section.queries.push(query.to_string());
+                    }
+                } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                    // Free text → editorial context
+                    if !section.context.is_empty() {
+                        section.context.push(' ');
+                    }
+                    section.context.push_str(trimmed);
                 }
             }
-            current_section = Some(TopicSection { name: heading.trim().to_string(), queries: Vec::new() });
-        } else if let Some(query) = trimmed.strip_prefix("- ") {
-            if let Some(ref mut section) = current_section {
-                section.queries.push(query.trim().to_string());
+            SubHeading::Include => {
+                if let Some(entry) = trimmed.strip_prefix("* ") {
+                    let entry = entry.trim();
+                    if !entry.is_empty() {
+                        section.includes.push(entry.to_string());
+                    }
+                }
+            }
+            SubHeading::Exclude => {
+                if let Some(entry) = trimmed.strip_prefix("* ") {
+                    let entry = entry.trim();
+                    if !entry.is_empty() {
+                        section.excludes.push(entry.to_string());
+                    }
+                }
             }
         }
     }
 
     if let Some(section) = current_section {
-        if !section.queries.is_empty() {
-            sections.push(section);
-        }
+        sections.push(section);
     }
 
     sections
@@ -174,9 +235,13 @@ impl Capability for DailyBrief {
         // ------------------------------------------------------------------
         let mut search_handles = Vec::new();
         for section in &sections {
-            for query in &section.queries {
+            // Build the full query list: includes first, then section name, then legacy bullets
+            let mut all_queries: Vec<String> = section.includes.clone();
+            all_queries.push(section.name.clone());
+            all_queries.extend(section.queries.iter().cloned());
+
+            for query in all_queries {
                 let section_name = section.name.clone();
-                let query = query.clone();
                 search_handles.push(async move {
                     tracing::info!("Searching: {query}");
                     let search_args = serde_json::json!({ "query": query, "freshness": "pw" });
@@ -207,10 +272,30 @@ impl Capability for DailyBrief {
             results.retain(|r| seen.insert(r.url.clone()));
         }
 
+        // Build a lookup from section name to its excludes for filtering
+        let excludes_by_section: std::collections::HashMap<&str, &[String]> =
+            sections.iter().map(|s| (s.name.as_str(), s.excludes.as_slice())).collect();
+
+        // Filter out results matching any exclude term (case-insensitive against url+title+description)
+        for (section_name, results) in section_results.iter_mut() {
+            if let Some(excludes) = excludes_by_section.get(section_name.as_str()) {
+                if !excludes.is_empty() {
+                    results.retain(|r| {
+                        let haystack = format!("{} {} {}", r.url, r.title, r.description).to_lowercase();
+                        !excludes.iter().any(|ex| haystack.contains(&ex.to_lowercase()))
+                    });
+                }
+            }
+        }
+
         // ------------------------------------------------------------------
         // Step 4: Score each section's results (parallel LLM calls)
         // ------------------------------------------------------------------
         let semaphore = Arc::new(Semaphore::new(ctx.max_concurrent_llm));
+
+        // Build a lookup from section name to its context for scoring
+        let context_by_section: std::collections::HashMap<&str, &str> =
+            sections.iter().map(|s| (s.name.as_str(), s.context.as_str())).collect();
 
         let mut scoring_handles = Vec::new();
         for (section_name, results) in &section_results {
@@ -218,11 +303,12 @@ impl Capability for DailyBrief {
                 continue;
             }
             let section_name = section_name.clone();
+            let context = context_by_section.get(section_name.as_str()).copied().unwrap_or_default().to_string();
             let results = results.clone();
             let sem = semaphore.clone();
             scoring_handles.push(async move {
                 let _permit = sem.acquire().await.unwrap();
-                score_section(&ctx.llm, &section_name, &results).await
+                score_section(&ctx.llm, &section_name, &context, &results).await
             });
         }
 
@@ -304,6 +390,7 @@ impl Capability for DailyBrief {
 async fn score_section(
     llm: &Box<dyn corre_core::capability::LlmProvider>,
     section_name: &str,
+    context: &str,
     results: &[SearchResultItem],
 ) -> Vec<RankedResult> {
     let results_json = serde_json::to_string(
@@ -333,7 +420,13 @@ async fn score_section(
             },
             LlmMessage {
                 role: LlmRole::User,
-                content: format!("Score these search results for the \"{section_name}\" section:\n{results_json}"),
+                content: if context.is_empty() {
+                    format!("Score these search results for the \"{section_name}\" section:\n{results_json}")
+                } else {
+                    format!(
+                        "Score these search results for the \"{section_name}\" section.\nEditorial guidance: {context}\n{results_json}"
+                    )
+                },
             },
         ],
         temperature: Some(0.1),
@@ -383,18 +476,83 @@ mod tests {
 Each section becomes a section in CorreNews.
 
 ## Technology
+Focus on systems programming and open-source tooling.
 - Rust programming language news
 - AI and machine learning developments
+
+### Include
+* https://blog.rust-lang.org
+* LLVM weekly
+
+### Exclude
+* cryptocurrency
+* blockchain
 
 ## World News
 - Geopolitics and international relations
 "#;
         let sections = parse_topics(content);
         assert_eq!(sections.len(), 2);
+
         assert_eq!(sections[0].name, "Technology");
-        assert_eq!(sections[0].queries.len(), 2);
+        assert_eq!(sections[0].context, "Focus on systems programming and open-source tooling.");
+        assert_eq!(sections[0].queries, vec!["Rust programming language news", "AI and machine learning developments"]);
+        assert_eq!(sections[0].includes, vec!["https://blog.rust-lang.org", "LLVM weekly"]);
+        assert_eq!(sections[0].excludes, vec!["cryptocurrency", "blockchain"]);
+
         assert_eq!(sections[1].name, "World News");
-        assert_eq!(sections[1].queries.len(), 1);
+        assert_eq!(sections[1].context, "");
+        assert_eq!(sections[1].queries, vec!["Geopolitics and international relations"]);
+        assert!(sections[1].includes.is_empty());
+        assert!(sections[1].excludes.is_empty());
+    }
+
+    #[test]
+    fn parse_topics_empty_section_preserved() {
+        // Sections with no queries but with includes should still be kept
+        let content = "## Sports\n### Include\n* Formula 1 results\n";
+        let sections = parse_topics(content);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].name, "Sports");
+        assert!(sections[0].queries.is_empty());
+        assert_eq!(sections[0].includes, vec!["Formula 1 results"]);
+    }
+
+    #[test]
+    fn exclude_filtering() {
+        let items = vec![
+            SearchResultItem {
+                title: "Rust 1.80 released".into(),
+                url: "https://blog.rust-lang.org/2024/rust-1.80".into(),
+                description: "New Rust release".into(),
+                extra_snippets: vec![],
+            },
+            SearchResultItem {
+                title: "Bitcoin hits new high".into(),
+                url: "https://crypto.example.com/bitcoin".into(),
+                description: "Cryptocurrency market update".into(),
+                extra_snippets: vec![],
+            },
+            SearchResultItem {
+                title: "Blockchain in supply chain".into(),
+                url: "https://example.com/supply".into(),
+                description: "Using distributed ledger tech".into(),
+                extra_snippets: vec![],
+            },
+        ];
+
+        let excludes = vec!["cryptocurrency".to_string(), "blockchain".to_string()];
+
+        let filtered: Vec<_> = items
+            .into_iter()
+            .filter(|r| {
+                let haystack = format!("{} {} {}", r.url, r.title, r.description).to_lowercase();
+                !excludes.iter().any(|ex| haystack.contains(&ex.to_lowercase()))
+            })
+            .collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].title, "Rust 1.80 released");
     }
 
     #[test]
