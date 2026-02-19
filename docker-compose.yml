@@ -1,0 +1,20 @@
+services:
+  corre:
+    build: .
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./config:/app/config
+      - corre-data:/data
+    env_file:
+      - .env
+    environment:
+      - TAILSCALE_ENABLED=false
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
+
+volumes:
+  corre-data:
