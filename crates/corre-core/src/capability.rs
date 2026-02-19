@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub struct CapabilityManifest {
     pub name: String,
     pub description: String,
-    /// Cron expression (e.g. "0 5 * * *").
+    /// Cron expression with seconds field (e.g. "0 0 5 * * *" for 05:00 daily).
     pub schedule: String,
     /// Names of MCP servers this capability requires (references `[mcp.servers.*]` in config).
     pub mcp_servers: Vec<String>,

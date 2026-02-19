@@ -117,7 +117,7 @@ corre run
 ```
 
 This starts both the cron scheduler and the web server. Capabilities fire on their configured
-schedules (the daily brief defaults to `0 5 * * *` -- 05:00 every day).
+schedules (the daily brief defaults to `0 0 5 * * *` -- 05:00 every day).
 
 ### CLI reference
 
@@ -269,7 +269,7 @@ env = { BRAVE_API_KEY = "BRAVE_API_KEY" }   # env var name, same pattern as api_
 
 [[capabilities]]
 name = "daily-brief"
-schedule = "0 5 * * *"
+schedule = "0 0 5 * * *"
 mcp_servers = ["brave-search"]
 config_path = "config/topics.md"
 enabled = true

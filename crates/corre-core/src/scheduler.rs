@@ -26,7 +26,14 @@ impl Scheduler {
                 callback().await;
             })
         })
-        .with_context(|| format!("Invalid cron expression: `{cron_expr}`"))?;
+        .with_context(|| {
+            format!(
+                "Invalid cron expression: `{cron_expr}`. \
+                 Expressions must have 6 fields (sec min hour day month weekday), \
+                 e.g. \"0 0 5 * * *\" for 05:00 daily. \
+                 Note: standard 5-field crontab syntax is not supported."
+            )
+        })?;
 
         self.inner.add(job).await?;
         Ok(())

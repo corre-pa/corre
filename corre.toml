@@ -12,7 +12,7 @@ max_tokens = 4096
 max_concurrent = 10        # parallel LLM requests; tune to your provider's rate limit
 
 [news]
-bind = "127.0.0.1:3200"
+bind = "192.168.1.101:5555"
 title = "Corre News"
 
 [mcp.servers.brave-search]
@@ -27,7 +27,7 @@ args = []
 [[capabilities]]
 name = "daily-brief"
 description = "Researches topics and produces a daily news briefing"
-schedule = "0 5 * * *"
+schedule = "0 0 5 * * *"
 mcp_servers = ["brave-search"]
 config_path = "config/topics.md"
 enabled = true
