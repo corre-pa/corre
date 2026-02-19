@@ -52,6 +52,12 @@ pub struct Edition {
     pub headline: String,
     pub sections: Vec<Section>,
     pub produced_at: DateTime<Utc>,
+    #[serde(default = "default_tagline")]
+    pub tagline: String,
+}
+
+fn default_tagline() -> String {
+    "All the news that's fit to pun".to_string()
 }
 
 impl Edition {
@@ -63,7 +69,7 @@ impl Edition {
             .map(|a| a.title.clone())
             .unwrap_or_else(|| "No news today".into());
 
-        Self { date, headline, sections, produced_at: Utc::now() }
+        Self { date, headline, sections, produced_at: Utc::now(), tagline: default_tagline() }
     }
 
     pub fn article_count(&self) -> usize {

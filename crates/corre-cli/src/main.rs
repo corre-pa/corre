@@ -146,7 +146,33 @@ async fn execute_capability(
     let data_dir = config.data_dir();
     let archive = corre_news::archive::Archive::new(&data_dir);
 
-    let edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
+    let mut edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
+
+    // Generate a dad joke tagline inspired by the headline
+    let tagline_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
+    let tagline_request = corre_core::capability::LlmRequest {
+        messages: vec![
+            corre_core::capability::LlmMessage {
+                role: corre_core::capability::LlmRole::System,
+                content: "You are a newspaper sub-editor who writes witty taglines. Write a single short dad joke or pun \
+                          (max 15 words) inspired by the given headline. Just the joke, no quotes, no explanation."
+                    .into(),
+            },
+            corre_core::capability::LlmMessage { role: corre_core::capability::LlmRole::User, content: edition.headline.clone() },
+        ],
+        temperature: Some(0.9),
+        max_tokens: Some(60),
+        json_mode: false,
+    };
+    match tagline_llm.complete(tagline_request).await {
+        Ok(resp) => {
+            let tagline = resp.content.trim().trim_matches('"').to_string();
+            if !tagline.is_empty() {
+                edition.tagline = tagline;
+            }
+        }
+        Err(e) => tracing::warn!("Failed to generate tagline, using default: {e}"),
+    }
 
     let path = archive.store(&edition)?;
     tracing::info!("Edition stored at {}", path.display());
