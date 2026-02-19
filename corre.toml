@@ -13,7 +13,7 @@ max_concurrent = 10        # parallel LLM requests; tune to your provider's rate
 
 [news]
 bind = "127.0.0.1:3200"
-title = "CorreNews"
+title = "Corre News"
 
 [mcp.servers.brave-search]
 command = "npx"

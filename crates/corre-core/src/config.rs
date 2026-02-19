@@ -96,7 +96,7 @@ fn default_bind() -> String {
 }
 
 fn default_title() -> String {
-    "CorreNews".into()
+    "Corre News".into()
 }
 
 impl CorreConfig {

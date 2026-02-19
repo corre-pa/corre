@@ -423,9 +423,7 @@ async fn score_section(
                 content: if context.is_empty() {
                     format!("Score these search results for the \"{section_name}\" section:\n{results_json}")
                 } else {
-                    format!(
-                        "Score these search results for the \"{section_name}\" section.\nEditorial guidance: {context}\n{results_json}"
-                    )
+                    format!("Score these search results for the \"{section_name}\" section.\nEditorial guidance: {context}\n{results_json}")
                 },
             },
         ],

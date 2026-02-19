@@ -40,10 +40,10 @@ body {
 }
 
 .masthead-title {
-    font-size: 3.5rem;
-    font-weight: 700;
+    font-family: 'Manufacturing Consent', var(--font-serif);
+    font-size: 6.0rem;
+    font-weight: 400;
     letter-spacing: 0.05em;
-    text-transform: uppercase;
     margin: 0.5rem 0;
 }
 
