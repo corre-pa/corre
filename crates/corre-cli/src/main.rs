@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use corre_core::capability::CapabilityContext;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(name = "corre", about = "Personal AI task scheduler and newspaper")]
@@ -35,14 +36,23 @@ async fn main() -> anyhow::Result<()> {
     let config = corre_core::config::CorreConfig::load(&cli.config)
         .with_context(|| format!("Failed to load config from {}", cli.config.display()))?;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default()),
-        )
-        .init();
-
     let data_dir = config.data_dir();
     std::fs::create_dir_all(&data_dir)?;
+
+    let log_dir = data_dir.join("capabilities_logs");
+    std::fs::create_dir_all(&log_dir)?;
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "capability.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default());
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(tracing_subscriber::fmt::layer().json().with_ansi(false).with_writer(non_blocking))
+        .init();
 
     match cli.command {
         Commands::Run => cmd_run(config).await,
