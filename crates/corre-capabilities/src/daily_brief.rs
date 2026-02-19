@@ -179,7 +179,7 @@ impl Capability for DailyBrief {
                 let query = query.clone();
                 search_handles.push(async move {
                     tracing::info!("Searching: {query}");
-                    let search_args = serde_json::json!({ "query": query });
+                    let search_args = serde_json::json!({ "query": query, "freshness": "pw" });
                     match ctx.mcp.call_tool("brave-search", "brave_web_search", search_args).await {
                         Ok(results) => {
                             let items = parse_search_results(&results);
