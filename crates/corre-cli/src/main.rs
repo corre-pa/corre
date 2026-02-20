@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use corre_core::capability::CapabilityContext;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(name = "corre", about = "Personal AI task scheduler and newspaper")]
@@ -45,13 +45,13 @@ async fn main() -> anyhow::Result<()> {
     let file_appender = tracing_appender::rolling::daily(&log_dir, "capability.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter =
+    let stderr_filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default());
+    let file_filter = tracing_subscriber::EnvFilter::new("debug");
 
     tracing_subscriber::registry()
-        .with(env_filter)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(tracing_subscriber::fmt::layer().json().with_ansi(false).with_writer(non_blocking))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_filter(stderr_filter))
+        .with(tracing_subscriber::fmt::layer().json().with_ansi(false).with_writer(non_blocking).with_filter(file_filter))
         .init();
 
     match cli.command {

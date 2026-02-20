@@ -371,9 +371,14 @@ impl Capability for DailyBrief {
             summary_handles.push(async move {
                 let _permit = sem.acquire().await.unwrap();
                 let summary_request = LlmRequest::simple(
-                    "You are a concise news writer. Write a 2-3 paragraph summary of the news item. Be factual and neutral.",
+                    "You are a precise news writer. You respond ONLY with raw JSON, no markdown fencing.\n\
+                    Given a news item, produce a JSON object with two fields:\n\
+                    - \"summary\": One sentence (max 30 words) delivering the single main takeaway. No filler.\n\
+                    - \"body\": A factual precis of the article in under 500 words. Stick strictly to concrete facts, \
+                    names, numbers, and dates from the source. Do not editorialize or pad with generic context. \
+                    The reader will decide whether to click through to the full article.",
                     format!(
-                        "Write a summary for this news item:\nTitle: {title}\nDescription: {desc}\nURL: {url}",
+                        "Title: {title}\nDescription: {desc}\nURL: {url}",
                         title = item.title,
                         desc = item.description,
                         url = item.url,
@@ -383,12 +388,24 @@ impl Capability for DailyBrief {
                 match ctx.llm.complete(summary_request).await {
                     Ok(response) => {
                         tracing::info!("Summarised: {}", item.title);
+                        let json_str = extract_json(&response.content);
+                        let (summary, body) = match serde_json::from_str::<serde_json::Value>(json_str) {
+                            Ok(obj) => {
+                                let s = obj.get("summary").and_then(|v| v.as_str()).unwrap_or(&item.description);
+                                let b = obj.get("body").and_then(|v| v.as_str()).unwrap_or(&response.content);
+                                (s.to_string(), b.to_string())
+                            }
+                            Err(_) => {
+                                tracing::warn!("Failed to parse summary JSON for `{}`, using raw response", item.title);
+                                (item.description.clone(), response.content.clone())
+                            }
+                        };
                         Some((
                             section_name,
                             Article {
                                 title: item.title.clone(),
-                                summary: sanitize_html(&item.description),
-                                body: sanitize_html(&response.content),
+                                summary: sanitize_html(&summary),
+                                body: sanitize_html(&body),
                                 sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
                                 score,
                             },
@@ -487,6 +504,14 @@ async fn score_section(
 
     let json_str = extract_json(&scoring_response.content);
     let scored: Vec<ScoredItem> = serde_json::from_str(json_str).unwrap_or_default();
+    scored.iter().for_each(|scored_item| {
+        tracing::debug!(
+            "Scoring result. {section_name}#{} -> {:0.2}. Reasoning: {}",
+            scored_item.index,
+            scored_item.score,
+            scored_item.reasoning
+        );
+    });
     tracing::info!("Scored {} results above threshold for section `{section_name}`", scored.len());
 
     let mut top: Vec<_> = scored.into_iter().map(|s| (s.index, s.score)).collect();
