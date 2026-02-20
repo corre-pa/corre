@@ -8,12 +8,13 @@ use tokio::sync::Semaphore;
 ///
 /// Pipeline:
 /// 1. Parse topics.md -> sections of search queries
-/// 2. Search all queries in parallel via brave-search MCP
-/// 3. Deduplicate results by URL within each section
-/// 4. Score results for newsworthiness (one LLM call per section, parallel)
-/// 5. Filter to top 5 per section above score threshold
-/// 6. Summarise each top result (parallel LLM calls, semaphore-bounded)
-/// 7. Group into sections -> CapabilityOutput
+/// 2. Build queries with section context, must-have include phrases, and exclusion operators
+/// 3. Search all queries via brave_web_search AND brave_news_search in parallel
+/// 4. Deduplicate results by URL within each section
+/// 5. Score results for newsworthiness (one LLM call per section, parallel)
+/// 6. Filter to top 5 per section above score threshold
+/// 7. Summarise each top result (parallel LLM calls, semaphore-bounded)
+/// 8. Group into sections -> CapabilityOutput
 pub struct DailyBrief {
     manifest: CapabilityManifest,
 }
@@ -60,6 +61,28 @@ enum SubHeading {
     None,
     Include,
     Exclude,
+}
+
+/// Build search queries for a section, combining section name + context with
+/// must-have include phrases (quoted) and exclusion operators.
+fn build_queries(section: &TopicSection) -> Vec<String> {
+    let base = if section.context.is_empty() { section.name.clone() } else { format!("{} {}", section.name, section.context) };
+
+    let exclude_suffix =
+        if section.excludes.is_empty() { String::new() } else { section.excludes.iter().map(|ex| format!(" -{ex}")).collect::<String>() };
+
+    let mut queries = Vec::new();
+
+    // General query (always present)
+    queries.push(format!("{base}{exclude_suffix}"));
+
+    // Legacy bullet queries
+    queries.extend(section.queries.iter().map(|q| format!("{base} {q}{exclude_suffix}")));
+
+    // One query per include term as a must-have phrase
+    queries.extend(section.includes.iter().map(|inc| format!("{base} \"{inc}\"{exclude_suffix}")));
+
+    queries
 }
 
 fn parse_topics(content: &str) -> Vec<TopicSection> {
@@ -231,32 +254,34 @@ impl Capability for DailyBrief {
         tracing::info!("Parsed {} topic sections", sections.len());
 
         // ------------------------------------------------------------------
-        // Step 2: Search all queries in parallel (MCP calls are I/O-bound)
+        // Step 2-3: Build queries and search via web + news in parallel
         // ------------------------------------------------------------------
-        let mut search_handles = Vec::new();
+        type SearchFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = (String, Vec<SearchResultItem>)> + Send + 'a>>;
+        let mut search_handles: Vec<SearchFuture<'_>> = Vec::new();
         for section in &sections {
-            // Build the full query list: includes first, then section name, then legacy bullets
-            let mut all_queries: Vec<String> = section.includes.clone();
-            all_queries.push(section.name.clone());
-            all_queries.extend(section.queries.iter().cloned());
+            let queries = build_queries(section);
 
-            for query in all_queries {
+            for query in queries {
                 let section_name = section.name.clone();
-                search_handles.push(async move {
-                    tracing::info!("Searching: {query}");
-                    let search_args = serde_json::json!({ "query": query, "freshness": "pw" });
-                    match ctx.mcp.call_tool("brave-search", "brave_web_search", search_args).await {
-                        Ok(results) => {
-                            let items = parse_search_results(&results);
-                            tracing::info!("Got {} results for query: {query}", items.len());
-                            (section_name, items)
+                for (tool, label) in [("brave_web_search", "Web"), ("brave_news_search", "News")] {
+                    let sec = section_name.clone();
+                    let q = query.clone();
+                    search_handles.push(Box::pin(async move {
+                        tracing::info!("{label} searching: {q}");
+                        let args = serde_json::json!({ "query": q, "freshness": "pd" });
+                        match ctx.mcp.call_tool("brave-search", tool, args).await {
+                            Ok(results) => {
+                                let items = parse_search_results(&results);
+                                tracing::info!("Got {} {label} results for: {q}", items.len());
+                                (sec, items)
+                            }
+                            Err(e) => {
+                                tracing::warn!("{label} search failed for `{q}`: {e}");
+                                (sec, vec![])
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!("Search failed for query `{query}`: {e}");
-                            (section_name, vec![])
-                        }
-                    }
-                });
+                    }));
+                }
             }
         }
 
@@ -563,6 +588,52 @@ Focus on systems programming and open-source tooling.
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].title, "Rust 1.80 released");
+    }
+
+    #[test]
+    fn build_queries_with_includes_and_excludes() {
+        let section = TopicSection {
+            name: "Gaming News".into(),
+            context: "Big Sales popular games Payday Factorio Battlefields".into(),
+            queries: vec![],
+            includes: vec!["Humble bundle".into(), "Epic games store".into(), "Steam".into()],
+            excludes: vec!["Xbox".into(), "Wii".into(), "Ubisoft".into()],
+        };
+        let queries = build_queries(&section);
+        assert_eq!(queries.len(), 4); // 1 general + 3 includes
+        assert_eq!(queries[0], "Gaming News Big Sales popular games Payday Factorio Battlefields -Xbox -Wii -Ubisoft");
+        assert_eq!(queries[1], "Gaming News Big Sales popular games Payday Factorio Battlefields \"Humble bundle\" -Xbox -Wii -Ubisoft");
+        assert_eq!(queries[2], "Gaming News Big Sales popular games Payday Factorio Battlefields \"Epic games store\" -Xbox -Wii -Ubisoft");
+        assert_eq!(queries[3], "Gaming News Big Sales popular games Payday Factorio Battlefields \"Steam\" -Xbox -Wii -Ubisoft");
+    }
+
+    #[test]
+    fn build_queries_no_includes() {
+        let section = TopicSection {
+            name: "World News".into(),
+            context: "".into(),
+            queries: vec!["Geopolitics".into()],
+            includes: vec![],
+            excludes: vec![],
+        };
+        let queries = build_queries(&section);
+        assert_eq!(queries.len(), 2); // 1 general + 1 legacy
+        assert_eq!(queries[0], "World News");
+        assert_eq!(queries[1], "World News Geopolitics");
+    }
+
+    #[test]
+    fn build_queries_excludes_no_includes() {
+        let section = TopicSection {
+            name: "Astronomy".into(),
+            context: "Latest interesting topics".into(),
+            queries: vec![],
+            includes: vec![],
+            excludes: vec!["Avi Loeb".into()],
+        };
+        let queries = build_queries(&section);
+        assert_eq!(queries.len(), 1); // only general query
+        assert_eq!(queries[0], "Astronomy Latest interesting topics -Avi Loeb");
     }
 
     #[test]

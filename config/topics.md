@@ -16,3 +16,16 @@ The latest interesting topics on astronomy, especially Atlas/3I.
 
 ### Exclude
 * Avi Loeb
+
+## Gaming News
+Find news on Big Sales on popular games; latest news on Payday, Factorio, Battlefields.
+
+### Include
+* Humble bundle
+* Epic games store
+* Steam
+
+### Exclude
+* Xbox
+* Wii
+* Ubisoft
