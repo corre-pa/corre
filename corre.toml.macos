@@ -21,10 +21,6 @@ command = "npx"
 args = ["-y", "@brave/brave-search-mcp-server"]
 env = { BRAVE_API_KEY = "BRAVE_API_KEY" }
 
-[mcp.servers.fetch]
-command = "mcp-server-fetch"
-args = []
-
 # [safety]
 # enabled = true                    # toggle the prompt-injection defense layer
 # max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size

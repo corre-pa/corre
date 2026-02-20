@@ -31,11 +31,6 @@ fn npx_command() -> &'static str {
     if cfg!(target_os = "windows") { "npx.cmd" } else { "npx" }
 }
 
-/// Returns the OS-appropriate command name for mcp-server-fetch.
-fn fetch_command() -> &'static str {
-    if cfg!(target_os = "windows") { "mcp-server-fetch.exe" } else { "mcp-server-fetch" }
-}
-
 /// Build a `CorreConfig` from the wizard state, ready for TOML serialization.
 pub fn build_config(state: &SetupState) -> CorreConfig {
     let mut mcp_servers = HashMap::new();
@@ -54,8 +49,6 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                 },
             },
         );
-        // fetch server used by daily-brief
-        mcp_servers.insert("fetch".into(), McpServerConfig { command: fetch_command().into(), args: Vec::new(), env: HashMap::new() });
     }
 
     let hour = state.schedule_hour.unwrap_or(5);

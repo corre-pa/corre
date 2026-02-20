@@ -42,12 +42,6 @@ The first end-to-end capability ships with the MVP. Each morning it:
 | Rust | 1.85+ | Edition 2024 is used. Install via [rustup](https://rustup.rs) |
 | Node.js / npm | 18+ | Only needed for `npx`-based MCP servers (e.g. Brave Search) |
 
-Install the Fetch MCP server (Rust binary, no Node/Python needed):
-
-```sh
-cargo install mcp-server-fetch
-```
-
 ### 1. Clone and build
 
 ```sh

@@ -208,7 +208,6 @@ mod tests {
         assert_eq!(config.capabilities.len(), 1);
         assert_eq!(config.capabilities[0].name, "daily-brief");
         assert!(config.mcp.servers.contains_key("brave-search"));
-        assert!(config.mcp.servers.contains_key("fetch"));
     }
 
     #[test]

@@ -32,6 +32,8 @@ enum Commands {
     Serve,
     /// Interactive setup wizard — configure LLM, API keys, topics, and systemd
     Setup,
+    /// Check and install required external dependencies
+    InstallDeps,
 }
 
 #[tokio::main]
@@ -50,9 +52,13 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Setup doesn't need an existing config — it creates one
+    // Setup and InstallDeps don't need an existing config
     if matches!(command, Commands::Setup) {
         return setup::run_setup().await;
+    }
+    if matches!(command, Commands::InstallDeps) {
+        setup::deps::check_dependencies(&console::Term::stderr())?;
+        return Ok(());
     }
 
     let config = corre_core::config::CorreConfig::load(&cli.config)
@@ -84,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Run => cmd_run(config, config_path).await,
         Commands::RunNow { capability } => cmd_run_now(config, &capability).await,
         Commands::Serve => cmd_serve(config, config_path).await,
-        Commands::Setup => unreachable!(),
+        Commands::Setup | Commands::InstallDeps => unreachable!(),
     }
 }
 

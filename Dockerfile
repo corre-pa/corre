@@ -26,9 +26,6 @@ RUN cargo build --release 2>/dev/null || true
 COPY . .
 RUN touch crates/*/src/*.rs && cargo build --release
 
-# Install mcp-server-fetch
-RUN cargo install mcp-server-fetch --root /usr/local
-
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
@@ -54,7 +51,6 @@ RUN mkdir -p /data
 
 # Copy binaries from builder
 COPY --from=builder /build/target/release/corre /app/corre
-COPY --from=builder /usr/local/bin/mcp-server-fetch /usr/local/bin/mcp-server-fetch
 
 # Copy application files
 COPY corre.toml /app/corre.toml

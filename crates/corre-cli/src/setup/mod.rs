@@ -1,3 +1,4 @@
+pub(crate) mod deps;
 mod providers;
 mod state;
 mod steps;
@@ -38,6 +39,12 @@ pub async fn run_setup() -> anyhow::Result<()> {
 
     if start_step <= 1 {
         steps::welcome(&term)?;
+
+        // Check dependencies right after welcome, before any configuration
+        if !deps::check_dependencies(&term)? {
+            return Ok(());
+        }
+
         state.completed_step = 1;
         state.save()?;
     }

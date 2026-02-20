@@ -93,46 +93,15 @@ install_system_deps() {
     fi
 }
 
-# ── install_mcp_servers ─────────────────────────────────────────────────────
-
-install_mcp_servers() {
-    info "Checking MCP servers..."
-
-    if ! command_exists mcp-server-fetch; then
-        if command_exists cargo; then
-            info "Installing mcp-server-fetch via cargo..."
-            cargo install mcp-server-fetch
-        else
-            warn "mcp-server-fetch is not installed and cargo is not available."
-            warn "Install Rust (https://rustup.rs) and run: cargo install mcp-server-fetch"
-        fi
-    else
-        ok "mcp-server-fetch already installed"
-    fi
-}
-
 # ── verify_mcp_servers ──────────────────────────────────────────────────────
 
 verify_mcp_servers() {
     info "Verifying MCP server availability..."
-    local all_ok=true
-
-    if command_exists mcp-server-fetch; then
-        ok "mcp-server-fetch found at $(command -v mcp-server-fetch)"
-    else
-        warn "mcp-server-fetch not found in PATH"
-        all_ok=false
-    fi
 
     if command_exists npx; then
         ok "npx available (used for brave-search MCP server)"
     else
         warn "npx not found — brave-search MCP server will not work"
-        all_ok=false
-    fi
-
-    if [[ "${all_ok}" == false ]]; then
-        warn "Some MCP servers are missing. Capabilities that need them will fail at runtime."
     fi
 }
 
@@ -355,7 +324,6 @@ main() {
     ok "Config found at ${CORRE_CONFIG}"
 
     install_system_deps
-    install_mcp_servers
     verify_mcp_servers
     setup_env_file
     setup_systemd
