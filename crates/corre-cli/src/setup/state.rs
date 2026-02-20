@@ -42,8 +42,7 @@ impl Default for SetupState {
 impl SetupState {
     /// Path to the persisted state file.
     pub fn state_path() -> PathBuf {
-        let data_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".local/share/corre");
-        data_dir.join(".setup-state.json")
+        super::templates::resolved_data_dir().join(".setup-state.json")
     }
 
     /// Load from disk, or return None if no state file exists.

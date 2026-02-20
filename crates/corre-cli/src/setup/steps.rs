@@ -315,7 +315,7 @@ pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow:
     }
 
     // Write .env file from collected API keys
-    let data_dir = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".local/share/corre");
+    let data_dir = super::templates::resolved_data_dir();
     std::fs::create_dir_all(&data_dir)?;
 
     let env_path = data_dir.join(".env");
@@ -381,7 +381,7 @@ pub fn start(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()>
         "Set up systemd service (run on boot)" => {
             let exe = std::env::current_exe()?;
             let working_dir = std::env::current_dir()?;
-            let env_file = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".local/share/corre/.env");
+            let env_file = super::templates::resolved_data_dir().join(".env");
 
             let unit = super::systemd::generate_unit_file(&exe, &working_dir, &env_file);
             println!();
@@ -423,14 +423,15 @@ fn print_summary(state: &SetupState) {
     let dim = Style::new().dim();
 
     let port = state.news_port.unwrap_or(3200);
+    let data_dir = super::templates::default_data_dir();
 
     println!();
     println!("{}", bold.apply_to("Summary"));
     println!("{}", dim.apply_to("─────────────────────────────────────────────────"));
     println!("  Config:     corre.toml");
     println!("  Topics:     config/topics.md");
-    println!("  Env file:   ~/.local/share/corre/.env");
-    println!("  Data dir:   ~/.local/share/corre/");
+    println!("  Env file:   {data_dir}/.env");
+    println!("  Data dir:   {data_dir}/");
     println!();
     println!("{}", bold.apply_to("Next steps"));
     println!("  Start daemon:    corre run");

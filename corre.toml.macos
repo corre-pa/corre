@@ -1,0 +1,43 @@
+[general]
+data_dir = "~/Library/Application Support/corre"
+log_level = "info"
+
+[llm]
+provider = "openai-compatible"
+base_url = "https://api.venice.ai/api/v1"
+model = "llama-3.3-70b"
+api_key_env = "VENICE_API_KEY"
+temperature = 0.3
+max_tokens = 4096
+max_concurrent = 10
+
+[news]
+bind = "127.0.0.1:3200"
+title = "Corre News"
+# editor_token = "change-me-to-a-secret"   # set to enable /settings and /settings/topics
+
+[mcp.servers.brave-search]
+command = "npx"
+args = ["-y", "@brave/brave-search-mcp-server"]
+env = { BRAVE_API_KEY = "BRAVE_API_KEY" }
+
+[mcp.servers.fetch]
+command = "mcp-server-fetch"
+args = []
+
+# [safety]
+# enabled = true                    # toggle the prompt-injection defense layer
+# max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size
+# sanitize_injections = true        # detect and neutralize prompt injection phrases
+# detect_leaks = true               # scan for leaked API keys and credentials
+# boundary_wrap = true              # wrap tool outputs in XML delimiters
+# high_severity_action = "sanitize" # "warn", "sanitize", or "block"
+# custom_block_patterns = []        # additional regex patterns that trigger a block
+
+[[capabilities]]
+name = "daily-brief"
+description = "Researches topics and produces a daily news briefing"
+schedule = "0 0 5 * * *"
+mcp_servers = ["brave-search"]
+config_path = "config/topics.md"
+enabled = true
