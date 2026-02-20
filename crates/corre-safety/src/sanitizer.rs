@@ -88,15 +88,28 @@ pub fn sanitize(input: &str, report: &mut SanitizationReport) -> String {
         for m in matches.iter().rev() {
             let matched_text = &output[m.start()..m.end()];
             report.injections_found.push(matched_text.to_string());
+            report.details.push(crate::report::FindingDetail {
+                kind: "injection_phrase",
+                matched: matched_text.to_string(),
+                context: crate::report::excerpt(&output, m.start(), m.end(), 60),
+                byte_offset: m.start(),
+            });
             result.replace_range(m.start()..m.end(), "[REDACTED:injection]");
         }
         output = result;
     }
 
     // Phase 2: Regex for encoded payloads
-    let encoded_matches: Vec<_> = ENCODED_PAYLOAD_RE.find_iter(&output).map(|m| (m.start(), m.end())).collect();
-    for (start, end) in encoded_matches.iter().rev() {
+    let encoded_matches: Vec<_> = ENCODED_PAYLOAD_RE.find_iter(&output).map(|m| (m.start(), m.end(), m.as_str().to_string())).collect();
+    for (start, end, matched) in encoded_matches.iter().rev() {
         report.injections_found.push("encoded payload".into());
+        let preview = if matched.len() > 80 { format!("{}...", &matched[..80]) } else { matched.clone() };
+        report.details.push(crate::report::FindingDetail {
+            kind: "encoded_payload",
+            matched: preview,
+            context: crate::report::excerpt(&output, *start, *end, 40),
+            byte_offset: *start,
+        });
         output.replace_range(*start..*end, "[REDACTED:encoded]");
     }
 

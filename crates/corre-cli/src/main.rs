@@ -47,7 +47,9 @@ async fn main() -> anyhow::Result<()> {
 
     let stderr_filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default());
-    let file_filter = tracing_subscriber::EnvFilter::new("debug");
+    let file_filter = tracing_subscriber::EnvFilter::new(
+        "info,corre_core=debug,corre_mcp=debug,corre_llm=debug,corre_capabilities=debug,corre_safety=debug,corre_news=debug,corre_cli=debug",
+    );
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr).with_filter(stderr_filter))

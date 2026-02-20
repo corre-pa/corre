@@ -82,9 +82,15 @@ pub fn evaluate(input: &str, custom_patterns: &[String], high_action: PolicyActi
 
     // Check built-in rules
     for rule in BUILTIN_RULES.iter() {
-        if rule.pattern.is_match(input) {
+        if let Some(m) = rule.pattern.find(input) {
             let effective_action = if rule.severity >= Severity::High { high_action } else { rule.action };
             violations.push(format!("{} (severity: {:?})", rule.name, rule.severity));
+            report.details.push(crate::report::FindingDetail {
+                kind: "policy_violation",
+                matched: format!("{} [{:?}]", rule.name, rule.severity),
+                context: crate::report::excerpt(input, m.start(), m.end(), 60),
+                byte_offset: m.start(),
+            });
             if effective_action > max_action {
                 max_action = effective_action;
             }
@@ -94,8 +100,14 @@ pub fn evaluate(input: &str, custom_patterns: &[String], high_action: PolicyActi
     // Check custom block patterns
     for pattern_str in custom_patterns {
         if let Ok(re) = Regex::new(pattern_str) {
-            if re.is_match(input) {
+            if let Some(m) = re.find(input) {
                 violations.push(format!("custom_pattern: {pattern_str}"));
+                report.details.push(crate::report::FindingDetail {
+                    kind: "custom_block_pattern",
+                    matched: pattern_str.clone(),
+                    context: crate::report::excerpt(input, m.start(), m.end(), 60),
+                    byte_offset: m.start(),
+                });
                 max_action = PolicyAction::Block;
             }
         }

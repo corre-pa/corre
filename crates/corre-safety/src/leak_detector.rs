@@ -89,6 +89,15 @@ pub fn detect_and_redact(input: &str, report: &mut SanitizationReport) -> String
         redactions.dedup_by(|a, b| a.0 >= b.0 && a.0 < b.1);
 
         for (start, end, label) in &redactions {
+            let matched = &output[*start..*end];
+            let redacted_preview =
+                if matched.len() > 8 { format!("{}...{}", &matched[..4], &matched[matched.len() - 4..]) } else { "***".to_string() };
+            report.details.push(crate::report::FindingDetail {
+                kind: "secret_leak",
+                matched: format!("{label} ({redacted_preview})"),
+                context: crate::report::excerpt(&output, *start, *end, 30),
+                byte_offset: *start,
+            });
             output.replace_range(*start..*end, label);
             report.secrets_redacted += 1;
         }
@@ -97,6 +106,14 @@ pub fn detect_and_redact(input: &str, report: &mut SanitizationReport) -> String
     // Phase 2: High-entropy hex tokens
     let hex_matches: Vec<_> = HEX_TOKEN_RE.find_iter(&output).map(|m| (m.start(), m.end())).collect();
     for (start, end) in hex_matches.iter().rev() {
+        let matched = &output[*start..*end];
+        let redacted_preview = format!("{}...{}", &matched[..4], &matched[matched.len() - 4..]);
+        report.details.push(crate::report::FindingDetail {
+            kind: "hex_token",
+            matched: redacted_preview,
+            context: crate::report::excerpt(&output, *start, *end, 30),
+            byte_offset: *start,
+        });
         output.replace_range(*start..*end, "[REDACTED:hex_token]");
         report.secrets_redacted += 1;
     }

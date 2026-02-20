@@ -1,3 +1,20 @@
+/// Extract a context window around a byte offset, clamped to the input bounds.
+/// Returns up to `radius` chars either side of the matched span.
+pub fn excerpt(input: &str, start: usize, end: usize, radius: usize) -> String {
+    let ctx_start = input.floor_char_boundary(start.saturating_sub(radius));
+    let ctx_end = input.ceil_char_boundary((end + radius).min(input.len()));
+    input[ctx_start..ctx_end].replace('\n', "\\n")
+}
+
+/// Detail of a single finding for debug-level logging.
+#[derive(Debug)]
+pub struct FindingDetail {
+    pub kind: &'static str,
+    pub matched: String,
+    pub context: String,
+    pub byte_offset: usize,
+}
+
 /// A structured report of what the safety pipeline did to a piece of content.
 #[derive(Debug, Default)]
 pub struct SanitizationReport {
@@ -9,6 +26,7 @@ pub struct SanitizationReport {
     pub secrets_redacted: usize,
     pub policy_violations: Vec<String>,
     pub blocked: bool,
+    pub details: Vec<FindingDetail>,
 }
 
 impl SanitizationReport {
@@ -43,6 +61,17 @@ impl SanitizationReport {
         }
         for v in &self.policy_violations {
             tracing::info!(server, tool, "Policy violation: {v}");
+        }
+        for detail in &self.details {
+            tracing::debug!(
+                server,
+                tool,
+                kind = detail.kind,
+                byte_offset = detail.byte_offset,
+                matched = detail.matched,
+                "Safety finding: ...{}...",
+                detail.context
+            );
         }
     }
 }
