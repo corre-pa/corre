@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod setup;
+
 #[derive(Parser)]
 #[command(name = "corre", about = "Personal AI task scheduler and newspaper")]
 struct Cli {
@@ -14,7 +16,7 @@ struct Cli {
     config: PathBuf,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -28,11 +30,30 @@ enum Commands {
     },
     /// Start only the web server
     Serve,
+    /// Interactive setup wizard — configure LLM, API keys, topics, and systemd
+    Setup,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // No subcommand: run setup if config is missing, otherwise show help
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            if !cli.config.exists() {
+                return setup::run_setup().await;
+            }
+            Cli::parse_from(["corre", "--help"]);
+            unreachable!()
+        }
+    };
+
+    // Setup doesn't need an existing config — it creates one
+    if matches!(command, Commands::Setup) {
+        return setup::run_setup().await;
+    }
 
     let config = corre_core::config::CorreConfig::load(&cli.config)
         .with_context(|| format!("Failed to load config from {}", cli.config.display()))?;
@@ -59,10 +80,11 @@ async fn main() -> anyhow::Result<()> {
 
     let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
 
-    match cli.command {
+    match command {
         Commands::Run => cmd_run(config, config_path).await,
         Commands::RunNow { capability } => cmd_run_now(config, &capability).await,
         Commands::Serve => cmd_serve(config, config_path).await,
+        Commands::Setup => unreachable!(),
     }
 }
 
