@@ -10,6 +10,16 @@
 <body>
     <header class="masthead">
         <div class="masthead-rule"></div>
+        <div class="masthead-toolbar">
+            <div class="search-bar">
+                <form id="searchForm" action="/search" method="get" role="search">
+                    <input type="search" id="searchInput" name="q" placeholder="Search archives…" autocomplete="off">
+                    <button type="submit" class="search-btn" aria-label="Search">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    </button>
+                </form>
+            </div>
+        </div>
         <h1 class="masthead-title"><a href="/">{{ title }}</a></h1>
         <div class="masthead-meta">
             <div class="date-picker-wrapper">
@@ -39,7 +49,25 @@
         <div class="masthead-rule"></div>
     </header>
 
-    <main class="newspaper">
+    <div id="searchResults" class="search-results" style="display:none">
+        <div class="search-results-header">
+            <h3 class="search-results-title">Results for "<span id="searchQuery"></span>"</h3>
+            <button class="search-close" id="searchClose">&times; Back to edition</button>
+        </div>
+        <table class="search-results-table">
+            <thead>
+                <tr>
+                    <th class="search-col-date">Date</th>
+                    <th class="search-col-section">Section</th>
+                    <th class="search-col-headline">Headline</th>
+                </tr>
+            </thead>
+            <tbody id="searchResultsList"></tbody>
+        </table>
+        <p id="searchEmpty" class="search-empty" style="display:none">No articles matched your query.</p>
+    </div>
+
+    <main class="newspaper" id="editionContent">
         {% if edition.sections.len() > 1 %}
         <nav class="section-tabs" id="sectionTabs">
             {% for section in edition.sections %}
@@ -192,6 +220,64 @@
             if (!popup.contains(e.target) && e.target !== trigger) {
                 popup.classList.remove('open');
             }
+        });
+
+        /* Archive search */
+        var searchForm = document.getElementById('searchForm');
+        var searchInput = document.getElementById('searchInput');
+        var searchResults = document.getElementById('searchResults');
+        var searchResultsList = document.getElementById('searchResultsList');
+        var searchQuerySpan = document.getElementById('searchQuery');
+        var searchEmpty = document.getElementById('searchEmpty');
+        var searchClose = document.getElementById('searchClose');
+        var editionContent = document.getElementById('editionContent');
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function showResults(query, results) {
+            searchQuerySpan.textContent = query;
+            searchResultsList.innerHTML = '';
+            searchEmpty.style.display = results.length === 0 ? '' : 'none';
+
+            results.forEach(function(r) {
+                var row = document.createElement('tr');
+                row.className = 'search-result-row';
+                row.innerHTML =
+                    '<td class="search-col-date"><a href="/edition/' + escapeHtml(r.date) + '">' + escapeHtml(r.date) + '</a></td>' +
+                    '<td class="search-col-section"><a href="/edition/' + escapeHtml(r.date) + '">' + escapeHtml(r.section) + '</a></td>' +
+                    '<td class="search-col-headline"><a href="/edition/' + escapeHtml(r.date) + '">' + escapeHtml(r.title) + '</a></td>';
+                searchResultsList.appendChild(row);
+            });
+
+            editionContent.style.display = 'none';
+            searchResults.style.display = '';
+        }
+
+        function hideResults() {
+            searchResults.style.display = 'none';
+            editionContent.style.display = '';
+            searchInput.value = '';
+        }
+
+        searchClose.addEventListener('click', hideResults);
+
+        searchForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            var q = searchInput.value.trim();
+            if (!q) return;
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/search?q=' + encodeURIComponent(q) + '&limit=20');
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    showResults(q, JSON.parse(xhr.responseText));
+                }
+            };
+            xhr.send();
         });
     })();
     </script>
