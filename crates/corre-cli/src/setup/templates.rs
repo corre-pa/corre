@@ -62,7 +62,11 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
             max_tokens: 4096,
             max_concurrent: 10,
         },
-        news: NewsConfig { bind: format!("127.0.0.1:{port}"), title: state.news_title.clone().unwrap_or_else(|| "Corre News".into()) },
+        news: NewsConfig {
+            bind: format!("127.0.0.1:{port}"),
+            title: state.news_title.clone().unwrap_or_else(|| "Corre News".into()),
+            editor_token: None,
+        },
         mcp: McpConfig { servers: mcp_servers },
         capabilities,
         safety: SafetyConfig::default(),
