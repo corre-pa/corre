@@ -62,9 +62,15 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> {
+    // Shared cache for both web server and scheduler
+    let data_dir = config.data_dir();
+    let archive = corre_news::archive::Archive::new(&data_dir);
+    let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
+
     // Start web server in background
     let web_config = config.clone();
-    let web_handle = tokio::spawn(async move { start_web_server(&web_config).await });
+    let web_cache = cache.clone();
+    let web_handle = tokio::spawn(async move { start_web_server_with_cache(&web_config, web_cache).await });
 
     // Start scheduler
     let mut scheduler = corre_core::scheduler::Scheduler::new().await?;
@@ -75,6 +81,7 @@ async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> 
         let schedule = cap_config.schedule.clone();
         let config = config.clone();
         let registry = registry.clone();
+        let cache = cache.clone();
 
         tracing::info!("Scheduling capability `{cap_name}` with cron `{schedule}`");
 
@@ -83,8 +90,9 @@ async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> 
                 let cap_name = cap_name.clone();
                 let config = config.clone();
                 let registry = registry.clone();
+                let cache = cache.clone();
                 Box::pin(async move {
-                    if let Err(e) = execute_capability(&config, &registry, &cap_name).await {
+                    if let Err(e) = execute_capability_with_cache(&config, &registry, &cap_name, &cache).await {
                         tracing::error!("Capability `{cap_name}` failed: {e:#}");
                     }
                 })
@@ -106,21 +114,73 @@ async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> 
 
 async fn cmd_run_now(config: corre_core::config::CorreConfig, capability_name: &str) -> anyhow::Result<()> {
     let registry = corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities);
-    execute_capability(&config, &registry, capability_name).await
+    // Load cache to get seen_urls for cross-edition dedup, but store via archive directly
+    let data_dir = config.data_dir();
+    let archive = corre_news::archive::Archive::new(&data_dir);
+    let cache = corre_news::cache::EditionCache::load(archive);
+    let seen_urls = cache.seen_urls().await;
+    execute_capability(&config, &registry, capability_name, seen_urls).await
 }
 
 async fn cmd_serve(config: corre_core::config::CorreConfig) -> anyhow::Result<()> {
     start_web_server(&config).await
 }
 
+/// Execute a capability in run-now mode (no long-lived cache, stores via archive directly).
 async fn execute_capability(
     config: &corre_core::config::CorreConfig,
     registry: &corre_capabilities::registry::CapabilityRegistry,
     cap_name: &str,
+    seen_urls: std::collections::HashSet<String>,
 ) -> anyhow::Result<()> {
+    let (edition, mcp_pool) = run_capability_pipeline(config, registry, cap_name, seen_urls).await?;
+
+    let data_dir = config.data_dir();
+    let archive = corre_news::archive::Archive::new(&data_dir);
+    let path = archive.store(&edition)?;
+    tracing::info!("Edition stored at {}", path.display());
+
+    if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
+        let _ = search.index_edition(&edition);
+    }
+
+    mcp_pool.shutdown().await;
+    tracing::info!("Done. {} articles produced.", edition.article_count());
+    Ok(())
+}
+
+/// Execute a capability in daemon mode (stores via the shared cache).
+async fn execute_capability_with_cache(
+    config: &corre_core::config::CorreConfig,
+    registry: &corre_capabilities::registry::CapabilityRegistry,
+    cap_name: &str,
+    cache: &corre_news::cache::EditionCache,
+) -> anyhow::Result<()> {
+    let seen_urls = cache.seen_urls().await;
+    let (edition, mcp_pool) = run_capability_pipeline(config, registry, cap_name, seen_urls).await?;
+
+    let path = cache.store(&edition).await?;
+    tracing::info!("Edition stored at {}", path.display());
+
+    let data_dir = config.data_dir();
+    if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
+        let _ = search.index_edition(&edition);
+    }
+
+    mcp_pool.shutdown().await;
+    tracing::info!("Done. {} articles produced.", edition.article_count());
+    Ok(())
+}
+
+/// Shared pipeline: build MCP pool, run capability, generate tagline. Returns the edition and pool.
+async fn run_capability_pipeline(
+    config: &corre_core::config::CorreConfig,
+    registry: &corre_capabilities::registry::CapabilityRegistry,
+    cap_name: &str,
+    seen_urls: std::collections::HashSet<String>,
+) -> anyhow::Result<(corre_core::publish::Edition, corre_mcp::McpPool)> {
     let capability = registry.get(cap_name).with_context(|| format!("Unknown capability: `{cap_name}`"))?.clone();
 
-    // Build MCP pool with required servers
     let mcp_defs = capability
         .manifest()
         .mcp_servers
@@ -133,7 +193,8 @@ async fn execute_capability(
     let llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
 
     let config_dir = std::env::current_dir()?;
-    let ctx = CapabilityContext { mcp: Box::new(mcp_pool.clone()), llm, config_dir, max_concurrent_llm: config.llm.max_concurrent };
+    let ctx =
+        CapabilityContext { mcp: Box::new(mcp_pool.clone()), llm, config_dir, max_concurrent_llm: config.llm.max_concurrent, seen_urls };
 
     tracing::info!("Running capability `{cap_name}`");
 
@@ -141,10 +202,6 @@ async fn execute_capability(
     let output = tokio::time::timeout(timeout, capability.execute(&ctx))
         .await
         .with_context(|| format!("Capability `{cap_name}` timed out after {timeout:?}"))??;
-
-    // Store as edition
-    let data_dir = config.data_dir();
-    let archive = corre_news::archive::Archive::new(&data_dir);
 
     let mut edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
 
@@ -174,28 +231,26 @@ async fn execute_capability(
         Err(e) => tracing::warn!("Failed to generate tagline, using default: {e}"),
     }
 
-    let path = archive.store(&edition)?;
-    tracing::info!("Edition stored at {}", path.display());
-
-    // Index for search
-    if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
-        let _ = search.index_edition(&edition);
-    }
-
-    mcp_pool.shutdown().await;
-
-    tracing::info!("Done. {} articles produced.", edition.article_count());
-    Ok(())
+    Ok((edition, mcp_pool))
 }
 
 async fn start_web_server(config: &corre_core::config::CorreConfig) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
     let archive = corre_news::archive::Archive::new(&data_dir);
+    let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
+    start_web_server_with_cache(config, cache).await
+}
+
+async fn start_web_server_with_cache(
+    config: &corre_core::config::CorreConfig,
+    cache: Arc<corre_news::cache::EditionCache>,
+) -> anyhow::Result<()> {
+    let data_dir = config.data_dir();
     let search = corre_news::search::SearchIndex::open_or_create(&data_dir)?;
 
     let static_dir = PathBuf::from("static");
 
-    let state = Arc::new(corre_news::server::AppState { archive, search, title: config.news.title.clone(), static_dir });
+    let state = Arc::new(corre_news::server::AppState { cache, search, title: config.news.title.clone(), static_dir });
 
     let addr: std::net::SocketAddr = config.news.bind.parse()?;
     tracing::info!("CorreNews listening on http://{addr}");

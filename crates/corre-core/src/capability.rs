@@ -76,6 +76,8 @@ pub struct CapabilityContext {
     pub config_dir: PathBuf,
     /// Maximum concurrent LLM requests (from `llm.max_concurrent` in config).
     pub max_concurrent_llm: usize,
+    /// Source URLs from all previously published editions, for cross-edition deduplication.
+    pub seen_urls: std::collections::HashSet<String>,
 }
 
 /// The output produced by a capability after execution.

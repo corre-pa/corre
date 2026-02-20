@@ -1,4 +1,4 @@
-use crate::archive::Archive;
+use crate::cache::EditionCache;
 use crate::render::NewspaperTemplate;
 use crate::search::SearchIndex;
 use askama::Template;
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tower_http::services::ServeDir;
 
 pub struct AppState {
-    pub archive: Archive,
+    pub cache: Arc<EditionCache>,
     pub search: SearchIndex,
     pub title: String,
     pub static_dir: PathBuf,
@@ -30,16 +30,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.archive.latest() {
-        Ok(Some(edition)) => {
+    match state.cache.latest().await {
+        Some(edition) => {
             let template = NewspaperTemplate { title: &state.title, edition: &edition };
             match template.render() {
                 Ok(html) => Html(html).into_response(),
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
             }
         }
-        Ok(None) => Html(no_editions_page(&state.title)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Archive error: {e}")).into_response(),
+        None => Html(no_editions_page(&state.title)).into_response(),
     }
 }
 
@@ -49,27 +48,22 @@ async fn edition_handler(State(state): State<Arc<AppState>>, Path(date_str): Pat
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid date format. Use YYYY-MM-DD".to_string()).into_response(),
     };
 
-    match state.archive.load(date) {
-        Ok(Some(edition)) => {
+    match state.cache.load_date(date).await {
+        Some(edition) => {
             let template = NewspaperTemplate { title: &state.title, edition: &edition };
             match template.render() {
                 Ok(html) => Html(html).into_response(),
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
             }
         }
-        Ok(None) => (StatusCode::NOT_FOUND, format!("No edition for {date}")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Archive error: {e}")).into_response(),
+        None => (StatusCode::NOT_FOUND, format!("No edition for {date}")).into_response(),
     }
 }
 
 async fn dates_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.archive.list_dates() {
-        Ok(dates) => {
-            let date_strings: Vec<String> = dates.iter().map(|d| d.format("%Y-%m-%d").to_string()).collect();
-            axum::Json(date_strings).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Archive error: {e}")).into_response(),
-    }
+    let dates = state.cache.list_dates().await;
+    let date_strings: Vec<String> = dates.iter().map(|d| d.format("%Y-%m-%d").to_string()).collect();
+    axum::Json(date_strings).into_response()
 }
 
 #[derive(serde::Deserialize)]

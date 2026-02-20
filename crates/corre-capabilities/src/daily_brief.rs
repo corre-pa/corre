@@ -272,6 +272,18 @@ impl Capability for DailyBrief {
             results.retain(|r| seen.insert(r.url.clone()));
         }
 
+        // Cross-edition dedup: remove URLs that appeared in previous editions
+        if !ctx.seen_urls.is_empty() {
+            let before: usize = section_results.values().map(|r| r.len()).sum();
+            for results in section_results.values_mut() {
+                results.retain(|r| !ctx.seen_urls.contains(&r.url));
+            }
+            let after: usize = section_results.values().map(|r| r.len()).sum();
+            if before != after {
+                tracing::info!("Cross-edition dedup removed {} previously seen URLs", before - after);
+            }
+        }
+
         // Build a lookup from section name to its excludes for filtering
         let excludes_by_section: std::collections::HashMap<&str, &[String]> =
             sections.iter().map(|s| (s.name.as_str(), s.excludes.as_slice())).collect();
