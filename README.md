@@ -154,6 +154,7 @@ corre/
     corre-llm/                    # LLM provider
     corre-news/                   # web server + archive + search
     corre-capabilities/           # capability implementations
+    corre-safety/                 # prompt injection defense middleware
     corre-cli/                    # binary entry point
 ```
 
@@ -165,6 +166,7 @@ corre-cli
   |-- corre-mcp        --> corre-core
   |-- corre-llm        --> corre-core
   |-- corre-news       --> corre-core
+  |-- corre-safety     --> corre-core
   |-- corre-capabilities --> corre-core, corre-mcp, corre-llm
 ```
 
@@ -242,6 +244,67 @@ A deterministic, multi-step pipeline with LLM calls at specific points:
 5. **Filter** to top 5 results per section above the score threshold
 6. **Summarise** each top result in 2-3 paragraphs (LLM call)
 7. **Emit** `CapabilityOutput` with articles grouped by section
+
+### Safety layer (`corre-safety`)
+
+Corre fetches external content (web search results) via MCP servers and feeds it to LLMs for
+scoring and summarization. A malicious web page could embed prompt injection phrases in its
+metadata — "ignore previous instructions", special tokens like `<|system|>`, or encoded
+payloads — and the LLM might comply. The safety layer sits between MCP tool outputs and LLM
+prompts to neutralize these attacks.
+
+Safety is **enabled by default**. It wraps `McpCaller` and `LlmProvider` transparently, so
+capabilities require no code changes.
+
+The pipeline applies four stages to every MCP tool output:
+
+1. **Validation** — truncates oversized outputs, strips null bytes, collapses whitespace
+   obfuscation, and truncates token-stuffing runs
+2. **Sanitization** — detects ~45 known injection phrases via Aho-Corasick (case-insensitive),
+   neutralizes encoded payloads (base64, `eval()`, unicode escapes), escapes special LLM tokens,
+   and prefixes role markers with `[DATA]`
+3. **Leak detection** — scans for API keys (OpenAI, Anthropic, AWS, GitHub, Stripe, Slack),
+   PEM private keys, Bearer tokens, and high-entropy hex strings; redacts matches
+4. **Policy evaluation** — regex rules for shell injection, SQL injection, path traversal, XSS,
+   and encoded exploits; user-supplied custom patterns can trigger an immediate block
+
+LLM responses are also scanned for leaked secrets (catches exfiltration where the LLM was
+tricked into outputting credentials from tool outputs).
+
+#### Configuration
+
+Add a `[safety]` section to `corre.toml` to tune the behavior:
+
+```toml
+[safety]
+enabled = true                    # toggle the entire layer (default: true)
+max_output_bytes = 100000         # truncate MCP outputs exceeding this size
+sanitize_injections = true        # detect and neutralize injection phrases
+detect_leaks = true               # scan for leaked API keys and credentials
+boundary_wrap = true              # wrap tool outputs in XML delimiters
+high_severity_action = "sanitize" # action for high-severity policy hits
+custom_block_patterns = []        # additional regex patterns that trigger a block
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | Master switch. Set to `false` to disable all safety processing. |
+| `max_output_bytes` | `100000` | MCP tool outputs larger than this are truncated with a `[TRUNCATED]` marker. |
+| `sanitize_injections` | `true` | Run Aho-Corasick + regex injection detection on tool outputs. |
+| `detect_leaks` | `true` | Scan tool outputs and LLM responses for leaked credentials. |
+| `boundary_wrap` | `true` | Wrap tool outputs in XML `<tool_output>` delimiters. |
+| `high_severity_action` | `"sanitize"` | What to do when a high-severity policy rule matches: `"warn"` (log only), `"sanitize"` (redact the match), or `"block"` (replace the entire output). |
+| `custom_block_patterns` | `[]` | List of regex patterns. Any match triggers an immediate block regardless of severity. |
+
+To disable safety entirely:
+
+```toml
+[safety]
+enabled = false
+```
+
+Since all fields have defaults, omitting the `[safety]` section entirely is equivalent to
+running with safety enabled at default settings.
 
 ### Configuration (`corre.toml`)
 

@@ -11,6 +11,71 @@ pub struct CorreConfig {
     pub mcp: McpConfig,
     #[serde(default)]
     pub capabilities: Vec<CapabilityConfig>,
+    #[serde(default)]
+    pub safety: SafetyConfig,
+}
+
+/// Action to take when a policy rule matches.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum PolicyAction {
+    Warn,
+    Sanitize,
+    Block,
+}
+
+impl Default for PolicyAction {
+    fn default() -> Self {
+        Self::Sanitize
+    }
+}
+
+/// Configuration for the prompt-injection defense layer.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SafetyConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_max_output_bytes")]
+    pub max_output_bytes: usize,
+    #[serde(default = "default_true")]
+    pub sanitize_injections: bool,
+    #[serde(default = "default_true")]
+    pub detect_leaks: bool,
+    #[serde(default = "default_true")]
+    pub boundary_wrap: bool,
+    #[serde(default)]
+    pub high_severity_action: PolicyAction,
+    #[serde(default)]
+    pub custom_block_patterns: Vec<String>,
+}
+
+fn default_max_output_bytes() -> usize {
+    100_000
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for SafetyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_output_bytes: default_max_output_bytes(),
+            sanitize_injections: true,
+            detect_leaks: true,
+            boundary_wrap: true,
+            high_severity_action: PolicyAction::Sanitize,
+            custom_block_patterns: Vec::new(),
+        }
+    }
+}
+
+impl SafetyConfig {
+    /// Convenience constructor for an enabled config with sensible defaults.
+    pub fn default_enabled() -> Self {
+        Self { enabled: true, ..Default::default() }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -129,7 +194,7 @@ mod tests {
     fn parse_default_config() {
         let toml_str = include_str!("../../../corre.toml");
         let config: CorreConfig = toml::from_str(toml_str).expect("Failed to parse config");
-        assert_eq!(config.news.bind, "127.0.0.1:3200");
+        assert_eq!(config.news.bind, "192.168.1.101:5555");
         assert_eq!(config.llm.model, "llama-3.3-70b");
         assert_eq!(config.capabilities.len(), 1);
         assert_eq!(config.capabilities[0].name, "daily-brief");

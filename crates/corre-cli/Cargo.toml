@@ -13,6 +13,7 @@ corre-mcp = { workspace = true }
 corre-llm = { workspace = true }
 corre-news = { workspace = true }
 corre-capabilities = { workspace = true }
+corre-safety = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

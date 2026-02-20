@@ -190,11 +190,20 @@ async fn run_capability_pipeline(
 
     let mcp_pool = corre_mcp::McpPool::new(mcp_defs);
 
-    let llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
+    let raw_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
+
+    // Conditionally wrap MCP and LLM with safety middleware
+    let mcp: Box<dyn corre_core::capability::McpCaller> = if config.safety.enabled {
+        tracing::info!("Safety layer enabled — wrapping MCP caller and LLM provider");
+        Box::new(corre_safety::SafeMcpCaller::new(Box::new(mcp_pool.clone()), &config.safety))
+    } else {
+        Box::new(mcp_pool.clone())
+    };
+    let llm: Box<dyn corre_core::capability::LlmProvider> =
+        if config.safety.enabled { Box::new(corre_safety::SafeLlmProvider::new(raw_llm, &config.safety)) } else { raw_llm };
 
     let config_dir = std::env::current_dir()?;
-    let ctx =
-        CapabilityContext { mcp: Box::new(mcp_pool.clone()), llm, config_dir, max_concurrent_llm: config.llm.max_concurrent, seen_urls };
+    let ctx = CapabilityContext { mcp, llm, config_dir, max_concurrent_llm: config.llm.max_concurrent, seen_urls };
 
     tracing::info!("Running capability `{cap_name}`");
 

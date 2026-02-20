@@ -1,0 +1,65 @@
+/// A structured report of what the safety pipeline did to a piece of content.
+#[derive(Debug, Default)]
+pub struct SanitizationReport {
+    pub original_len: usize,
+    pub final_len: usize,
+    pub truncated: bool,
+    pub null_bytes_removed: usize,
+    pub injections_found: Vec<String>,
+    pub secrets_redacted: usize,
+    pub policy_violations: Vec<String>,
+    pub blocked: bool,
+}
+
+impl SanitizationReport {
+    pub fn had_findings(&self) -> bool {
+        self.truncated
+            || self.null_bytes_removed > 0
+            || !self.injections_found.is_empty()
+            || self.secrets_redacted > 0
+            || !self.policy_violations.is_empty()
+            || self.blocked
+    }
+
+    pub fn log(&self, server: &str, tool: &str) {
+        if !self.had_findings() {
+            return;
+        }
+        tracing::warn!(
+            server,
+            tool,
+            original_len = self.original_len,
+            final_len = self.final_len,
+            truncated = self.truncated,
+            null_bytes = self.null_bytes_removed,
+            injections = self.injections_found.len(),
+            secrets = self.secrets_redacted,
+            violations = self.policy_violations.len(),
+            blocked = self.blocked,
+            "Safety pipeline findings"
+        );
+        for inj in &self.injections_found {
+            tracing::info!(server, tool, "Injection pattern detected: {inj}");
+        }
+        for v in &self.policy_violations {
+            tracing::info!(server, tool, "Policy violation: {v}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_report_has_no_findings() {
+        let report = SanitizationReport::default();
+        assert!(!report.had_findings());
+    }
+
+    #[test]
+    fn report_with_injection_has_findings() {
+        let report = SanitizationReport { injections_found: vec!["test".into()], ..Default::default() };
+        assert!(report.had_findings());
+    }
+}

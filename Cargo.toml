@@ -6,6 +6,7 @@ members = [
     "crates/corre-llm",
     "crates/corre-news",
     "crates/corre-capabilities",
+    "crates/corre-safety",
     "crates/corre-cli",
 ]
 
@@ -21,6 +22,7 @@ corre-mcp = { path = "crates/corre-mcp" }
 corre-llm = { path = "crates/corre-llm" }
 corre-news = { path = "crates/corre-news" }
 corre-capabilities = { path = "crates/corre-capabilities" }
+corre-safety = { path = "crates/corre-safety" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -69,3 +71,5 @@ dirs = "6"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
 ammonia = "4"
+aho-corasick = "1"
+regex = "1"
