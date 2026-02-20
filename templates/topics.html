@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} — Topics Editor</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/settings.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manufacturing+Consent&display=swap">
+</head>
+<body>
+    <header class="masthead">
+        <div class="masthead-rule"></div>
+        <h1 class="masthead-title"><a href="/">{{ title }}</a></h1>
+        <div class="masthead-meta">
+            <span>Topics Editor</span>
+            <nav class="settings-nav">
+                <a href="/settings?token={{ token }}">Back to Settings</a>
+            </nav>
+        </div>
+        <div class="masthead-rule"></div>
+    </header>
+
+    <main class="settings-main">
+        <div class="editor-container">
+            <div id="editor"></div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn btn-primary" id="saveTopics">Save topics</button>
+            <span id="saveStatus" class="save-status"></span>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <p>{{ title }} — Topics Editor</p>
+    </footer>
+
+    <script type="module">
+    import {EditorView, basicSetup} from "https://esm.sh/codemirror@6.0.1";
+    import {markdown} from "https://esm.sh/@codemirror/lang-markdown@6.3.1?deps=codemirror@6.0.1";
+
+    var EDITOR_TOKEN = {{ token|json|safe }};
+    var TOPICS_CONTENT = {{ topics_content|json|safe }};
+
+    var theme = EditorView.theme({
+        "&": {
+            fontSize: "0.95rem",
+            fontFamily: "var(--font-sans)",
+            border: "1px solid var(--color-rule)",
+            borderRadius: "3px",
+            minHeight: "400px",
+        },
+        ".cm-content": {
+            fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+            padding: "0.75rem",
+        },
+        ".cm-gutters": {
+            backgroundColor: "var(--color-paper)",
+            borderRight: "1px solid #ddd",
+            color: "#aaa",
+        },
+        ".cm-activeLine": {
+            backgroundColor: "rgba(0, 0, 0, 0.04)",
+        },
+        "&.cm-focused .cm-cursor": {
+            borderLeftColor: "var(--color-ink)",
+        },
+        "&.cm-focused .cm-selectionBackground, ::selection": {
+            backgroundColor: "rgba(26, 74, 138, 0.15)",
+        },
+    });
+
+    var view = new EditorView({
+        doc: TOPICS_CONTENT,
+        extensions: [basicSetup, markdown(), theme, EditorView.lineWrapping],
+        parent: document.getElementById("editor"),
+    });
+
+    document.getElementById("saveTopics").addEventListener("click", function() {
+        var content = view.state.doc.toString();
+        var status = document.getElementById("saveStatus");
+        status.textContent = "Saving...";
+        status.className = "save-status";
+
+        var xhr = new XMLHttpRequest();
+        xhr.open("PUT", "/api/topics");
+        xhr.setRequestHeader("Authorization", "Bearer " + EDITOR_TOKEN);
+        xhr.setRequestHeader("Content-Type", "text/plain");
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                status.textContent = "Saved. Reloading...";
+                status.className = "save-status save-ok";
+                setTimeout(function() {
+                    window.location.href = "/settings/topics?token=" + encodeURIComponent(EDITOR_TOKEN);
+                }, 500);
+            } else {
+                status.textContent = "Error: " + xhr.responseText;
+                status.className = "save-status save-err";
+            }
+        };
+        xhr.onerror = function() {
+            status.textContent = "Network error.";
+            status.className = "save-status save-err";
+        };
+        xhr.send(content);
+    });
+    </script>
+</body>
+</html>

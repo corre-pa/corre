@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use corre_core::capability::CapabilityContext;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
@@ -56,14 +57,16 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().json().with_ansi(false).with_writer(non_blocking).with_filter(file_filter))
         .init();
 
+    let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
+
     match cli.command {
-        Commands::Run => cmd_run(config).await,
+        Commands::Run => cmd_run(config, config_path).await,
         Commands::RunNow { capability } => cmd_run_now(config, &capability).await,
-        Commands::Serve => cmd_serve(config).await,
+        Commands::Serve => cmd_serve(config, config_path).await,
     }
 }
 
-async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> {
+async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) -> anyhow::Result<()> {
     // Shared cache for both web server and scheduler
     let data_dir = config.data_dir();
     let archive = corre_news::archive::Archive::new(&data_dir);
@@ -72,7 +75,8 @@ async fn cmd_run(config: corre_core::config::CorreConfig) -> anyhow::Result<()> 
     // Start web server in background
     let web_config = config.clone();
     let web_cache = cache.clone();
-    let web_handle = tokio::spawn(async move { start_web_server_with_cache(&web_config, web_cache).await });
+    let web_config_path = config_path.clone();
+    let web_handle = tokio::spawn(async move { start_web_server_with_cache(&web_config, web_cache, &web_config_path).await });
 
     // Start scheduler
     let mut scheduler = corre_core::scheduler::Scheduler::new().await?;
@@ -124,8 +128,8 @@ async fn cmd_run_now(config: corre_core::config::CorreConfig, capability_name: &
     execute_capability(&config, &registry, capability_name, seen_urls).await
 }
 
-async fn cmd_serve(config: corre_core::config::CorreConfig) -> anyhow::Result<()> {
-    start_web_server(&config).await
+async fn cmd_serve(config: corre_core::config::CorreConfig, config_path: PathBuf) -> anyhow::Result<()> {
+    start_web_server(&config, &config_path).await
 }
 
 /// Execute a capability in run-now mode (no long-lived cache, stores via archive directly).
@@ -245,23 +249,30 @@ async fn run_capability_pipeline(
     Ok((edition, mcp_pool))
 }
 
-async fn start_web_server(config: &corre_core::config::CorreConfig) -> anyhow::Result<()> {
+async fn start_web_server(config: &corre_core::config::CorreConfig, config_path: &std::path::Path) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
     let archive = corre_news::archive::Archive::new(&data_dir);
     let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
-    start_web_server_with_cache(config, cache).await
+    start_web_server_with_cache(config, cache, config_path).await
 }
 
 async fn start_web_server_with_cache(
     config: &corre_core::config::CorreConfig,
     cache: Arc<corre_news::cache::EditionCache>,
+    config_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
     let search = corre_news::search::SearchIndex::open_or_create(&data_dir)?;
 
     let static_dir = PathBuf::from("static");
 
-    let state = Arc::new(corre_news::server::AppState { cache, search, title: config.news.title.clone(), static_dir });
+    let state = Arc::new(corre_news::server::AppState {
+        cache,
+        search,
+        static_dir,
+        config_path: config_path.to_path_buf(),
+        config: Arc::new(RwLock::new(config.clone())),
+    });
 
     let addr: std::net::SocketAddr = config.news.bind.parse()?;
     tracing::info!("CorreNews listening on http://{addr}");

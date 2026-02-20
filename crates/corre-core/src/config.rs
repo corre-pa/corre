@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CorreConfig {
     pub general: GeneralConfig,
     pub llm: LlmConfig,
@@ -16,7 +16,7 @@ pub struct CorreConfig {
 }
 
 /// Action to take when a policy rule matches.
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum PolicyAction {
     Warn,
@@ -31,7 +31,7 @@ impl Default for PolicyAction {
 }
 
 /// Configuration for the prompt-injection defense layer.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SafetyConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -78,7 +78,7 @@ impl SafetyConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GeneralConfig {
     pub data_dir: String,
     #[serde(default = "default_log_level")]
@@ -89,7 +89,7 @@ fn default_log_level() -> String {
     "info".into()
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LlmConfig {
     pub provider: String,
     pub base_url: String,
@@ -117,13 +117,13 @@ fn default_max_concurrent() -> usize {
     10
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct McpConfig {
     #[serde(default)]
     pub servers: HashMap<String, McpServerConfig>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpServerConfig {
     pub command: String,
     #[serde(default)]
@@ -132,7 +132,7 @@ pub struct McpServerConfig {
     pub env: HashMap<String, String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CapabilityConfig {
     pub name: String,
     pub description: String,
@@ -148,12 +148,14 @@ fn default_enabled() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct NewsConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
     #[serde(default = "default_title")]
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_token: Option<String>,
 }
 
 fn default_bind() -> String {
@@ -169,6 +171,13 @@ impl CorreConfig {
         let content = std::fs::read_to_string(path)?;
         let config: Self = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Serialize this config to TOML and write it to the given path.
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
     }
 
     /// Returns the resolved data directory, expanding `~` to the user's home.

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} — Settings</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/settings.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manufacturing+Consent&display=swap">
+</head>
+<body>
+    <header class="masthead">
+        <div class="masthead-rule"></div>
+        <h1 class="masthead-title"><a href="/">{{ title }}</a></h1>
+        <div class="masthead-meta">
+            <span>Settings</span>
+            <nav class="settings-nav">
+                <a href="/settings/topics?token={{ token }}">Topics Editor</a>
+            </nav>
+        </div>
+        <div class="masthead-rule"></div>
+    </header>
+
+    <main class="settings-main">
+        <form id="settingsForm" autocomplete="off">
+            <fieldset>
+                <legend>General</legend>
+                <div class="field">
+                    <label for="general_data_dir">Data directory</label>
+                    <input type="text" id="general_data_dir" name="general.data_dir">
+                </div>
+                <div class="field">
+                    <label for="general_log_level">Log level</label>
+                    <select id="general_log_level" name="general.log_level">
+                        <option value="trace">trace</option>
+                        <option value="debug">debug</option>
+                        <option value="info">info</option>
+                        <option value="warn">warn</option>
+                        <option value="error">error</option>
+                    </select>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>LLM</legend>
+                <div class="field">
+                    <label for="llm_provider">Provider</label>
+                    <input type="text" id="llm_provider" name="llm.provider">
+                </div>
+                <div class="field">
+                    <label for="llm_base_url">Base URL</label>
+                    <input type="text" id="llm_base_url" name="llm.base_url">
+                </div>
+                <div class="field">
+                    <label for="llm_model">Model</label>
+                    <input type="text" id="llm_model" name="llm.model">
+                </div>
+                <div class="field">
+                    <label for="llm_api_key_env">API key env var</label>
+                    <input type="text" id="llm_api_key_env" name="llm.api_key_env">
+                </div>
+                <div class="field">
+                    <label for="llm_temperature">Temperature</label>
+                    <input type="number" id="llm_temperature" name="llm.temperature" step="0.1" min="0" max="2">
+                </div>
+                <div class="field">
+                    <label for="llm_max_tokens">Max tokens</label>
+                    <input type="number" id="llm_max_tokens" name="llm.max_tokens" min="1">
+                </div>
+                <div class="field">
+                    <label for="llm_max_concurrent">Max concurrent</label>
+                    <input type="number" id="llm_max_concurrent" name="llm.max_concurrent" min="1">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>News</legend>
+                <div class="field">
+                    <label for="news_bind">Bind address</label>
+                    <input type="text" id="news_bind" name="news.bind">
+                </div>
+                <div class="field">
+                    <label for="news_title">Title</label>
+                    <input type="text" id="news_title" name="news.title">
+                </div>
+                <div class="field">
+                    <label for="news_editor_token">Editor token</label>
+                    <input type="text" id="news_editor_token" name="news.editor_token">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Safety</legend>
+                <div class="field field-checkbox">
+                    <label><input type="checkbox" id="safety_enabled" name="safety.enabled"> Enabled</label>
+                </div>
+                <div class="field">
+                    <label for="safety_max_output_bytes">Max output bytes</label>
+                    <input type="number" id="safety_max_output_bytes" name="safety.max_output_bytes" min="0">
+                </div>
+                <div class="field field-checkbox">
+                    <label><input type="checkbox" id="safety_sanitize_injections" name="safety.sanitize_injections"> Sanitize injections</label>
+                </div>
+                <div class="field field-checkbox">
+                    <label><input type="checkbox" id="safety_detect_leaks" name="safety.detect_leaks"> Detect leaks</label>
+                </div>
+                <div class="field field-checkbox">
+                    <label><input type="checkbox" id="safety_boundary_wrap" name="safety.boundary_wrap"> Boundary wrap</label>
+                </div>
+                <div class="field">
+                    <label for="safety_high_severity_action">High severity action</label>
+                    <select id="safety_high_severity_action" name="safety.high_severity_action">
+                        <option value="warn">warn</option>
+                        <option value="sanitize">sanitize</option>
+                        <option value="block">block</option>
+                    </select>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>MCP Servers</legend>
+                <div id="mcpServers"></div>
+                <button type="button" class="btn btn-small" onclick="addMcpServer()">+ Add server</button>
+            </fieldset>
+
+            <fieldset>
+                <legend>Capabilities</legend>
+                <div id="capabilities"></div>
+                <button type="button" class="btn btn-small" onclick="addCapability()">+ Add capability</button>
+            </fieldset>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Save settings</button>
+                <span id="saveStatus" class="save-status"></span>
+            </div>
+        </form>
+    </main>
+
+    <footer class="footer">
+        <p>{{ title }} — Settings</p>
+    </footer>
+
+    <script>
+    var EDITOR_TOKEN = {{ token|json|safe }};
+    var CONFIG = {{ config_json|safe }};
+    </script>
+    <script src="/static/settings.js"></script>
+</body>
+</html>
