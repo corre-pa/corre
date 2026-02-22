@@ -275,9 +275,16 @@ async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderM
         return auth_error_response(e);
     }
     let topics_path = resolve_topics_path(&config, &state.config_path);
+    tracing::info!("Reading topics from {}", topics_path.display());
     match std::fs::read_to_string(&topics_path) {
-        Ok(content) => (StatusCode::OK, content).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read topics: {e}")).into_response(),
+        Ok(content) => {
+            tracing::info!("Successfully read topics ({} bytes)", content.len());
+            (StatusCode::OK, content).into_response()
+        }
+        Err(e) => {
+            tracing::info!("Failed to read topics from {}: {e}", topics_path.display());
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read topics: {e}")).into_response()
+        }
     }
 }
 
