@@ -22,7 +22,7 @@ PLATFORMS=(
 # Files to include in every bundle (relative to REPO_DIR)
 STATIC_FILES=(
     README.md
-    config/topics.md
+    config/topics.yml
     templates/newspaper.html
     templates/settings.html
     templates/topics.html
