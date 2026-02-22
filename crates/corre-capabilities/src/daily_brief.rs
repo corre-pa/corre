@@ -432,11 +432,33 @@ async fn score_source(
         json_mode: false,
     };
 
-    let scoring_response = match llm.complete(scoring_request).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!("Scoring failed for section `{section_name}`: {e}");
-            return vec![];
+    let scoring_response = {
+        let mut last_err = None;
+        let mut resp = None;
+        for attempt in 0..3 {
+            match llm.complete(scoring_request.clone()).await {
+                Ok(r) if !r.content.trim().is_empty() => {
+                    resp = Some(r);
+                    break;
+                }
+                Ok(_) => {
+                    last_err = Some(format!("empty response on attempt {}", attempt + 1));
+                    tracing::debug!("Scoring for section `{section_name}` returned empty response (attempt {}), retrying", attempt + 1);
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                }
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                    tracing::debug!("Scoring for section `{section_name}` failed (attempt {}): {e}, retrying", attempt + 1);
+                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                }
+            }
+        }
+        match resp {
+            Some(r) => r,
+            None => {
+                tracing::warn!("Scoring failed for section `{section_name}` after 3 attempts: {}", last_err.unwrap_or_default());
+                return vec![];
+            }
         }
     };
 
