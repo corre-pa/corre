@@ -447,7 +447,7 @@ async fn score_source(
             },
         ],
         temperature: Some(0.1),
-        max_tokens: Some(16384),
+        max_tokens: Some(1024 * 64),
         json_mode: false,
     };
 

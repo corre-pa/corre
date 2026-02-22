@@ -82,10 +82,10 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
         llm: LlmConfig {
             provider: "openai-compatible".into(),
             base_url: state.llm_base_url.clone().unwrap_or_else(|| "https://api.venice.ai/api/v1".into()),
-            model: state.llm_model.clone().unwrap_or_else(|| "zai-org-glm-4.7-flash".into()),
+            model: state.llm_model.clone().unwrap_or_else(|| "qwen3-4b".into()),
             api_key_env: state.llm_api_key_env.clone().unwrap_or_else(|| "VENICE_API_KEY".into()),
             temperature: 0.3,
-            max_tokens: 4096,
+            max_tokens: 32 * 1024,
             max_concurrent: 10,
         },
         news: NewsConfig {
