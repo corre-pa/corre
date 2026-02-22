@@ -8,12 +8,18 @@ use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod setup;
 
+/// Returns the platform-appropriate default config path: `~/.local/share/corre/corre.toml` (Linux),
+/// `~/Library/Application Support/corre/corre.toml` (macOS), etc.
+fn default_config_path() -> PathBuf {
+    setup::templates::resolved_data_dir().join("corre.toml")
+}
+
 #[derive(Parser)]
 #[command(name = "corre", about = "Personal AI task scheduler and newspaper")]
 struct Cli {
-    /// Path to config file
-    #[arg(short, long, default_value = "corre.toml")]
-    config: PathBuf,
+    /// Path to config file [default: ~/.local/share/corre/corre.toml]
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -39,12 +45,13 @@ enum Commands {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let config_path = cli.config.unwrap_or_else(default_config_path);
 
     // No subcommand: run setup if config is missing, otherwise show help
     let command = match cli.command {
         Some(cmd) => cmd,
         None => {
-            if !cli.config.exists() {
+            if !config_path.exists() {
                 return setup::run_setup().await;
             }
             Cli::parse_from(["corre", "--help"]);
@@ -61,8 +68,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let config = corre_core::config::CorreConfig::load(&cli.config)
-        .with_context(|| format!("Failed to load config from {}", cli.config.display()))?;
+    let config = corre_core::config::CorreConfig::load(&config_path)
+        .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
 
     let data_dir = config.data_dir();
     std::fs::create_dir_all(&data_dir)?;
@@ -84,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().json().with_ansi(false).with_writer(non_blocking).with_filter(file_filter))
         .init();
 
-    let config_path = std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone());
+    let config_path = std::fs::canonicalize(&config_path).unwrap_or(config_path);
 
     match command {
         Commands::Run => cmd_run(config, config_path).await,
@@ -236,7 +243,7 @@ async fn run_capability_pipeline(
     let llm: Box<dyn corre_core::capability::LlmProvider> =
         if config.safety.enabled { Box::new(corre_safety::SafeLlmProvider::new(raw_llm, &config.safety)) } else { raw_llm };
 
-    let config_dir = std::env::current_dir()?;
+    let config_dir = config.data_dir();
     let ctx = CapabilityContext { mcp, llm, config_dir, max_concurrent_llm: config.llm.max_concurrent, seen_urls };
 
     tracing::info!("Running capability `{cap_name}`");

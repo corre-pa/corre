@@ -66,7 +66,11 @@ export BRAVE_API_KEY="BRAVE_API_KEY"
 
 ### 3. Configure
 
-Edit `corre.toml` to point at your preferred LLM provider:
+Configuration lives in the data directory at `~/.local/share/corre/` (Linux) or
+`~/Library/Application Support/corre/` (macOS). Running `corre setup` creates these files
+automatically. You can override the config path with `corre -c /path/to/corre.toml`.
+
+Edit `~/.local/share/corre/corre.toml` to point at your preferred LLM provider:
 
 ```toml
 [llm]
@@ -76,7 +80,7 @@ model = "llama-3.3-70b"
 api_key_env = "VENICE_API_KEY"               # name of the env var, not the key itself
 ```
 
-Edit `config/topics.md` to choose your daily brief topics:
+Edit `~/.local/share/corre/config/topics.md` to choose your daily brief topics:
 
 ```markdown
 ## Technology
@@ -124,7 +128,7 @@ Commands:
   serve     Start only the web server
 
 Options:
-  -c, --config <CONFIG>  Path to config file [default: corre.toml]
+  -c, --config <CONFIG>  Path to config file [default: ~/.local/share/corre/corre.toml]
   -h, --help             Print help
 ```
 
@@ -133,23 +137,29 @@ Options:
 ### Workspace layout
 
 ```
-corre/
-  corre.toml                      # main config file
-  config/
-    topics.md                     # user-editable per-capability config
+corre/                              # source repository
   templates/
-    newspaper.html                # full-page template (latest edition)
-    edition.html                  # edition page with archive nav
+    newspaper.html                  # full-page template (latest edition)
+    edition.html                    # edition page with archive nav
   static/
-    style.css                     # newspaper CSS
+    style.css                       # newspaper CSS
   crates/
-    corre-core/                   # shared types and traits
-    corre-mcp/                    # MCP server pool
-    corre-llm/                    # LLM provider
-    corre-news/                   # web server + archive + search
-    corre-capabilities/           # capability implementations
-    corre-safety/                 # prompt injection defense middleware
-    corre-cli/                    # binary entry point
+    corre-core/                     # shared types and traits
+    corre-mcp/                      # MCP server pool
+    corre-llm/                      # LLM provider
+    corre-news/                     # web server + archive + search
+    corre-capabilities/             # capability implementations
+    corre-safety/                   # prompt injection defense middleware
+    corre-cli/                      # binary entry point
+
+~/.local/share/corre/               # runtime data directory
+  corre.toml                        # main config file
+  config/
+    topics.yml                      # user-editable per-capability config
+  editions/
+    YYYY-MM-DD/edition.json         # archived editions
+  search_index/                     # Tantivy full-text search index
+  .env                              # API keys (created by `corre setup`)
 ```
 
 ### Crate dependency graph
@@ -300,7 +310,7 @@ enabled = false
 Since all fields have defaults, omitting the `[safety]` section entirely is equivalent to
 running with safety enabled at default settings.
 
-### Configuration (`corre.toml`)
+### Configuration (`~/.local/share/corre/corre.toml`)
 
 ```toml
 [general]

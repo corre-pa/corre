@@ -4,7 +4,7 @@ mod state;
 mod steps;
 #[cfg(target_os = "linux")]
 mod systemd;
-mod templates;
+pub(crate) mod templates;
 mod validate;
 
 use dialoguer::Confirm;
