@@ -432,36 +432,6 @@ async fn score_source(
         json_mode: false,
     };
 
-    let scoring_response = {
-        let mut last_err = None;
-        let mut resp = None;
-        for attempt in 0..3 {
-            match llm.complete(scoring_request.clone()).await {
-                Ok(r) if !r.content.trim().is_empty() => {
-                    resp = Some(r);
-                    break;
-                }
-                Ok(_) => {
-                    last_err = Some(format!("empty response on attempt {}", attempt + 1));
-                    tracing::info!("Scoring for section `{section_name}` returned empty response (attempt {}), retrying", attempt + 1);
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-                Err(e) => {
-                    last_err = Some(e.to_string());
-                    tracing::info!("Scoring for section `{section_name}` failed (attempt {}): {e}, retrying", attempt + 1);
-                    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-                }
-            }
-        }
-        match resp {
-            Some(r) => r,
-            None => {
-                tracing::warn!("Scoring failed for section `{section_name}` after 3 attempts: {}", last_err.unwrap_or_default());
-                return vec![];
-            }
-        }
-    };
-
     #[derive(serde::Deserialize)]
     struct ScoredItem {
         index: usize,
@@ -470,14 +440,44 @@ async fn score_source(
         reasoning: String,
     }
 
-    let json_str = extract_json(&scoring_response.content);
-    let scored: Vec<ScoredItem> = match serde_json::from_str(json_str) {
-        Ok(items) => items,
-        Err(e) => {
-            tracing::warn!(
-                "Failed to parse scoring JSON for section `{section_name}`: {e}. Raw response: {}",
-                &scoring_response.content[..scoring_response.content.len().min(200)]
-            );
+    let mut scored: Option<Vec<ScoredItem>> = None;
+    for attempt in 0..3 {
+        let response = match llm.complete(scoring_request.clone()).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::info!("Scoring LLM call for section `{section_name}` failed (attempt {}): {e}", attempt + 1);
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                continue;
+            }
+        };
+
+        if response.content.trim().is_empty() {
+            tracing::info!("Scoring for section `{section_name}` returned empty response (attempt {})", attempt + 1);
+            tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+            continue;
+        }
+
+        let json_str = extract_json(&response.content);
+        match serde_json::from_str::<Vec<ScoredItem>>(json_str) {
+            Ok(items) => {
+                scored = Some(items);
+                break;
+            }
+            Err(e) => {
+                tracing::info!(
+                    "Scoring JSON parse failed for section `{section_name}` (attempt {}): {e}. Raw: {}",
+                    attempt + 1,
+                    &response.content[..response.content.len().min(200)]
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+            }
+        }
+    }
+
+    let scored = match scored {
+        Some(items) => items,
+        None => {
+            tracing::warn!("Scoring failed for section `{section_name}` after 3 attempts");
             return vec![];
         }
     };
