@@ -231,7 +231,7 @@ registers an async callback that:
 
 1. Builds an MCP pool with the capability's declared servers
 2. Initializes the LLM provider
-3. Runs the capability with a 5-minute timeout
+3. Runs the capability with a 10-minute timeout
 4. Stores the resulting edition and updates the search index
 
 Capabilities run in isolated `tokio` tasks. A panic or timeout in one capability does not affect

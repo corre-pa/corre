@@ -248,7 +248,7 @@ async fn run_capability_pipeline(
 
     tracing::info!("Running capability `{cap_name}`");
 
-    let timeout = std::time::Duration::from_secs(300);
+    let timeout = std::time::Duration::from_secs(600);
     let output = tokio::time::timeout(timeout, capability.execute(&ctx))
         .await
         .with_context(|| format!("Capability `{cap_name}` timed out after {timeout:?}"))??;
