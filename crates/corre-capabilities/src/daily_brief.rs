@@ -72,6 +72,11 @@ fn default_freshness() -> String {
     "1d".into()
 }
 
+/// Check if an LLM error indicates a transient overload that warrants a longer backoff.
+fn is_retryable_overload(err: &str) -> bool {
+    err.contains("429") || err.contains("503") || err.contains("rate limited") || err.contains("overloaded")
+}
+
 /// Map human-friendly freshness values (1d, 1w, 1m, 1y) to Brave API values (pd, pw, pm, py).
 fn normalize_freshness(freshness: &str) -> &str {
     match freshness {
@@ -338,7 +343,7 @@ impl Capability for DailyBrief {
                         }
                         Err(e) => {
                             let err_str = e.to_string();
-                            let is_rate_limit = err_str.contains("rate limited") || err_str.contains("429");
+                            let is_rate_limit = is_retryable_overload(&err_str);
                             let backoff = if is_rate_limit { 10 * (attempt as u64 + 1) } else { 1u64 << attempt };
                             tracing::info!("Summary LLM call for `{}` failed (attempt {}): {err_str}", item.title, attempt + 1);
                             tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
@@ -460,7 +465,7 @@ async fn score_source(
             Ok(r) => r,
             Err(e) => {
                 let err_str = e.to_string();
-                let is_rate_limit = err_str.contains("rate limited") || err_str.contains("429");
+                let is_rate_limit = is_retryable_overload(&err_str);
                 let backoff = if is_rate_limit {
                     let secs = 10 * (attempt as u64 + 1);
                     tracing::info!("Scoring for section `{section_name}` rate limited (attempt {}), backing off {secs}s", attempt + 1);
