@@ -72,6 +72,17 @@ fn default_freshness() -> String {
     "1d".into()
 }
 
+/// Map human-friendly freshness values (1d, 1w, 1m, 1y) to Brave API values (pd, pw, pm, py).
+fn normalize_freshness(freshness: &str) -> &str {
+    match freshness {
+        "1d" => "pd",
+        "1w" => "pw",
+        "1m" => "pm",
+        "1y" => "py",
+        other => other,
+    }
+}
+
 fn load_topics(content: &str) -> anyhow::Result<Vec<TopicSection>> {
     let config: TopicsConfig = serde_yaml_ng::from_str(content)?;
     Ok(config.daily_briefing.sections)
@@ -212,7 +223,7 @@ impl Capability for DailyBrief {
         for section in &sections {
             for (src_idx, source) in section.sources.iter().enumerate() {
                 let query = build_query(source);
-                let freshness = source.freshness.clone();
+                let freshness = normalize_freshness(&source.freshness).to_string();
                 let section_title = section.title.clone();
 
                 for (tool, label) in [("brave_web_search", "Web"), ("brave_news_search", "News")] {
@@ -438,7 +449,16 @@ async fn score_source(
     }
 
     let json_str = extract_json(&scoring_response.content);
-    let scored: Vec<ScoredItem> = serde_json::from_str(json_str).unwrap_or_default();
+    let scored: Vec<ScoredItem> = match serde_json::from_str(json_str) {
+        Ok(items) => items,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to parse scoring JSON for section `{section_name}`: {e}. Raw response: {}",
+                &scoring_response.content[..scoring_response.content.len().min(200)]
+            );
+            return vec![];
+        }
+    };
     scored.iter().for_each(|scored_item| {
         tracing::debug!(
             "Scoring result. {section_name}#{} -> {:0.2}. Reasoning: {}",

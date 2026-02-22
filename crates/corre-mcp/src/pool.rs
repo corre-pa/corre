@@ -77,17 +77,17 @@ impl McpCaller for McpPool {
             .with_context(|| format!("Failed to call tool `{tool_name}` on MCP server `{server_name}`"))?;
 
         // Each text content block may be an independent JSON object (e.g. brave-search
-        // returns one JSON object per result). Collect them into an array if multiple
-        // blocks parse as JSON; otherwise fall back to a single concatenated string.
+        // returns one JSON object per result). Collect all blocks that parse as JSON,
+        // skipping non-JSON blocks (e.g. "Summarizer key: ..."). If no blocks parse as
+        // JSON, fall back to a single concatenated string.
         let text_blocks: Vec<&str> = result.content.iter().filter_map(|c| c.as_text().map(|t| t.text.as_str())).collect();
 
         let json_values: Vec<serde_json::Value> = text_blocks.iter().filter_map(|t| serde_json::from_str(t).ok()).collect();
 
-        if json_values.len() == text_blocks.len() && !json_values.is_empty() {
-            // All blocks parsed as JSON
+        if !json_values.is_empty() {
             if json_values.len() == 1 { Ok(json_values.into_iter().next().unwrap()) } else { Ok(serde_json::Value::Array(json_values)) }
         } else {
-            // Fall back to plain text
+            // No blocks parsed as JSON — fall back to plain text
             let joined = text_blocks.join("\n");
             Ok(serde_json::Value::String(joined))
         }
