@@ -1,20 +1,22 @@
 use corre_core::capability::{Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmMessage, LlmRequest, LlmRole};
 use corre_core::config::CapabilityConfig;
 use corre_core::publish::{Article, Section, Source, sanitize_html, sanitize_url};
+use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 /// Daily Research Brief capability.
 ///
 /// Pipeline:
-/// 1. Parse topics.md -> sections of search queries
-/// 2. Build queries with section context, must-have include phrases, and exclusion operators
-/// 3. Search all queries via brave_web_search AND brave_news_search in parallel
-/// 4. Deduplicate results by URL within each section
-/// 5. Score results for newsworthiness (one LLM call per section, parallel)
-/// 6. Filter to top 5 per section above score threshold
-/// 7. Summarise each top result (parallel LLM calls, semaphore-bounded)
-/// 8. Group into sections -> CapabilityOutput
+/// 1. Parse topics.yml -> sections of sources with per-source search config
+/// 2. Build one query per source (search + include phrases + exclude operators)
+/// 3. Search each query via brave_web_search AND brave_news_search in parallel
+/// 4. Deduplicate results by URL within each source, then cross-edition dedup
+/// 5. Filter out results matching exclude terms (per-source)
+/// 6. Score results for newsworthiness (one LLM call per source, parallel)
+/// 7. Filter to top 5 per source above score threshold
+/// 8. Summarise each top result (parallel LLM calls, semaphore-bounded)
+/// 9. Group into sections -> CapabilityOutput
 pub struct DailyBrief {
     manifest: CapabilityManifest,
 }
@@ -33,14 +35,65 @@ impl DailyBrief {
     }
 }
 
-#[derive(Debug)]
-struct TopicSection {
-    name: String,
-    context: String,
-    queries: Vec<String>,
-    includes: Vec<String>,
-    excludes: Vec<String>,
+// ---------------------------------------------------------------------------
+// YAML config model
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+struct TopicsConfig {
+    #[serde(rename = "daily-briefing")]
+    daily_briefing: DailyBriefing,
 }
+
+#[derive(Debug, serde::Deserialize)]
+struct DailyBriefing {
+    sections: Vec<TopicSection>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TopicSection {
+    title: String,
+    sources: Vec<TopicSource>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TopicSource {
+    search: String,
+    #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(rename = "select-if", default)]
+    select_if: String,
+    #[serde(default = "default_freshness")]
+    freshness: String,
+}
+
+fn default_freshness() -> String {
+    "1d".into()
+}
+
+fn load_topics(content: &str) -> anyhow::Result<Vec<TopicSection>> {
+    let config: TopicsConfig = serde_yaml_ng::from_str(content)?;
+    Ok(config.daily_briefing.sections)
+}
+
+/// Build a single Brave search query from a source entry.
+/// Include terms are quoted must-haves, exclude terms are negated.
+fn build_query(source: &TopicSource) -> String {
+    let mut query = source.search.clone();
+    for inc in &source.include {
+        write!(query, " \"{inc}\"").unwrap();
+    }
+    for exc in &source.exclude {
+        write!(query, " -{exc}").unwrap();
+    }
+    query
+}
+
+// ---------------------------------------------------------------------------
+// Search result parsing
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SearchResultItem {
@@ -53,115 +106,6 @@ struct SearchResultItem {
     #[serde(default)]
     #[allow(dead_code)]
     extra_snippets: Vec<String>,
-}
-
-/// Sub-heading state for parsing `### Include` / `### Exclude` blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SubHeading {
-    None,
-    Include,
-    Exclude,
-}
-
-/// Build search queries for a section, combining section name + context with
-/// must-have include phrases (quoted) and exclusion operators.
-fn build_queries(section: &TopicSection) -> Vec<String> {
-    let base = if section.context.is_empty() { section.name.clone() } else { format!("{} {}", section.name, section.context) };
-
-    let exclude_suffix =
-        if section.excludes.is_empty() { String::new() } else { section.excludes.iter().map(|ex| format!(" -{ex}")).collect::<String>() };
-
-    let mut queries = Vec::new();
-
-    // General query (always present)
-    queries.push(format!("{base}{exclude_suffix}"));
-
-    // Legacy bullet queries
-    queries.extend(section.queries.iter().map(|q| format!("{base} {q}{exclude_suffix}")));
-
-    // One query per include term as a must-have phrase
-    queries.extend(section.includes.iter().map(|inc| format!("{base} \"{inc}\"{exclude_suffix}")));
-
-    queries
-}
-
-fn parse_topics(content: &str) -> Vec<TopicSection> {
-    let mut sections = Vec::new();
-    let mut current_section: Option<TopicSection> = None;
-    let mut sub = SubHeading::None;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        // New ## section heading
-        if let Some(heading) = trimmed.strip_prefix("## ") {
-            if let Some(section) = current_section.take() {
-                sections.push(section);
-            }
-            current_section = Some(TopicSection {
-                name: heading.trim().to_string(),
-                context: String::new(),
-                queries: Vec::new(),
-                includes: Vec::new(),
-                excludes: Vec::new(),
-            });
-            sub = SubHeading::None;
-            continue;
-        }
-
-        // ### sub-headings toggle the sub-state
-        if let Some(sub_heading) = trimmed.strip_prefix("### ") {
-            match sub_heading.trim().to_lowercase().as_str() {
-                "include" => sub = SubHeading::Include,
-                "exclude" => sub = SubHeading::Exclude,
-                _ => sub = SubHeading::None,
-            }
-            continue;
-        }
-
-        // Skip lines outside a section
-        let Some(ref mut section) = current_section else { continue };
-
-        match sub {
-            SubHeading::None => {
-                // `- ` bullets are backward-compat queries
-                if let Some(query) = trimmed.strip_prefix("- ") {
-                    let query = query.trim();
-                    if !query.is_empty() {
-                        section.queries.push(query.to_string());
-                    }
-                } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                    // Free text → editorial context
-                    if !section.context.is_empty() {
-                        section.context.push(' ');
-                    }
-                    section.context.push_str(trimmed);
-                }
-            }
-            SubHeading::Include => {
-                if let Some(entry) = trimmed.strip_prefix("* ") {
-                    let entry = entry.trim();
-                    if !entry.is_empty() {
-                        section.includes.push(entry.to_string());
-                    }
-                }
-            }
-            SubHeading::Exclude => {
-                if let Some(entry) = trimmed.strip_prefix("* ") {
-                    let entry = entry.trim();
-                    if !entry.is_empty() {
-                        section.excludes.push(entry.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(section) = current_section {
-        sections.push(section);
-    }
-
-    sections
 }
 
 /// Extract a JSON substring from LLM output that may contain markdown fencing
@@ -235,6 +179,10 @@ struct RankedResult {
     score: f64,
 }
 
+// ---------------------------------------------------------------------------
+// Capability implementation
+// ---------------------------------------------------------------------------
+
 #[async_trait::async_trait]
 impl Capability for DailyBrief {
     fn manifest(&self) -> &CapabilityManifest {
@@ -247,37 +195,43 @@ impl Capability for DailyBrief {
             .config_path
             .as_ref()
             .map(|p| ctx.config_dir.join(p))
-            .ok_or_else(|| anyhow::anyhow!("daily-brief requires a config_path pointing to topics.md"))?;
+            .ok_or_else(|| anyhow::anyhow!("daily-brief requires a config_path pointing to topics.yml"))?;
 
         let topics_content = std::fs::read_to_string(&config_path)?;
-        let sections = parse_topics(&topics_content);
+        let sections = load_topics(&topics_content)?;
         tracing::info!("Parsed {} topic sections", sections.len());
 
         // ------------------------------------------------------------------
-        // Step 2-3: Build queries and search via web + news in parallel
+        // Step 2-3: Build one query per source and search via web + news
         // ------------------------------------------------------------------
-        type SearchFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = (String, Vec<SearchResultItem>)> + Send + 'a>>;
+        // Each future returns (section_title, source_index, results) so we
+        // can track which source produced which results.
+        type SearchResult = (String, usize, Vec<SearchResultItem>);
+        type SearchFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = SearchResult> + Send + 'a>>;
         let mut search_handles: Vec<SearchFuture<'_>> = Vec::new();
-        for section in &sections {
-            let queries = build_queries(section);
 
-            for query in queries {
-                let section_name = section.name.clone();
+        for section in &sections {
+            for (src_idx, source) in section.sources.iter().enumerate() {
+                let query = build_query(source);
+                let freshness = source.freshness.clone();
+                let section_title = section.title.clone();
+
                 for (tool, label) in [("brave_web_search", "Web"), ("brave_news_search", "News")] {
-                    let sec = section_name.clone();
+                    let sec = section_title.clone();
                     let q = query.clone();
+                    let f = freshness.clone();
                     search_handles.push(Box::pin(async move {
                         tracing::info!("{label} searching: {q}");
-                        let args = serde_json::json!({ "query": q, "freshness": "pd" });
+                        let args = serde_json::json!({ "query": q, "freshness": f });
                         match ctx.mcp.call_tool("brave-search", tool, args).await {
                             Ok(results) => {
                                 let items = parse_search_results(&results);
                                 tracing::info!("Got {} {label} results for: {q}", items.len());
-                                (sec, items)
+                                (sec, src_idx, items)
                             }
                             Err(e) => {
                                 tracing::warn!("{label} search failed for `{q}`: {e}");
-                                (sec, vec![])
+                                (sec, src_idx, vec![])
                             }
                         }
                     }));
@@ -287,76 +241,72 @@ impl Capability for DailyBrief {
 
         let search_results = futures::future::join_all(search_handles).await;
 
-        // Group by section and deduplicate by URL
-        let mut section_results: std::collections::HashMap<String, Vec<SearchResultItem>> = std::collections::HashMap::new();
-        for (section_name, items) in search_results {
-            section_results.entry(section_name).or_default().extend(items);
+        // Group results by (section_title, source_index)
+        let mut source_results: std::collections::HashMap<(String, usize), Vec<SearchResultItem>> = std::collections::HashMap::new();
+        for (section_title, src_idx, items) in search_results {
+            source_results.entry((section_title, src_idx)).or_default().extend(items);
         }
-        for results in section_results.values_mut() {
+
+        // Deduplicate by URL within each source
+        for results in source_results.values_mut() {
             let mut seen = std::collections::HashSet::new();
             results.retain(|r| seen.insert(r.url.clone()));
         }
 
         // Cross-edition dedup: remove URLs that appeared in previous editions
         if !ctx.seen_urls.is_empty() {
-            let before: usize = section_results.values().map(|r| r.len()).sum();
-            for results in section_results.values_mut() {
+            let before: usize = source_results.values().map(|r| r.len()).sum();
+            for results in source_results.values_mut() {
                 results.retain(|r| !ctx.seen_urls.contains(&r.url));
             }
-            let after: usize = section_results.values().map(|r| r.len()).sum();
+            let after: usize = source_results.values().map(|r| r.len()).sum();
             if before != after {
                 tracing::info!("Cross-edition dedup removed {} previously seen URLs", before - after);
             }
         }
 
-        // Build a lookup from section name to its excludes for filtering
-        let excludes_by_section: std::collections::HashMap<&str, &[String]> =
-            sections.iter().map(|s| (s.name.as_str(), s.excludes.as_slice())).collect();
-
-        // Filter out results matching any exclude term (case-insensitive against url+title+description)
-        for (section_name, results) in section_results.iter_mut() {
-            if let Some(excludes) = excludes_by_section.get(section_name.as_str()) {
-                if !excludes.is_empty() {
+        // Exclude filtering per-source
+        for section in &sections {
+            for (src_idx, source) in section.sources.iter().enumerate() {
+                if source.exclude.is_empty() {
+                    continue;
+                }
+                let key = (section.title.clone(), src_idx);
+                if let Some(results) = source_results.get_mut(&key) {
                     results.retain(|r| {
                         let haystack = format!("{} {} {}", r.url, r.title, r.description).to_lowercase();
-                        !excludes.iter().any(|ex| haystack.contains(&ex.to_lowercase()))
+                        !source.exclude.iter().any(|ex| haystack.contains(&ex.to_lowercase()))
                     });
                 }
             }
         }
 
         // ------------------------------------------------------------------
-        // Step 4: Score each section's results (parallel LLM calls)
+        // Step 4-5: Score each source's results (parallel LLM calls)
         // ------------------------------------------------------------------
         let semaphore = Arc::new(Semaphore::new(ctx.max_concurrent_llm));
 
-        // Build a lookup from section name to its context for scoring
-        let context_by_section: std::collections::HashMap<&str, &str> =
-            sections.iter().map(|s| (s.name.as_str(), s.context.as_str())).collect();
-
         let mut scoring_handles = Vec::new();
-        for (section_name, results) in &section_results {
-            if results.is_empty() {
-                continue;
+        for section in &sections {
+            for (src_idx, source) in section.sources.iter().enumerate() {
+                let key = (section.title.clone(), src_idx);
+                let results = match source_results.get(&key) {
+                    Some(r) if !r.is_empty() => r.clone(),
+                    _ => continue,
+                };
+                let section_name = section.title.clone();
+                let select_if = source.select_if.clone();
+                let sem = semaphore.clone();
+                scoring_handles.push(async move {
+                    let _permit = sem.acquire().await.unwrap();
+                    score_source(&ctx.llm, &section_name, &select_if, &results).await
+                });
             }
-            let section_name = section_name.clone();
-            let context = context_by_section.get(section_name.as_str()).copied().unwrap_or_default().to_string();
-            let results = results.clone();
-            let sem = semaphore.clone();
-            scoring_handles.push(async move {
-                let _permit = sem.acquire().await.unwrap();
-                score_section(&ctx.llm, &section_name, &context, &results).await
-            });
         }
 
-        let scored_sections = futures::future::join_all(scoring_handles).await;
+        let scored_batches = futures::future::join_all(scoring_handles).await;
 
-        // Flatten into ranked results
-        let mut ranked: Vec<RankedResult> = Vec::new();
-        for section_ranked in scored_sections {
-            ranked.extend(section_ranked);
-        }
-
+        let ranked: Vec<RankedResult> = scored_batches.into_iter().flatten().collect();
         tracing::info!("{} articles to summarise across all sections", ranked.len());
 
         // ------------------------------------------------------------------
@@ -429,22 +379,22 @@ impl Capability for DailyBrief {
             article_map.entry(pair.0).or_default().push(pair.1);
         }
 
-        // Preserve section ordering from the original topics file
+        // Preserve section ordering from the YAML
         let output_sections: Vec<Section> = sections
             .iter()
-            .filter_map(|s| article_map.remove(&s.name).map(|articles| Section { title: s.name.clone(), articles }))
+            .filter_map(|s| article_map.remove(&s.title).map(|articles| Section { title: s.title.clone(), articles }))
             .collect();
 
         Ok(CapabilityOutput { capability_name: self.manifest.name.clone(), produced_at: chrono::Utc::now(), sections: output_sections })
     }
 }
 
-/// Score a section's search results for newsworthiness via a single LLM call.
+/// Score a source's search results for newsworthiness via a single LLM call.
 /// Returns the top 5 results above the threshold.
-async fn score_section(
+async fn score_source(
     llm: &Box<dyn corre_core::capability::LlmProvider>,
     section_name: &str,
-    context: &str,
+    select_if: &str,
     results: &[SearchResultItem],
 ) -> Vec<RankedResult> {
     let results_json = serde_json::to_string(
@@ -474,10 +424,12 @@ async fn score_section(
             },
             LlmMessage {
                 role: LlmRole::User,
-                content: if context.is_empty() {
+                content: if select_if.is_empty() {
                     format!("Score these search results for the \"{section_name}\" section:\n{results_json}")
                 } else {
-                    format!("Score these search results for the \"{section_name}\" section.\nEditorial guidance: {context}\n{results_json}")
+                    format!(
+                        "Score these search results for the \"{section_name}\" section.\nEditorial guidance: {select_if}\n{results_json}"
+                    )
                 },
             },
         ],
@@ -530,52 +482,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_topics_md() {
-        let content = r#"# Daily Brief Topics
-
-Each section becomes a section in CorreNews.
-
-## Technology
-Focus on systems programming and open-source tooling.
-- Rust programming language news
-- AI and machine learning developments
-
-### Include
-* https://blog.rust-lang.org
-* LLVM weekly
-
-### Exclude
-* cryptocurrency
-* blockchain
-
-## World News
-- Geopolitics and international relations
+    fn load_topics_yaml_round_trip() {
+        let yaml = r#"
+daily-briefing:
+  sections:
+    - title: "World News"
+      sources:
+        - search: "latest news"
+          include:
+            - "economics"
+          exclude:
+            - "politics"
+          select-if: "General interest news from reputable sources."
+          freshness: "1d"
+        - search: "europe news"
+          include: []
+          exclude: []
+          select-if: ""
+    - title: "Sports"
+      sources:
+        - search: "rugby news"
+          include:
+            - "six nations"
+          exclude:
+            - "Planet Rugby"
+          select-if: "Match reports and analysis."
+          freshness: "1w"
 "#;
-        let sections = parse_topics(content);
+        let sections = load_topics(yaml).unwrap();
         assert_eq!(sections.len(), 2);
 
-        assert_eq!(sections[0].name, "Technology");
-        assert_eq!(sections[0].context, "Focus on systems programming and open-source tooling.");
-        assert_eq!(sections[0].queries, vec!["Rust programming language news", "AI and machine learning developments"]);
-        assert_eq!(sections[0].includes, vec!["https://blog.rust-lang.org", "LLVM weekly"]);
-        assert_eq!(sections[0].excludes, vec!["cryptocurrency", "blockchain"]);
+        assert_eq!(sections[0].title, "World News");
+        assert_eq!(sections[0].sources.len(), 2);
+        assert_eq!(sections[0].sources[0].search, "latest news");
+        assert_eq!(sections[0].sources[0].include, vec!["economics"]);
+        assert_eq!(sections[0].sources[0].exclude, vec!["politics"]);
+        assert_eq!(sections[0].sources[0].select_if, "General interest news from reputable sources.");
+        assert_eq!(sections[0].sources[0].freshness, "1d");
 
-        assert_eq!(sections[1].name, "World News");
-        assert_eq!(sections[1].context, "");
-        assert_eq!(sections[1].queries, vec!["Geopolitics and international relations"]);
-        assert!(sections[1].includes.is_empty());
-        assert!(sections[1].excludes.is_empty());
+        // Second source uses defaults
+        assert_eq!(sections[0].sources[1].search, "europe news");
+        assert!(sections[0].sources[1].include.is_empty());
+        assert!(sections[0].sources[1].exclude.is_empty());
+        assert_eq!(sections[0].sources[1].select_if, "");
+        assert_eq!(sections[0].sources[1].freshness, "1d"); // default
+
+        assert_eq!(sections[1].title, "Sports");
+        assert_eq!(sections[1].sources[0].freshness, "1w");
     }
 
     #[test]
-    fn parse_topics_empty_section_preserved() {
-        // Sections with no queries but with includes should still be kept
-        let content = "## Sports\n### Include\n* Formula 1 results\n";
-        let sections = parse_topics(content);
-        assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].name, "Sports");
-        assert!(sections[0].queries.is_empty());
-        assert_eq!(sections[0].includes, vec!["Formula 1 results"]);
+    fn build_query_includes_and_excludes() {
+        let source = TopicSource {
+            search: "rugby news".into(),
+            include: vec!["six nations".into(), "world cup".into()],
+            exclude: vec!["Planet Rugby".into()],
+            select_if: String::new(),
+            freshness: "1d".into(),
+        };
+        assert_eq!(build_query(&source), "rugby news \"six nations\" \"world cup\" -Planet Rugby");
+    }
+
+    #[test]
+    fn build_query_no_modifiers() {
+        let source = TopicSource {
+            search: "international cricket news".into(),
+            include: vec![],
+            exclude: vec![],
+            select_if: String::new(),
+            freshness: "1w".into(),
+        };
+        assert_eq!(build_query(&source), "international cricket news");
+    }
+
+    #[test]
+    fn build_query_excludes_only() {
+        let source = TopicSource {
+            search: "astronomy".into(),
+            include: vec![],
+            exclude: vec!["Avi Loeb".into(), "UFO".into()],
+            select_if: String::new(),
+            freshness: "1d".into(),
+        };
+        assert_eq!(build_query(&source), "astronomy -Avi Loeb -UFO");
     }
 
     #[test]
@@ -613,52 +602,6 @@ Focus on systems programming and open-source tooling.
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].title, "Rust 1.80 released");
-    }
-
-    #[test]
-    fn build_queries_with_includes_and_excludes() {
-        let section = TopicSection {
-            name: "Gaming News".into(),
-            context: "Big Sales popular games Payday Factorio Battlefields".into(),
-            queries: vec![],
-            includes: vec!["Humble bundle".into(), "Epic games store".into(), "Steam".into()],
-            excludes: vec!["Xbox".into(), "Wii".into(), "Ubisoft".into()],
-        };
-        let queries = build_queries(&section);
-        assert_eq!(queries.len(), 4); // 1 general + 3 includes
-        assert_eq!(queries[0], "Gaming News Big Sales popular games Payday Factorio Battlefields -Xbox -Wii -Ubisoft");
-        assert_eq!(queries[1], "Gaming News Big Sales popular games Payday Factorio Battlefields \"Humble bundle\" -Xbox -Wii -Ubisoft");
-        assert_eq!(queries[2], "Gaming News Big Sales popular games Payday Factorio Battlefields \"Epic games store\" -Xbox -Wii -Ubisoft");
-        assert_eq!(queries[3], "Gaming News Big Sales popular games Payday Factorio Battlefields \"Steam\" -Xbox -Wii -Ubisoft");
-    }
-
-    #[test]
-    fn build_queries_no_includes() {
-        let section = TopicSection {
-            name: "World News".into(),
-            context: "".into(),
-            queries: vec!["Geopolitics".into()],
-            includes: vec![],
-            excludes: vec![],
-        };
-        let queries = build_queries(&section);
-        assert_eq!(queries.len(), 2); // 1 general + 1 legacy
-        assert_eq!(queries[0], "World News");
-        assert_eq!(queries[1], "World News Geopolitics");
-    }
-
-    #[test]
-    fn build_queries_excludes_no_includes() {
-        let section = TopicSection {
-            name: "Astronomy".into(),
-            context: "Latest interesting topics".into(),
-            queries: vec![],
-            includes: vec![],
-            excludes: vec!["Avi Loeb".into()],
-        };
-        let queries = build_queries(&section);
-        assert_eq!(queries.len(), 1); // only general query
-        assert_eq!(queries[0], "Astronomy Latest interesting topics -Avi Loeb");
     }
 
     #[test]

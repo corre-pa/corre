@@ -180,11 +180,7 @@ pub fn check_dependencies(term: &console::Term) -> anyhow::Result<bool> {
     }
 
     println!();
-    println!(
-        "{} missing: {}",
-        missing.len(),
-        missing.iter().map(|&i| statuses[i].name).collect::<Vec<_>>().join(", ")
-    );
+    println!("{} missing: {}", missing.len(), missing.iter().map(|&i| statuses[i].name).collect::<Vec<_>>().join(", "));
     println!();
 
     // Deduplicate: if both "Node.js" and "npx" are missing, only offer to install Node.js

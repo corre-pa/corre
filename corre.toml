@@ -14,7 +14,7 @@ max_concurrent = 10        # parallel LLM requests; tune to your provider's rate
 [news]
 bind = "192.168.1.101:5555"
 title = "Corre News"
-# editor_token = "change-me-to-a-secret"   # set to enable /settings and /settings/topics
+editor_token = "edit"   # set to enable /settings and /settings/topics
 
 [mcp.servers.brave-search]
 command = "npx"
@@ -35,5 +35,5 @@ name = "daily-brief"
 description = "Researches topics and produces a daily news briefing"
 schedule = "0 0 5 * * *"
 mcp_servers = ["brave-search"]
-config_path = "config/topics.md"
+config_path = "config/topics.yml"
 enabled = true

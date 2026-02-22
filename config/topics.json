@@ -1,0 +1,75 @@
+{
+  "daily-briefing": {
+    "sections": [
+      {
+        "title": "World News",
+        "sources": [
+          {
+            "search": "latest news",
+            "include": [
+              "economics"
+            ],
+            "exclude": [
+              "politics"
+            ],
+            "select-if": "General interest news articles from reputable sources. Exclude personal blogs and opinion pieces.",
+            "freshness": "1d"
+          },
+          {
+            "search": "latest news",
+            "include": [
+              "europe"
+            ],
+            "exclude": [
+              "football"
+            ],
+            "select-if": "English language news articles about developments in Europe from reputable sources. Exclude personal blogs and opinion pieces.",
+            "freshness": "1d"
+          }
+        ]
+      },
+      {
+        "title": "Business",
+        "sources": [
+          {
+            "search": "european economy macro-economic news",
+            "include": [],
+            "exclude": [],
+            "select-if": "Select opinion pieces and analysis by highly regarded macro-economic analysts. Prefer libertarian and austrian school economic leanings, but also include mainstream economists if they have interesting insights. Avoid news articles and general market updates.",
+            "freshness": "1w"
+          },
+          {
+            "search": "international cricket news",
+            "include": [],
+            "exclude": [],
+            "select-if": "Most interest in current ongoing international tournaments. Avoid stories related to politics in the ICC or sport governing bodies. English-language only!.",
+            "freshness": "1w"
+          }
+        ]
+      },
+      {
+        "title": "Sports",
+        "sources": [
+          {
+            "search": "rugby news",
+            "include": [
+              "six nations"
+            ],
+            "exclude": [
+              "Planet Rugby"
+            ],
+            "select-if": "Latest news about the 6 nations rugby tournament. Lean towards in-depth analysis and match reports Avoid meta-articles about politics or incidents not related to the games themselves.",
+            "freshness": "1w"
+          },
+          {
+            "search": "international cricket news",
+            "include": [],
+            "exclude": [],
+            "select-if": "Most interest in current ongoing international tournaments. Avoid stories related to politics in the ICC or sport governing bodies. English-language only!.",
+            "freshness": "1w"
+          }
+        ]
+      }
+    ]
+  }
+}
