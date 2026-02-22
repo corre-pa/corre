@@ -443,12 +443,12 @@ async fn score_source(
                 }
                 Ok(_) => {
                     last_err = Some(format!("empty response on attempt {}", attempt + 1));
-                    tracing::debug!("Scoring for section `{section_name}` returned empty response (attempt {}), retrying", attempt + 1);
+                    tracing::info!("Scoring for section `{section_name}` returned empty response (attempt {}), retrying", attempt + 1);
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
                 }
                 Err(e) => {
                     last_err = Some(e.to_string());
-                    tracing::debug!("Scoring for section `{section_name}` failed (attempt {}): {e}, retrying", attempt + 1);
+                    tracing::info!("Scoring for section `{section_name}` failed (attempt {}): {e}, retrying", attempt + 1);
                     tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
                 }
             }
