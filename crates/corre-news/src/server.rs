@@ -5,20 +5,23 @@ use askama::Template;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use chrono::NaiveDate;
 use corre_core::config::CorreConfig;
+use rust_embed::RustEmbed;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower_http::services::ServeDir;
+
+#[derive(RustEmbed)]
+#[folder = "../../static/"]
+struct Assets;
 
 pub struct AppState {
     pub cache: Arc<EditionCache>,
     pub search: SearchIndex,
-    pub static_dir: PathBuf,
     pub config_path: PathBuf,
     pub config: Arc<RwLock<CorreConfig>>,
 }
@@ -33,8 +36,26 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/settings/topics", get(topics_page_handler))
         .route("/api/settings", get(get_settings_handler).put(put_settings_handler))
         .route("/api/topics", get(get_topics_handler).put(put_topics_handler))
-        .nest_service("/static", ServeDir::new(&state.static_dir))
+        .route("/static/{*path}", get(static_handler))
         .with_state(state)
+}
+
+async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
+    match Assets::get(&path) {
+        Some(file) => {
+            let mime = match path.rsplit_once('.').map(|(_, ext)| ext) {
+                Some("css") => "text/css",
+                Some("js") => "application/javascript",
+                Some("html") => "text/html",
+                Some("svg") => "image/svg+xml",
+                Some("png") => "image/png",
+                Some("ico") => "image/x-icon",
+                _ => "application/octet-stream",
+            };
+            ([(header::CONTENT_TYPE, mime)], file.data).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// Extract a bearer token from either `?token=` query param or `Authorization: Bearer` header.
@@ -258,8 +279,9 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
     let token = token_str.unwrap_or_default();
     let topics_path = resolve_topics_path(&config, &state.config_path);
     let topics_yaml = std::fs::read_to_string(&topics_path).unwrap_or_default();
+    let empty_default = || serde_json::json!({"daily-briefing": {"sections": []}});
     let topics_value: serde_json::Value =
-        serde_yaml_ng::from_str(&topics_yaml).unwrap_or_else(|_| serde_json::json!({"daily-briefing": {"sections": []}}));
+        serde_yaml_ng::from_str(&topics_yaml).ok().filter(|v: &serde_json::Value| !v.is_null()).unwrap_or_else(empty_default);
     let topics_json = serde_json::to_string(&topics_value).unwrap_or_else(|_| r#"{"daily-briefing":{"sections":[]}}"#.to_string());
     let template = TopicsTemplate { title: &title, topics_json: &topics_json, token: &token };
     match template.render() {
@@ -307,15 +329,17 @@ async fn put_topics_handler(
 }
 
 /// Resolve the topics file path from the first capability that has a config_path,
-/// relative to the directory containing corre.toml.
+/// relative to the directory containing corre.toml. Falls back to `{data_dir}/config/topics.yml`.
 fn resolve_topics_path(config: &CorreConfig, config_path: &std::path::Path) -> PathBuf {
     let base_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+    let default_path = || base_dir.join("config/topics.yml");
     config
         .capabilities
         .iter()
         .find_map(|c| c.config_path.as_ref())
         .map(|p| base_dir.join(p))
-        .unwrap_or_else(|| base_dir.join("config/topics.yml"))
+        .filter(|p| p.exists())
+        .unwrap_or_else(default_path)
 }
 
 /// Start the web server, binding to the given address.

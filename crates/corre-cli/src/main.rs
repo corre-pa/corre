@@ -299,12 +299,9 @@ async fn start_web_server_with_cache(
     let data_dir = config.data_dir();
     let search = corre_news::search::SearchIndex::open_or_create(&data_dir)?;
 
-    let static_dir = PathBuf::from("static");
-
     let state = Arc::new(corre_news::server::AppState {
         cache,
         search,
-        static_dir,
         config_path: config_path.to_path_buf(),
         config: Arc::new(RwLock::new(config.clone())),
     });
