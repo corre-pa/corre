@@ -257,8 +257,11 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
     }
     let token = token_str.unwrap_or_default();
     let topics_path = resolve_topics_path(&config, &state.config_path);
-    let topics_content = std::fs::read_to_string(&topics_path).unwrap_or_default();
-    let template = TopicsTemplate { title: &title, topics_content: &topics_content, token: &token };
+    let topics_yaml = std::fs::read_to_string(&topics_path).unwrap_or_default();
+    let topics_value: serde_json::Value =
+        serde_yaml_ng::from_str(&topics_yaml).unwrap_or_else(|_| serde_json::json!({"daily-briefing": {"sections": []}}));
+    let topics_json = serde_json::to_string(&topics_value).unwrap_or_else(|_| r#"{"daily-briefing":{"sections":[]}}"#.to_string());
+    let template = TopicsTemplate { title: &title, topics_json: &topics_json, token: &token };
     match template.render() {
         Ok(html) => Html(html).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),

@@ -204,13 +204,18 @@ legend {
     font-size: 0.8rem;
 }
 
-/* Topics editor */
-.editor-container {
-    margin-bottom: 1rem;
+/* Topics form */
+.sources-container {
+    margin: 0.75rem 0;
 }
 
-.editor-container .cm-editor {
-    min-height: 400px;
+.source-row {
+    margin-left: 0.5rem;
+    border-left: 3px solid var(--color-rule);
+}
+
+.topic-section .section-body {
+    margin-top: 0.5rem;
 }
 
 /* Responsive */

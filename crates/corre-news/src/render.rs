@@ -24,6 +24,6 @@ pub struct SettingsTemplate<'a> {
 #[template(path = "topics.html")]
 pub struct TopicsTemplate<'a> {
     pub title: &'a str,
-    pub topics_content: &'a str,
+    pub topics_json: &'a str,
     pub token: &'a str,
 }
