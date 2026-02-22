@@ -12,9 +12,8 @@ use tokio::sync::Semaphore;
 /// 2. Build one query per source (search + include phrases + exclude operators)
 /// 3. Search each query via brave_web_search AND brave_news_search in parallel
 /// 4. Deduplicate results by URL within each source, then cross-edition dedup
-/// 5. Filter out results matching exclude terms (per-source)
-/// 6. Score results for newsworthiness (one LLM call per source, parallel)
-/// 7. Filter to top 5 per source above score threshold
+/// 5. Score results for newsworthiness (one LLM call per source, parallel)
+/// 6. Filter to top 10 per source above score threshold
 /// 8. Summarise each top result (parallel LLM calls, semaphore-bounded)
 /// 9. Group into sections -> CapabilityOutput
 pub struct DailyBrief {
@@ -265,22 +264,6 @@ impl Capability for DailyBrief {
             }
         }
 
-        // Exclude filtering per-source
-        for section in &sections {
-            for (src_idx, source) in section.sources.iter().enumerate() {
-                if source.exclude.is_empty() {
-                    continue;
-                }
-                let key = (section.title.clone(), src_idx);
-                if let Some(results) = source_results.get_mut(&key) {
-                    results.retain(|r| {
-                        let haystack = format!("{} {} {}", r.url, r.title, r.description).to_lowercase();
-                        !source.exclude.iter().any(|ex| haystack.contains(&ex.to_lowercase()))
-                    });
-                }
-            }
-        }
-
         // ------------------------------------------------------------------
         // Step 4-5: Score each source's results (parallel LLM calls)
         // ------------------------------------------------------------------
@@ -390,7 +373,7 @@ impl Capability for DailyBrief {
 }
 
 /// Score a source's search results for newsworthiness via a single LLM call.
-/// Returns the top 5 results above the threshold.
+/// Returns the top 10 results above the threshold.
 async fn score_source(
     llm: &Box<dyn corre_core::capability::LlmProvider>,
     section_name: &str,
@@ -468,7 +451,7 @@ async fn score_source(
 
     let mut top: Vec<_> = scored.into_iter().map(|s| (s.index, s.score)).collect();
     top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    top.truncate(5);
+    top.truncate(10);
 
     top.into_iter()
         .filter_map(|(idx, score)| {
@@ -565,43 +548,6 @@ daily-briefing:
             freshness: "1d".into(),
         };
         assert_eq!(build_query(&source), "astronomy -Avi Loeb -UFO");
-    }
-
-    #[test]
-    fn exclude_filtering() {
-        let items = vec![
-            SearchResultItem {
-                title: "Rust 1.80 released".into(),
-                url: "https://blog.rust-lang.org/2024/rust-1.80".into(),
-                description: "New Rust release".into(),
-                extra_snippets: vec![],
-            },
-            SearchResultItem {
-                title: "Bitcoin hits new high".into(),
-                url: "https://crypto.example.com/bitcoin".into(),
-                description: "Cryptocurrency market update".into(),
-                extra_snippets: vec![],
-            },
-            SearchResultItem {
-                title: "Blockchain in supply chain".into(),
-                url: "https://example.com/supply".into(),
-                description: "Using distributed ledger tech".into(),
-                extra_snippets: vec![],
-            },
-        ];
-
-        let excludes = vec!["cryptocurrency".to_string(), "blockchain".to_string()];
-
-        let filtered: Vec<_> = items
-            .into_iter()
-            .filter(|r| {
-                let haystack = format!("{} {} {}", r.url, r.title, r.description).to_lowercase();
-                !excludes.iter().any(|ex| haystack.contains(&ex.to_lowercase()))
-            })
-            .collect();
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].title, "Rust 1.80 released");
     }
 
     #[test]
