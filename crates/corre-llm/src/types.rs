@@ -35,6 +35,7 @@ pub(crate) struct ApiResponse {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ApiChoice {
     pub message: ApiMessage,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -13,7 +13,7 @@ use tokio::sync::Semaphore;
 /// 3. Search each query via brave_web_search AND brave_news_search in parallel
 /// 4. Deduplicate results by URL within each source, then cross-edition dedup
 /// 5. Score results for newsworthiness (one LLM call per source, parallel)
-/// 6. Filter to top 10 per source above score threshold
+/// 6. Keep top 10 per source by score
 /// 8. Summarise each top result (parallel LLM calls, semaphore-bounded)
 /// 9. Group into sections -> CapabilityOutput
 pub struct DailyBrief {
@@ -329,37 +329,51 @@ impl Capability for DailyBrief {
                     ),
                 );
 
-                match ctx.llm.complete(summary_request).await {
-                    Ok(response) => {
-                        tracing::info!("Summarised: {}", item.title);
-                        let json_str = extract_json(&response.content);
-                        let (summary, body) = match serde_json::from_str::<serde_json::Value>(json_str) {
-                            Ok(obj) => {
-                                let s = obj.get("summary").and_then(|v| v.as_str()).unwrap_or(&item.description);
-                                let b = obj.get("body").and_then(|v| v.as_str()).unwrap_or(&response.content);
-                                (s.to_string(), b.to_string())
-                            }
-                            Err(_) => {
-                                tracing::warn!("Failed to parse summary JSON for `{}`, using raw response", item.title);
-                                (item.description.clone(), response.content.clone())
-                            }
-                        };
-                        Some((
-                            section_name,
-                            Article {
-                                title: item.title.clone(),
-                                summary: sanitize_html(&summary),
-                                body: sanitize_html(&body),
-                                sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
-                                score,
-                            },
-                        ))
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to summarise `{}`: {e}", item.title);
-                        None
+                let mut response = None;
+                for attempt in 0..3 {
+                    match ctx.llm.complete(summary_request.clone()).await {
+                        Ok(r) => {
+                            response = Some(r);
+                            break;
+                        }
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            let is_rate_limit = err_str.contains("rate limited") || err_str.contains("429");
+                            let backoff = if is_rate_limit { 10 * (attempt as u64 + 1) } else { 1u64 << attempt };
+                            tracing::info!("Summary LLM call for `{}` failed (attempt {}): {err_str}", item.title, attempt + 1);
+                            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                        }
                     }
                 }
+
+                let Some(response) = response else {
+                    tracing::warn!("Failed to summarise `{}` after 3 attempts", item.title);
+                    return None;
+                };
+
+                tracing::info!("Summarised: {}", item.title);
+                let json_str = extract_json(&response.content);
+                let (summary, body) = match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(obj) => {
+                        let s = obj.get("summary").and_then(|v| v.as_str()).unwrap_or(&item.description);
+                        let b = obj.get("body").and_then(|v| v.as_str()).unwrap_or(&response.content);
+                        (s.to_string(), b.to_string())
+                    }
+                    Err(_) => {
+                        tracing::warn!("Failed to parse summary JSON for `{}`, using raw response", item.title);
+                        (item.description.clone(), response.content.clone())
+                    }
+                };
+                Some((
+                    section_name,
+                    Article {
+                        title: item.title.clone(),
+                        summary: sanitize_html(&summary),
+                        body: sanitize_html(&body),
+                        sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
+                        score,
+                    },
+                ))
             });
         }
 
@@ -413,7 +427,7 @@ async fn score_source(
                 content: "You are a news editor. Score each result for newsworthiness from 0.0 to 1.0.\n\
                     Respond with ONLY a raw JSON array, no markdown fencing, no explanation.\n\
                     Each element: {\"index\": <number>, \"score\": <number>, \"reasoning\": \"<string>\"}\n\
-                    Only include results with score > 0.4."
+                    Include ALL results in the response."
                     .into(),
             },
             LlmMessage {
@@ -445,17 +459,21 @@ async fn score_source(
         let response = match llm.complete(scoring_request.clone()).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::info!("Scoring LLM call for section `{section_name}` failed (attempt {}): {e}", attempt + 1);
-                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                let err_str = e.to_string();
+                let is_rate_limit = err_str.contains("rate limited") || err_str.contains("429");
+                let backoff = if is_rate_limit {
+                    let secs = 10 * (attempt as u64 + 1);
+                    tracing::info!("Scoring for section `{section_name}` rate limited (attempt {}), backing off {secs}s", attempt + 1);
+                    secs
+                } else {
+                    let secs = 1u64 << attempt;
+                    tracing::info!("Scoring LLM call for section `{section_name}` failed (attempt {}): {err_str}", attempt + 1);
+                    secs
+                };
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
                 continue;
             }
         };
-
-        if response.content.trim().is_empty() {
-            tracing::info!("Scoring for section `{section_name}` returned empty response (attempt {})", attempt + 1);
-            tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-            continue;
-        }
 
         let json_str = extract_json(&response.content);
         match serde_json::from_str::<Vec<ScoredItem>>(json_str) {

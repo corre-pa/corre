@@ -71,13 +71,36 @@ impl LlmProvider for OpenAiCompatProvider {
 
         let status = response.status();
         if !status.is_success() {
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+                let body = response.text().await.unwrap_or_default();
+                match retry_after {
+                    Some(secs) => anyhow::bail!("LLM API rate limited (429), Retry-After: {secs}s. {body}"),
+                    None => anyhow::bail!("LLM API rate limited (429). {body}"),
+                }
+            }
             let body = response.text().await.unwrap_or_default();
             anyhow::bail!("LLM API returned {status}: {body}");
         }
 
         let api_response: ApiResponse = response.json().await.context("Failed to parse LLM API response")?;
 
-        let content = api_response.choices.into_iter().next().and_then(|c| c.message.content).unwrap_or_default();
+        let choice = api_response.choices.into_iter().next().context("LLM API returned no choices")?;
+
+        if let Some(reason) = &choice.finish_reason {
+            if reason == "length" {
+                let truncated = choice.message.content.as_deref().unwrap_or("");
+                anyhow::bail!(
+                    "LLM response truncated (finish_reason=length, got {} chars). Consider increasing max_tokens",
+                    truncated.len()
+                );
+            }
+        }
+
+        let content = choice.message.content.context("LLM API returned null content")?;
+        if content.trim().is_empty() {
+            anyhow::bail!("LLM API returned empty content");
+        }
 
         Ok(LlmResponse { content })
     }
