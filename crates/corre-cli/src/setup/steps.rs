@@ -213,13 +213,13 @@ pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()
     println!("into sections (e.g. \"Technology\", \"Science\"). Each section has a description");
     println!("of what to search for.");
     println!();
-    println!("{}", dim.apply_to("You can always edit config/topics.md later."));
+    println!("{}", dim.apply_to("You can always edit config/topics.yml later."));
     println!();
 
     let use_defaults = Confirm::new().with_prompt("Use default topics (Technology, World News, Science)?").default(true).interact()?;
 
     if use_defaults {
-        state.topics_md = Some(super::templates::DEFAULT_TOPICS.into());
+        state.topics_yml = Some(super::templates::DEFAULT_TOPICS.into());
     } else {
         let mut topics = String::from("# Daily Brief Topics\n\n");
         loop {
@@ -240,7 +240,7 @@ pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()
                 break;
             }
         }
-        state.topics_md = Some(topics);
+        state.topics_yml = Some(topics);
     }
 
     state.completed_step = 5;
@@ -307,11 +307,11 @@ pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow:
     std::fs::write("corre.toml", &config_toml)?;
     println!("  Wrote corre.toml");
 
-    // Write config/topics.md
-    if let Some(ref topics) = state.topics_md {
+    // Write config/topics.yml
+    if let Some(ref topics) = state.topics_yml {
         std::fs::create_dir_all("config")?;
-        std::fs::write("config/topics.md", topics)?;
-        println!("  Wrote config/topics.md");
+        std::fs::write("config/topics.yml", topics)?;
+        println!("  Wrote config/topics.yml");
     }
 
     // Write .env file from collected API keys
@@ -429,7 +429,7 @@ fn print_summary(state: &SetupState) {
     println!("{}", bold.apply_to("Summary"));
     println!("{}", dim.apply_to("─────────────────────────────────────────────────"));
     println!("  Config:     corre.toml");
-    println!("  Topics:     config/topics.md");
+    println!("  Topics:     config/topics.yml");
     println!("  Env file:   {data_dir}/.env");
     println!("  Data dir:   {data_dir}/");
     println!();

@@ -63,7 +63,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                 description: "Researches topics and produces a daily news briefing".into(),
                 schedule: format!("0 0 {hour} * * *"),
                 mcp_servers: vec!["brave-search".into()],
-                config_path: Some("config/topics.md".into()),
+                config_path: Some("config/topics.yml".into()),
                 enabled: true,
             },
             other => CapabilityConfig {

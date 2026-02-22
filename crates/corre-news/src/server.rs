@@ -308,7 +308,7 @@ fn resolve_topics_path(config: &CorreConfig, config_path: &std::path::Path) -> P
         .iter()
         .find_map(|c| c.config_path.as_ref())
         .map(|p| base_dir.join(p))
-        .unwrap_or_else(|| base_dir.join("config/topics.md"))
+        .unwrap_or_else(|| base_dir.join("config/topics.yml"))
 }
 
 /// Start the web server, binding to the given address.
