@@ -27,6 +27,10 @@ pub struct SanitizationReport {
     pub policy_violations: Vec<String>,
     pub blocked: bool,
     pub details: Vec<FindingDetail>,
+    /// Low-confidence heuristic matches (e.g. long alphanumeric runs that look like base64
+    /// but decode to benign content). These are logged at DEBUG, not INFO, and do not
+    /// contribute to `had_findings()`.
+    pub heuristic_detections: Vec<String>,
 }
 
 impl SanitizationReport {
@@ -72,6 +76,9 @@ impl SanitizationReport {
                 "Safety finding: ...{}...",
                 detail.context
             );
+        }
+        for h in &self.heuristic_detections {
+            tracing::debug!(server, tool, "Heuristic (not redacted): {h}");
         }
     }
 }

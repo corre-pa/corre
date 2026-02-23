@@ -75,6 +75,7 @@ uuid = { version = "1", features = ["v4"] }
 url = "2"
 ammonia = "4"
 aho-corasick = "1"
+base64 = "0.22"
 regex = "1"
 rust-embed = "8"
 dialoguer = "0.11"
