@@ -1,5 +1,5 @@
 use crate::cache::EditionCache;
-use crate::render::{NewspaperTemplate, SettingsTemplate, TopicsTemplate};
+use crate::render::{NewspaperTemplate, TopicsTemplate};
 use crate::search::SearchIndex;
 use askama::Template;
 use axum::Router;
@@ -32,9 +32,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/edition/{date}", get(edition_handler))
         .route("/api/dates", get(dates_handler))
         .route("/search", get(search_handler))
-        .route("/settings", get(settings_page_handler))
         .route("/settings/topics", get(topics_page_handler))
-        .route("/api/settings", get(get_settings_handler).put(put_settings_handler))
         .route("/api/topics", get(get_topics_handler).put(put_topics_handler))
         .route("/static/{*path}", get(static_handler))
         .with_state(state)
@@ -197,68 +195,6 @@ async fn search_handler(State(state): State<Arc<AppState>>, Query(params): Query
     }
 }
 
-// --- Settings handlers ---
-
-async fn settings_page_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    let title = config.news.title.clone();
-    if let Err(e) = check_auth(&config.news.editor_token, token_str.as_deref()) {
-        return match e {
-            AuthError::NotConfigured => login_page(
-                &title,
-                "/settings",
-                Some("Editor access not configured. Set <code>editor_token</code> in the <code>[news]</code> section of corre.toml."),
-            ),
-            AuthError::InvalidToken if token_str.is_some() => login_page(&title, "/settings", Some("Incorrect token.")),
-            AuthError::InvalidToken => login_page(&title, "/settings", None),
-        };
-    }
-    let token = token_str.unwrap_or_default();
-    let config_json = match serde_json::to_string_pretty(&*config) {
-        Ok(j) => j,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Serialization error: {e}")).into_response(),
-    };
-    let template = SettingsTemplate { title: &title, config_json: &config_json, token: &token };
-    match template.render() {
-        Ok(html) => Html(html).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
-    }
-}
-
-async fn get_settings_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    if let Err(e) = check_auth(&config.news.editor_token, token_str.as_deref()) {
-        return auth_error_response(e);
-    }
-    axum::Json(config.clone()).into_response()
-}
-
-async fn put_settings_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    body: String,
-) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    {
-        let config = state.config.read().await;
-        if let Err(e) = check_auth(&config.news.editor_token, token_str.as_deref()) {
-            return auth_error_response(e);
-        }
-    }
-    let new_config: CorreConfig = match serde_json::from_str(&body) {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid config JSON: {e}")).into_response(),
-    };
-    if let Err(e) = new_config.save(&state.config_path) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save config: {e}")).into_response();
-    }
-    *state.config.write().await = new_config;
-    (StatusCode::OK, "Settings saved.").into_response()
-}
-
 // --- Topics handlers ---
 
 async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
@@ -345,6 +281,14 @@ fn resolve_topics_path(config: &CorreConfig, config_path: &std::path::Path) -> P
 /// Start the web server, binding to the given address.
 pub async fn serve(state: Arc<AppState>, addr: std::net::SocketAddr) -> anyhow::Result<()> {
     let router = build_router(state);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
+/// Start the web server with additional routes merged in (e.g. dashboard).
+pub async fn serve_with_extra_routes(state: Arc<AppState>, extra: Router, addr: std::net::SocketAddr) -> anyhow::Result<()> {
+    let router = build_router(state).merge(extra);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, router).await?;
     Ok(())

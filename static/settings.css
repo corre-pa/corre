@@ -1,4 +1,4 @@
-/* Settings page styles — reuses CSS vars from style.css */
+/* Shared form styles for the topics editor */
 
 .settings-main {
     max-width: 800px;
@@ -68,48 +68,6 @@ legend {
 .field textarea:focus {
     outline: none;
     border-color: var(--color-link);
-}
-
-.field-checkbox label {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    cursor: pointer;
-    font-size: 0.9rem;
-    color: var(--color-ink);
-}
-
-.field-checkbox input[type="checkbox"] {
-    width: 1rem;
-    height: 1rem;
-}
-
-/* Dynamic rows (MCP servers, capabilities) */
-.dynamic-row {
-    border: 1px solid #e0e0e0;
-    padding: 0.75rem;
-    margin-bottom: 0.75rem;
-    border-radius: 3px;
-    background: rgba(0, 0, 0, 0.015);
-    position: relative;
-}
-
-.dynamic-fields {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem 1rem;
-}
-
-.dynamic-fields .field {
-    margin-bottom: 0;
-}
-
-.dynamic-fields .field input {
-    max-width: 100%;
-}
-
-.dynamic-fields .field-checkbox {
-    grid-column: 1 / -1;
 }
 
 .btn {
@@ -212,6 +170,10 @@ legend {
 .source-row {
     margin-left: 0.5rem;
     border-left: 3px solid var(--color-rule);
+}
+
+.topic-section {
+    position: relative;
 }
 
 .topic-section .section-body {

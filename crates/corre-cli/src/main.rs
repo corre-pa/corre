@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use corre_core::capability::{CapabilityContext, ProgressStatus};
+use corre_core::tracker::ExecutionTracker;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -107,11 +108,30 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
     let archive = corre_news::archive::Archive::new(&data_dir);
     let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
 
-    // Start web server in background
+    // Create execution tracker for dashboard
+    let tracker = ExecutionTracker::new(&config.capabilities);
+
+    // Create run-now channel for dashboard triggers
+    let (run_tx, mut run_rx) = tokio::sync::mpsc::channel::<String>(8);
+
+    // Build dashboard state and router
+    let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
+        tracker: tracker.clone(),
+        config: Arc::new(RwLock::new(config.clone())),
+        config_path: config_path.clone(),
+        run_trigger: run_tx,
+    });
+    let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
+
+    // Start metrics broadcaster
+    corre_dashboard::server::spawn_metrics_broadcaster(tracker.clone());
+
+    // Start web server with dashboard routes merged in
     let web_config = config.clone();
     let web_cache = cache.clone();
     let web_config_path = config_path.clone();
-    let web_handle = tokio::spawn(async move { start_web_server_with_cache(&web_config, web_cache, &web_config_path).await });
+    let web_handle =
+        tokio::spawn(async move { start_web_server_with_dashboard(&web_config, web_cache, &web_config_path, dashboard_router).await });
 
     // Start scheduler
     let mut scheduler = corre_core::scheduler::Scheduler::new().await?;
@@ -123,6 +143,7 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
         let config = config.clone();
         let registry = registry.clone();
         let cache = cache.clone();
+        let tracker = tracker.clone();
 
         tracing::info!("Scheduling capability `{cap_name}` with cron `{schedule}`");
 
@@ -132,15 +153,31 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
                 let config = config.clone();
                 let registry = registry.clone();
                 let cache = cache.clone();
+                let tracker = tracker.clone();
                 Box::pin(async move {
-                    if let Err(e) = execute_capability_with_cache(&config, &registry, &cap_name, &cache).await {
-                        tracing::error!("Capability `{cap_name}` failed: {e:#}");
-                    }
+                    execute_capability_tracked(&config, &registry, &cap_name, &cache, &tracker).await;
                 })
             });
 
         scheduler.add_async_job(&schedule, callback).await?;
     }
+
+    // Spawn run-now receiver that processes dashboard triggers
+    let run_config = config.clone();
+    let run_registry = registry.clone();
+    let run_cache = cache.clone();
+    let run_tracker = tracker.clone();
+    tokio::spawn(async move {
+        while let Some(cap_name) = run_rx.recv().await {
+            let config = run_config.clone();
+            let registry = run_registry.clone();
+            let cache = run_cache.clone();
+            let tracker = run_tracker.clone();
+            tokio::spawn(async move {
+                execute_capability_tracked(&config, &registry, &cap_name, &cache, &tracker).await;
+            });
+        }
+    });
 
     scheduler.start().await?;
     tracing::info!("Scheduler started. Press Ctrl+C to stop.");
@@ -151,6 +188,50 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
 
     web_handle.abort();
     Ok(())
+}
+
+/// Execute a capability with tracker integration (mark running/completed/failed, push logs).
+async fn execute_capability_tracked(
+    config: &corre_core::config::CorreConfig,
+    registry: &corre_capabilities::registry::CapabilityRegistry,
+    cap_name: &str,
+    cache: &corre_news::cache::EditionCache,
+    tracker: &ExecutionTracker,
+) {
+    tracker.mark_running(cap_name).await;
+    tracker.push_log(cap_name, "INFO", "Capability execution started").await;
+
+    let seen_urls = cache.seen_urls().await;
+    match run_capability_pipeline(config, registry, cap_name, seen_urls, Some(tracker)).await {
+        Ok((edition, mcp_pool)) => {
+            let article_count = edition.article_count();
+            match cache.store(&edition).await {
+                Ok(path) => {
+                    tracing::info!("Edition stored at {}", path.display());
+                    tracker.push_log(cap_name, "INFO", &format!("Edition stored at {}", path.display())).await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to store edition: {e:#}");
+                    tracker.push_log(cap_name, "ERROR", &format!("Failed to store edition: {e:#}")).await;
+                }
+            }
+
+            let data_dir = config.data_dir();
+            if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
+                let _ = search.index_edition(&edition);
+            }
+
+            mcp_pool.shutdown().await;
+            tracker.mark_completed(cap_name, article_count).await;
+            tracker.push_log(cap_name, "INFO", &format!("Completed: {article_count} articles produced")).await;
+        }
+        Err(e) => {
+            let error_msg = format!("{e:#}");
+            tracing::error!("Capability `{cap_name}` failed: {error_msg}");
+            tracker.mark_failed(cap_name, &error_msg).await;
+            tracker.push_log(cap_name, "ERROR", &format!("Failed: {error_msg}")).await;
+        }
+    }
 }
 
 async fn cmd_run_now(config: corre_core::config::CorreConfig, capability_name: &str) -> anyhow::Result<()> {
@@ -164,7 +245,26 @@ async fn cmd_run_now(config: corre_core::config::CorreConfig, capability_name: &
 }
 
 async fn cmd_serve(config: corre_core::config::CorreConfig, config_path: PathBuf) -> anyhow::Result<()> {
-    start_web_server(&config, &config_path).await
+    // In serve-only mode, show dashboard with all capabilities as Idle and run-now disabled
+    let tracker = ExecutionTracker::new(&config.capabilities);
+
+    // Create a dummy sender that will never be read (run-now disabled in serve mode)
+    let (run_tx, _run_rx) = tokio::sync::mpsc::channel::<String>(1);
+
+    let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
+        tracker: tracker.clone(),
+        config: Arc::new(RwLock::new(config.clone())),
+        config_path: config_path.clone(),
+        run_trigger: run_tx,
+    });
+    let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
+
+    corre_dashboard::server::spawn_metrics_broadcaster(tracker);
+
+    let data_dir = config.data_dir();
+    let archive = corre_news::archive::Archive::new(&data_dir);
+    let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
+    start_web_server_with_dashboard(&config, cache, &config_path, dashboard_router).await
 }
 
 /// Execute a capability in run-now mode (no long-lived cache, stores via archive directly).
@@ -174,7 +274,7 @@ async fn execute_capability(
     cap_name: &str,
     seen_urls: std::collections::HashSet<String>,
 ) -> anyhow::Result<()> {
-    let (edition, mcp_pool) = run_capability_pipeline(config, registry, cap_name, seen_urls).await?;
+    let (edition, mcp_pool) = run_capability_pipeline(config, registry, cap_name, seen_urls, None).await?;
 
     let data_dir = config.data_dir();
     let archive = corre_news::archive::Archive::new(&data_dir);
@@ -190,35 +290,13 @@ async fn execute_capability(
     Ok(())
 }
 
-/// Execute a capability in daemon mode (stores via the shared cache).
-async fn execute_capability_with_cache(
-    config: &corre_core::config::CorreConfig,
-    registry: &corre_capabilities::registry::CapabilityRegistry,
-    cap_name: &str,
-    cache: &corre_news::cache::EditionCache,
-) -> anyhow::Result<()> {
-    let seen_urls = cache.seen_urls().await;
-    let (edition, mcp_pool) = run_capability_pipeline(config, registry, cap_name, seen_urls).await?;
-
-    let path = cache.store(&edition).await?;
-    tracing::info!("Edition stored at {}", path.display());
-
-    let data_dir = config.data_dir();
-    if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
-        let _ = search.index_edition(&edition);
-    }
-
-    mcp_pool.shutdown().await;
-    tracing::info!("Done. {} articles produced.", edition.article_count());
-    Ok(())
-}
-
 /// Shared pipeline: build MCP pool, run capability, generate tagline. Returns the edition and pool.
 async fn run_capability_pipeline(
     config: &corre_core::config::CorreConfig,
     registry: &corre_capabilities::registry::CapabilityRegistry,
     cap_name: &str,
     seen_urls: std::collections::HashSet<String>,
+    tracker: Option<&ExecutionTracker>,
 ) -> anyhow::Result<(corre_core::publish::Edition, corre_mcp::McpPool)> {
     let capability = registry.get(cap_name).with_context(|| format!("Unknown capability: `{cap_name}`"))?.clone();
 
@@ -247,6 +325,9 @@ async fn run_capability_pipeline(
     let ctx = CapabilityContext { mcp, llm, config_dir, max_concurrent_llm: config.llm.max_concurrent, seen_urls };
 
     tracing::info!("Running capability `{cap_name}`");
+    if let Some(t) = tracker {
+        t.push_log(cap_name, "INFO", "Building MCP pool and LLM provider").await;
+    }
 
     let timeout_dur = std::time::Duration::from_secs(600);
     let poll_deadline = std::time::Duration::from_secs(5);
@@ -258,10 +339,18 @@ async fn run_capability_pipeline(
             Ok(result) => break result,
             Err(_) => {
                 tracing::info!("Capability `{cap_name}` exceeded {next_poll:?}, polling in_progress");
+                if let Some(t) = tracker {
+                    t.push_log(cap_name, "INFO", &format!("Exceeded {next_poll:?}, polling progress")).await;
+                }
                 match tokio::time::timeout(poll_deadline, capability.in_progress()).await {
                     Ok(ProgressStatus::StillBusy(hint)) => {
                         next_poll = match hint {
                             Some(pct) if pct > 0 && pct < 100 => {
+                                // Update tracker with progress percentage
+                                if let Some(t) = tracker {
+                                    t.update_progress(cap_name, pct, "processing").await;
+                                    t.push_log(cap_name, "INFO", &format!("{pct}% complete")).await;
+                                }
                                 let remaining_ratio = (100 - pct) as f64 / pct as f64;
                                 let secs = (remaining_ratio * timeout_dur.as_secs_f64()) as u64 + 30;
                                 tracing::info!("... {pct}% complete, polling again in {secs}s");
@@ -277,6 +366,9 @@ async fn run_capability_pipeline(
                     Ok(ProgressStatus::Done(partial)) => {
                         let n: usize = partial.sections.iter().map(|s| s.articles.len()).sum();
                         tracing::warn!("Capability `{cap_name}` returning partial results ({n} articles)");
+                        if let Some(t) = tracker {
+                            t.push_log(cap_name, "WARN", &format!("Returning partial results ({n} articles)")).await;
+                        }
                         break Ok(partial);
                     }
                     Ok(ProgressStatus::Stuck) => {
@@ -289,6 +381,12 @@ async fn run_capability_pipeline(
             }
         }
     }?;
+
+    if let Some(t) = tracker {
+        let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
+        t.push_log(cap_name, "INFO", &format!("Pipeline produced {article_count} articles, generating tagline")).await;
+        t.update_progress(cap_name, 90, "generating_tagline").await;
+    }
 
     let mut edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
 
@@ -321,17 +419,11 @@ async fn run_capability_pipeline(
     Ok((edition, mcp_pool))
 }
 
-async fn start_web_server(config: &corre_core::config::CorreConfig, config_path: &std::path::Path) -> anyhow::Result<()> {
-    let data_dir = config.data_dir();
-    let archive = corre_news::archive::Archive::new(&data_dir);
-    let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
-    start_web_server_with_cache(config, cache, config_path).await
-}
-
-async fn start_web_server_with_cache(
+async fn start_web_server_with_dashboard(
     config: &corre_core::config::CorreConfig,
     cache: Arc<corre_news::cache::EditionCache>,
     config_path: &std::path::Path,
+    dashboard_router: axum::Router,
 ) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
     let search = corre_news::search::SearchIndex::open_or_create(&data_dir)?;
@@ -345,5 +437,6 @@ async fn start_web_server_with_cache(
 
     let addr: std::net::SocketAddr = config.news.bind.parse()?;
     tracing::info!("CorreNews listening on http://{addr}");
-    corre_news::server::serve(state, addr).await
+    tracing::info!("Dashboard available at http://{addr}/dashboard");
+    corre_news::server::serve_with_extra_routes(state, dashboard_router, addr).await
 }

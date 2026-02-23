@@ -13,14 +13,6 @@ pub struct NewspaperTemplate<'a> {
 }
 
 #[derive(Template)]
-#[template(path = "settings.html")]
-pub struct SettingsTemplate<'a> {
-    pub title: &'a str,
-    pub config_json: &'a str,
-    pub token: &'a str,
-}
-
-#[derive(Template)]
 #[template(path = "topics.html")]
 pub struct TopicsTemplate<'a> {
     pub title: &'a str,

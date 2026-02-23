@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} — Dashboard</title>
+    <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+</head>
+<body class="xp-desktop">
+
+    <!-- Capabilities Manager Window -->
+    <div class="xp-window" id="capabilities-window" style="top:20px;left:20px;width:58%;min-height:300px;">
+        <div class="xp-titlebar">
+            <span class="xp-titlebar-icon">&#128187;</span>
+            <span class="xp-titlebar-text">Capabilities Manager</span>
+            <div class="xp-titlebar-buttons">
+                <button class="xp-btn-minimize" data-window="capabilities-window">_</button>
+                <button class="xp-btn-maximize">&#9633;</button>
+                <button class="xp-btn-close" data-window="capabilities-window">X</button>
+            </div>
+        </div>
+        <div class="xp-window-body">
+            <table class="xp-table" id="capabilities-table">
+                <thead>
+                    <tr>
+                        <th style="width:30px;"></th>
+                        <th>Name</th>
+                        <th>Schedule</th>
+                        <th>Last Run</th>
+                        <th>Duration</th>
+                        <th>Articles</th>
+                        <th style="width:120px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="capabilities-tbody">
+                    <tr><td colspan="7" class="loading-cell">Connecting...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- System Monitor Window -->
+    <div class="xp-window" id="system-window" style="top:20px;right:20px;width:36%;min-height:200px;position:absolute;">
+        <div class="xp-titlebar">
+            <span class="xp-titlebar-icon">&#128200;</span>
+            <span class="xp-titlebar-text">System Monitor</span>
+            <div class="xp-titlebar-buttons">
+                <button class="xp-btn-minimize" data-window="system-window">_</button>
+                <button class="xp-btn-maximize">&#9633;</button>
+                <button class="xp-btn-close" data-window="system-window">X</button>
+            </div>
+        </div>
+        <div class="xp-window-body system-monitor">
+            <div class="metric-row">
+                <label>CPU Usage</label>
+                <div class="xp-progress-track">
+                    <div class="xp-progress-fill" id="cpu-bar" style="width:0%"></div>
+                </div>
+                <span class="metric-value" id="cpu-value">0%</span>
+            </div>
+            <div class="metric-row">
+                <label>Memory</label>
+                <div class="xp-progress-track">
+                    <div class="xp-progress-fill memory-fill" id="memory-bar" style="width:0%"></div>
+                </div>
+                <span class="metric-value" id="memory-value">0 / 0 MB</span>
+            </div>
+            <div class="metric-row">
+                <label>Uptime</label>
+                <span class="metric-value" id="uptime-value">0s</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Window (initially minimized) -->
+    <div class="xp-window minimized" id="settings-window" style="top:60px;left:25%;width:50%;min-height:400px;">
+        <div class="xp-titlebar">
+            <span class="xp-titlebar-icon">&#9881;</span>
+            <span class="xp-titlebar-text">Settings</span>
+            <div class="xp-titlebar-buttons">
+                <button class="xp-btn-minimize" data-window="settings-window">_</button>
+                <button class="xp-btn-maximize">&#9633;</button>
+                <button class="xp-btn-close" data-window="settings-window">X</button>
+            </div>
+        </div>
+        <div class="xp-window-body settings-body">
+            <form id="settingsForm" autocomplete="off">
+                <div class="xp-fieldset">
+                    <div class="xp-fieldset-legend">General</div>
+                    <div class="xp-field">
+                        <label for="general_data_dir">Data directory</label>
+                        <input type="text" id="general_data_dir" class="xp-input xp-input-wide">
+                    </div>
+                    <div class="xp-field">
+                        <label for="general_log_level">Log level</label>
+                        <select id="general_log_level" class="xp-select">
+                            <option value="trace">trace</option>
+                            <option value="debug">debug</option>
+                            <option value="info">info</option>
+                            <option value="warn">warn</option>
+                            <option value="error">error</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="xp-fieldset">
+                    <div class="xp-fieldset-legend">LLM</div>
+                    <div class="xp-fields-grid">
+                        <div class="xp-field">
+                            <label for="llm_provider">Provider</label>
+                            <input type="text" id="llm_provider" class="xp-input xp-input-wide">
+                        </div>
+                        <div class="xp-field">
+                            <label for="llm_base_url">Base URL</label>
+                            <input type="text" id="llm_base_url" class="xp-input xp-input-wide">
+                        </div>
+                        <div class="xp-field">
+                            <label for="llm_model">Model</label>
+                            <input type="text" id="llm_model" class="xp-input xp-input-wide">
+                        </div>
+                        <div class="xp-field">
+                            <label for="llm_api_key_env">API key env var</label>
+                            <input type="text" id="llm_api_key_env" class="xp-input xp-input-wide">
+                        </div>
+                        <div class="xp-field">
+                            <label for="llm_temperature">Temperature</label>
+                            <input type="number" id="llm_temperature" class="xp-input" step="0.1" min="0" max="2" style="width:80px;">
+                        </div>
+                        <div class="xp-field">
+                            <label for="llm_max_tokens">Max tokens</label>
+                            <input type="number" id="llm_max_tokens" class="xp-input" min="1" style="width:100px;">
+                        </div>
+                        <div class="xp-field">
+                            <label for="llm_max_concurrent">Max concurrent</label>
+                            <input type="number" id="llm_max_concurrent" class="xp-input" min="1" style="width:80px;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="xp-fieldset">
+                    <div class="xp-fieldset-legend">News</div>
+                    <div class="xp-fields-grid">
+                        <div class="xp-field">
+                            <label for="news_bind">Bind address</label>
+                            <input type="text" id="news_bind" class="xp-input xp-input-wide">
+                        </div>
+                        <div class="xp-field">
+                            <label for="news_title">Title</label>
+                            <input type="text" id="news_title" class="xp-input xp-input-wide">
+                        </div>
+                        <div class="xp-field">
+                            <label for="news_editor_token">Editor token</label>
+                            <input type="text" id="news_editor_token" class="xp-input xp-input-wide">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="xp-fieldset">
+                    <div class="xp-fieldset-legend">Safety</div>
+                    <div class="xp-field xp-field-checkbox">
+                        <label><input type="checkbox" id="safety_enabled"> Enabled</label>
+                    </div>
+                    <div class="xp-fields-grid">
+                        <div class="xp-field">
+                            <label for="safety_max_output_bytes">Max output bytes</label>
+                            <input type="number" id="safety_max_output_bytes" class="xp-input" min="0" style="width:120px;">
+                        </div>
+                        <div class="xp-field">
+                            <label for="safety_high_severity_action">High severity action</label>
+                            <select id="safety_high_severity_action" class="xp-select">
+                                <option value="warn">warn</option>
+                                <option value="sanitize">sanitize</option>
+                                <option value="block">block</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="xp-field xp-field-checkbox">
+                        <label><input type="checkbox" id="safety_sanitize_injections"> Sanitize injections</label>
+                    </div>
+                    <div class="xp-field xp-field-checkbox">
+                        <label><input type="checkbox" id="safety_detect_leaks"> Detect leaks</label>
+                    </div>
+                    <div class="xp-field xp-field-checkbox">
+                        <label><input type="checkbox" id="safety_boundary_wrap"> Boundary wrap</label>
+                    </div>
+                </div>
+
+                <div class="xp-fieldset">
+                    <div class="xp-fieldset-legend">MCP Servers</div>
+                    <div id="mcpServers"></div>
+                    <button type="button" class="xp-button" id="add-mcp-btn">+ Add server</button>
+                </div>
+
+                <div class="xp-fieldset">
+                    <div class="xp-fieldset-legend">Capabilities</div>
+                    <div id="capabilitiesConfig"></div>
+                    <button type="button" class="xp-button" id="add-cap-btn">+ Add capability</button>
+                </div>
+
+                <div class="settings-actions">
+                    <button type="submit" class="xp-button xp-button-primary">Save settings</button>
+                    <span id="saveStatus" class="save-status"></span>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Log Viewer Window -->
+    <div class="xp-window" id="log-window" style="position:absolute;bottom:50px;left:20px;right:20px;height:320px;">
+        <div class="xp-titlebar">
+            <span class="xp-titlebar-icon">&#128196;</span>
+            <span class="xp-titlebar-text">Event Viewer</span>
+            <div class="xp-titlebar-buttons">
+                <button class="xp-btn-minimize" data-window="log-window">_</button>
+                <button class="xp-btn-maximize">&#9633;</button>
+                <button class="xp-btn-close" data-window="log-window">X</button>
+            </div>
+        </div>
+        <div class="xp-toolbar">
+            <input type="text" id="log-search" placeholder="Search logs..." class="xp-input">
+            <select id="log-cap-filter" class="xp-select">
+                <option value="">All capabilities</option>
+            </select>
+            <div class="level-filters">
+                <button class="xp-btn-level active" data-level="DEBUG">DEBUG</button>
+                <button class="xp-btn-level active" data-level="INFO">INFO</button>
+                <button class="xp-btn-level active" data-level="WARN">WARN</button>
+                <button class="xp-btn-level active" data-level="ERROR">ERROR</button>
+            </div>
+        </div>
+        <div class="log-container" id="log-container">
+            <table class="log-table" id="log-table">
+                <thead>
+                    <tr>
+                        <th style="width:100px;">Timestamp</th>
+                        <th style="width:60px;">Level</th>
+                        <th style="width:120px;">Capability</th>
+                        <th>Message</th>
+                    </tr>
+                </thead>
+                <tbody id="log-tbody"></tbody>
+            </table>
+        </div>
+        <div class="log-jump" id="log-jump" style="display:none;">
+            <button class="xp-button" id="log-jump-btn">Jump to latest</button>
+        </div>
+    </div>
+
+    <!-- Taskbar -->
+    <div class="xp-taskbar">
+        <button class="xp-start-btn" id="start-btn">
+            <span class="start-icon">&#9776;</span> <b><i>Start</i></b>
+        </button>
+        <div class="taskbar-windows">
+            <button class="taskbar-item active" data-window="capabilities-window">Capabilities Manager</button>
+            <button class="taskbar-item active" data-window="system-window">System Monitor</button>
+            <button class="taskbar-item" data-window="settings-window">Settings</button>
+            <button class="taskbar-item active" data-window="log-window">Event Viewer</button>
+        </div>
+        <div class="system-tray">
+            <span id="tray-clock">00:00</span>
+        </div>
+    </div>
+
+    <!-- Start Menu -->
+    <div class="xp-start-menu" id="start-menu" style="display:none;">
+        <div class="start-menu-header">
+            <span class="start-menu-avatar">&#128187;</span>
+            <span class="start-menu-user">{{ title }}</span>
+        </div>
+        <div class="start-menu-body">
+            <a href="/" target="_blank" class="start-menu-item">&#128240; Newspaper</a>
+            <a href="#" class="start-menu-item" id="start-settings">&#9881; Settings</a>
+            <div class="start-menu-submenu-container">
+                <a href="#" class="start-menu-item start-menu-has-submenu">&#128196; Daily Brief &#9656;</a>
+                <div class="start-submenu">
+                    <a href="/settings/topics?token={{ token }}" target="_blank" class="start-menu-item">&#128209; Topics</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.__DASHBOARD_TOKEN = "{{ token }}";
+        window.__CONFIG = {{ config_json|safe }};
+    </script>
+    <script src="/dashboard/static/dashboard.js"></script>
+</body>
+</html>
