@@ -1,0 +1,23 @@
+[package]
+name = "mcp-whatsapp"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mcp-whatsapp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+wa-rs = { workspace = true }
+wa-rs-sqlite-storage = "0.2"
+wa-rs-tokio-transport = "0.2"
+wa-rs-ureq-http = "0.2"

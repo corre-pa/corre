@@ -55,11 +55,28 @@ impl EditionCache {
     }
 
     /// Store an edition to disk and update the in-memory cache.
+    /// If an edition already exists for the same date, merges sections:
+    /// articles are appended into existing sections with matching titles,
+    /// and new section titles create new sections. The headline is re-derived
+    /// from the merged edition.
     pub async fn store(&self, edition: &Edition) -> anyhow::Result<PathBuf> {
-        let path = self.archive.store(edition)?;
         let mut inner = self.inner.write().await;
-        collect_urls(edition, &mut inner.seen_urls);
-        inner.editions.insert(edition.date, edition.clone());
+        let merged = match inner.editions.get(&edition.date) {
+            Some(existing) => {
+                let merged = merge_editions(existing, edition);
+                tracing::info!(
+                    "Merged edition for {}: {} sections, {} articles",
+                    merged.date,
+                    merged.sections.len(),
+                    merged.article_count()
+                );
+                merged
+            }
+            None => edition.clone(),
+        };
+        let path = self.archive.store(&merged)?;
+        collect_urls(&merged, &mut inner.seen_urls);
+        inner.editions.insert(merged.date, merged);
         Ok(path)
     }
 
@@ -73,6 +90,41 @@ impl EditionCache {
     pub async fn contains_url(&self, url: &str) -> bool {
         self.inner.read().await.seen_urls.contains(url)
     }
+}
+
+/// Merge two editions for the same date. Articles from `incoming` are appended
+/// to sections in `existing` with matching titles; new section titles are added.
+/// The headline is re-derived from the highest-scoring article.
+fn merge_editions(existing: &Edition, incoming: &Edition) -> Edition {
+    use std::collections::HashMap;
+    let mut section_map: HashMap<String, Vec<corre_core::publish::Article>> = HashMap::new();
+    let mut section_order: Vec<String> = Vec::new();
+
+    // Collect existing sections in order
+    for section in &existing.sections {
+        section_order.push(section.title.clone());
+        section_map.entry(section.title.clone()).or_default().extend(section.articles.clone());
+    }
+
+    // Merge incoming sections
+    for section in &incoming.sections {
+        if !section_order.contains(&section.title) {
+            section_order.push(section.title.clone());
+        }
+        section_map.entry(section.title.clone()).or_default().extend(section.articles.clone());
+    }
+
+    let sections: Vec<corre_core::publish::Section> = section_order
+        .into_iter()
+        .filter_map(|title| section_map.remove(&title).map(|articles| corre_core::publish::Section { title, articles }))
+        .collect();
+
+    let mut edition = Edition::new(existing.date, sections);
+    // Preserve the most recent tagline if the existing one was customized
+    if existing.tagline != "All the news that's fit to pun" {
+        edition.tagline = existing.tagline.clone();
+    }
+    edition
 }
 
 /// Extract all source URLs from an edition into the given set.

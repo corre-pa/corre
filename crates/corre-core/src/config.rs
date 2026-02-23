@@ -229,8 +229,9 @@ mod tests {
         let config: CorreConfig = toml::from_str(toml_str).expect("Failed to parse config");
         assert_eq!(config.news.bind, "192.168.1.101:5555");
         assert_eq!(config.llm.model, "llama-3.3-70b");
-        assert_eq!(config.capabilities.len(), 1);
+        assert_eq!(config.capabilities.len(), 2);
         assert_eq!(config.capabilities[0].name, "daily-brief");
+        assert_eq!(config.capabilities[1].name, "rolodex");
         assert!(config.mcp.servers.contains_key("brave-search"));
     }
 

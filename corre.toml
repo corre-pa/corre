@@ -37,6 +37,29 @@ mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
 
+[mcp.servers.smtp]
+command = "mcp-smtp"
+args = []
+env = { SMTP_HOST = "SMTP_HOST", SMTP_PORT = "SMTP_PORT", SMTP_USER = "SMTP_USER", SMTP_PASSWORD = "SMTP_PASSWORD", SMTP_FROM = "SMTP_FROM" }
+
+[mcp.servers.telegram]
+command = "mcp-telegram"
+args = []
+env = { TELEGRAM_BOT_TOKEN = "TELEGRAM_BOT_TOKEN" }
+
+[mcp.servers.whatsapp]
+command = "mcp-whatsapp"
+args = []
+env = { WHATSAPP_STORE_PATH = "WHATSAPP_STORE_PATH" }
+
+[[capabilities]]
+name = "rolodex"
+description = "Daily birthday reminders and contact news digest"
+schedule = "0 0 6 * * *"
+mcp_servers = ["brave-search", "smtp", "telegram", "whatsapp"]
+config_path = "config/rolodex.yml"
+enabled = true
+
 # [capabilities.llm]
 # model = "gpt-4o"              # override the global model for this capability
 # temperature = 0.7             # override temperature

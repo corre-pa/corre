@@ -45,6 +45,48 @@ enum Commands {
     Setup,
     /// Check and install required external dependencies
     InstallDeps,
+    /// Manage the rolodex contact database
+    Rolodex {
+        #[command(subcommand)]
+        action: RolodexAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RolodexAction {
+    /// Import contacts from an external source
+    Import {
+        /// Source format: csv, google, outlook, facebook, vcard
+        source: String,
+        /// Path to the import file
+        file: std::path::PathBuf,
+        /// How to handle duplicates: skip, merge, replace
+        #[arg(long, default_value = "skip")]
+        duplicates: String,
+    },
+    /// List all contacts
+    List {
+        /// Filter by minimum importance level
+        #[arg(long)]
+        importance: Option<String>,
+    },
+    /// Add a new contact interactively
+    Add,
+    /// Edit a contact by ID
+    Edit {
+        /// Contact ID
+        id: String,
+    },
+    /// Delete a contact by ID
+    Delete {
+        /// Contact ID
+        id: String,
+    },
+    /// Search contacts by name or email
+    Search {
+        /// Search query
+        query: String,
+    },
 }
 
 #[tokio::main]
@@ -103,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Run => cmd_run(config, config_path).await,
         Commands::RunNow { capability } => cmd_run_now(config, &capability).await,
         Commands::Serve => cmd_serve(config, config_path).await,
+        Commands::Rolodex { action } => cmd_rolodex(config, action),
         Commands::Setup | Commands::InstallDeps => unreachable!(),
     }
 }
@@ -451,4 +494,155 @@ async fn start_web_server_with_dashboard(
     tracing::info!("CorreNews listening on http://{addr}");
     tracing::info!("Dashboard available at http://{addr}/dashboard");
     corre_news::server::serve_with_extra_routes(state, dashboard_router, addr).await
+}
+
+fn cmd_rolodex(config: corre_core::config::CorreConfig, action: RolodexAction) -> anyhow::Result<()> {
+    let db_path = config.data_dir().join("rolodex.db");
+    let db = corre_db::Database::open(&db_path)?;
+
+    match action {
+        RolodexAction::Import { source, file, duplicates } => {
+            use corre_capabilities::rolodex_import::{DuplicateAction, ImportResult};
+
+            let dup_action = match duplicates.as_str() {
+                "merge" => DuplicateAction::Merge,
+                "replace" => DuplicateAction::Replace,
+                _ => DuplicateAction::Skip,
+            };
+
+            let result: ImportResult = match source.as_str() {
+                "csv" => corre_capabilities::rolodex_import::import_csv(&db, &file, dup_action)?,
+                "google" => corre_capabilities::rolodex_import::import_google(&db, &file, dup_action)?,
+                "outlook" => corre_capabilities::rolodex_import::import_outlook(&db, &file, dup_action)?,
+                "facebook" => corre_capabilities::rolodex_import::import_facebook(&db, &file, dup_action)?,
+                "vcard" | "vcf" => corre_capabilities::rolodex_import::import_vcard(&db, &file, dup_action)?,
+                _ => anyhow::bail!("Unknown import source: {source}. Supported: csv, google, outlook, facebook, vcard"),
+            };
+
+            println!("Import complete: {} imported, {} skipped", result.imported, result.skipped);
+            if !result.errors.is_empty() {
+                println!("Errors ({}):", result.errors.len());
+                result.errors.iter().for_each(|e| println!("  - {e}"));
+            }
+        }
+        RolodexAction::List { importance } => {
+            let contacts = match importance.as_deref() {
+                Some(level) => {
+                    let min = corre_db::Importance::from_str_loose(level);
+                    db.contacts_by_importance(min)?
+                }
+                None => db.list_contacts()?,
+            };
+
+            if contacts.is_empty() {
+                println!("No contacts found.");
+            } else {
+                println!("{:<36}  {:<20}  {:<30}  {:<10}  {}", "ID", "Name", "Email", "Importance", "Birthday");
+                println!("{}", "-".repeat(110));
+                for c in &contacts {
+                    println!(
+                        "{:<36}  {:<20}  {:<30}  {:<10}  {}",
+                        c.id,
+                        c.full_name(),
+                        c.email.as_deref().unwrap_or("-"),
+                        c.importance,
+                        c.birthday.as_deref().unwrap_or("-")
+                    );
+                }
+                println!("\n{} contacts total", contacts.len());
+            }
+        }
+        RolodexAction::Add => {
+            let first_name = dialoguer::Input::<String>::new().with_prompt("First name").interact_text()?;
+            let last_name = dialoguer::Input::<String>::new().with_prompt("Last name").interact_text()?;
+            let email: String = dialoguer::Input::new().with_prompt("Email (optional)").default(String::new()).interact_text()?;
+            let phone: String = dialoguer::Input::new().with_prompt("Phone (optional)").default(String::new()).interact_text()?;
+            let birthday: String =
+                dialoguer::Input::new().with_prompt("Birthday YYYY-MM-DD (optional)").default(String::new()).interact_text()?;
+
+            let importance_options = ["low", "medium", "high", "veryhigh"];
+            let importance_idx = dialoguer::Select::new().with_prompt("Importance").items(&importance_options).default(1).interact()?;
+            let importance = corre_db::Importance::from_str_loose(importance_options[importance_idx]);
+
+            let contact = corre_db::contacts::new_contact(
+                first_name,
+                last_name,
+                if email.is_empty() { None } else { Some(email) },
+                if phone.is_empty() { None } else { Some(phone) },
+                if birthday.is_empty() { None } else { Some(birthday) },
+                importance,
+            );
+
+            db.insert_contact(&contact)?;
+            db.assign_default_strategies(&contact)?;
+            println!("Contact added: {} ({})", contact.full_name(), contact.id);
+        }
+        RolodexAction::Edit { id } => {
+            let Some(contact) = db.get_contact(&id)? else {
+                anyhow::bail!("Contact {id} not found");
+            };
+
+            let first_name =
+                dialoguer::Input::<String>::new().with_prompt("First name").default(contact.first_name.clone()).interact_text()?;
+            let last_name =
+                dialoguer::Input::<String>::new().with_prompt("Last name").default(contact.last_name.clone()).interact_text()?;
+            let email = dialoguer::Input::<String>::new()
+                .with_prompt("Email")
+                .default(contact.email.clone().unwrap_or_default())
+                .interact_text()?;
+            let phone = dialoguer::Input::<String>::new()
+                .with_prompt("Phone")
+                .default(contact.phone.clone().unwrap_or_default())
+                .interact_text()?;
+            let birthday = dialoguer::Input::<String>::new()
+                .with_prompt("Birthday YYYY-MM-DD")
+                .default(contact.birthday.clone().unwrap_or_default())
+                .interact_text()?;
+
+            let importance_options = ["low", "medium", "high", "veryhigh"];
+            let current_idx = importance_options.iter().position(|&s| s == contact.importance.as_str()).unwrap_or(1);
+            let importance_idx =
+                dialoguer::Select::new().with_prompt("Importance").items(&importance_options).default(current_idx).interact()?;
+            let importance = corre_db::Importance::from_str_loose(importance_options[importance_idx]);
+
+            let mut updated = contact;
+            updated.first_name = first_name;
+            updated.last_name = last_name;
+            updated.email = if email.is_empty() { None } else { Some(email) };
+            updated.phone = if phone.is_empty() { None } else { Some(phone) };
+            updated.birthday = if birthday.is_empty() { None } else { Some(birthday) };
+            updated.importance = importance;
+
+            db.update_contact(&updated)?;
+            println!("Contact updated: {}", updated.full_name());
+        }
+        RolodexAction::Delete { id } => {
+            let Some(contact) = db.get_contact(&id)? else {
+                anyhow::bail!("Contact {id} not found");
+            };
+            let confirmed =
+                dialoguer::Confirm::new().with_prompt(format!("Delete {} ({})?", contact.full_name(), id)).default(false).interact()?;
+            if confirmed {
+                db.delete_contact(&id)?;
+                println!("Contact deleted.");
+            } else {
+                println!("Cancelled.");
+            }
+        }
+        RolodexAction::Search { query } => {
+            let results = db.search_contacts(&query)?;
+            if results.is_empty() {
+                println!("No contacts matching \"{query}\".");
+            } else {
+                println!("{:<36}  {:<20}  {:<30}  {:<10}", "ID", "Name", "Email", "Importance");
+                println!("{}", "-".repeat(100));
+                for c in &results {
+                    println!("{:<36}  {:<20}  {:<30}  {:<10}", c.id, c.full_name(), c.email.as_deref().unwrap_or("-"), c.importance,);
+                }
+                println!("\n{} results", results.len());
+            }
+        }
+    }
+
+    Ok(())
 }

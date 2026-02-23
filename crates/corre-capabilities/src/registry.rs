@@ -36,6 +36,10 @@ impl CapabilityRegistry {
                     let cap = crate::daily_brief::DailyBrief::from_config(config);
                     registry.register(Arc::new(cap));
                 }
+                "rolodex" => {
+                    let cap = crate::rolodex::Rolodex::from_config(config);
+                    registry.register(Arc::new(cap));
+                }
                 name => {
                     tracing::warn!("Unknown capability `{name}`, skipping");
                 }

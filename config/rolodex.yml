@@ -1,0 +1,6 @@
+rolodex:
+  news_search_freshness: "1w"
+  max_news_per_contact: 5
+  birthday_message_style: "warm"
+  checkin_message_style: "casual"
+  send_mode: "draft"

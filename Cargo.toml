@@ -8,6 +8,10 @@ members = [
     "crates/corre-capabilities",
     "crates/corre-safety",
     "crates/corre-dashboard",
+    "crates/corre-db",
+    "crates/mcp-smtp",
+    "crates/mcp-telegram",
+    "crates/mcp-whatsapp",
     "crates/corre-cli",
 ]
 
@@ -25,6 +29,7 @@ corre-news = { path = "crates/corre-news" }
 corre-capabilities = { path = "crates/corre-capabilities" }
 corre-safety = { path = "crates/corre-safety" }
 corre-dashboard = { path = "crates/corre-dashboard" }
+corre-db = { path = "crates/corre-db" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -48,7 +53,8 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio-cron-scheduler = "0.13"
 
 # MCP
-rmcp = { version = "0.1", features = ["client", "transport-child-process"] }
+rmcp = { version = "0.1", features = ["client", "server", "macros", "transport-child-process", "transport-io"] }
+schemars = "0.8"
 
 # Search
 tantivy = "0.22"
@@ -83,3 +89,7 @@ console = "0.15"
 sysinfo = "0.34"
 async-stream = "0.3"
 tokio-stream = "0.1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+csv = "1"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+wa-rs = { version = "0.2", features = ["sqlite-storage", "tokio-transport"] }
