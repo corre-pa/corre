@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${REPO_DIR}/dist"
+CROSS_TARGET_DIR="${REPO_DIR}/target-cross"
 PACKAGE="corre-cli"
 BINARY_NAME="corre"
 VERSION="$(grep -m1 '^version' "${REPO_DIR}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
@@ -68,7 +69,12 @@ output_name() {
 source_binary() {
     local triple="$1"
     local exe_suffix="$2"
-    echo "${REPO_DIR}/target/${triple}/release/${BINARY_NAME}${exe_suffix}"
+    local build_tool="$3"
+    local base_dir="${REPO_DIR}/target"
+    if [[ "${build_tool}" == "cross" ]]; then
+        base_dir="${CROSS_TARGET_DIR}"
+    fi
+    echo "${base_dir}/${triple}/release/${BINARY_NAME}${exe_suffix}"
 }
 
 # ── Prerequisites ────────────────────────────────────────────────────────────
@@ -134,7 +140,7 @@ build_target() {
         ensure_rustup_target "${triple}"
         cargo build --release --package "${PACKAGE}" --target "${triple}"
     else
-        cross build --release --package "${PACKAGE}" --target "${triple}"
+        CARGO_TARGET_DIR="${CROSS_TARGET_DIR}" cross build --release --package "${PACKAGE}" --target "${triple}"
     fi
 }
 
@@ -278,7 +284,7 @@ main() {
         build_target "${TRIPLE}" "${BUILD_TOOL}"
 
         local src dst
-        src="$(source_binary "${TRIPLE}" "${EXE_SUFFIX}")"
+        src="$(source_binary "${TRIPLE}" "${EXE_SUFFIX}" "${BUILD_TOOL}")"
         dst="${DIST_DIR}/$(output_name)"
 
         if [[ ! -f "${src}" ]]; then
