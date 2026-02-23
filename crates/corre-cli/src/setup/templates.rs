@@ -82,7 +82,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
         llm: LlmConfig {
             provider: "openai-compatible".into(),
             base_url: state.llm_base_url.clone().unwrap_or_else(|| "https://api.venice.ai/api/v1".into()),
-            model: state.llm_model.clone().unwrap_or_else(|| "qwen3-4b".into()),
+            model: state.llm_model.clone().unwrap_or_else(|| "openai-gpt-oss-120b".into()),
             api_key_env: state.llm_api_key_env.clone().unwrap_or_else(|| "VENICE_API_KEY".into()),
             temperature: 0.3,
             max_tokens: 32 * 1024,
