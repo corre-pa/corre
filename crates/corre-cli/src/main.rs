@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use corre_core::capability::CapabilityContext;
+use corre_core::capability::{CapabilityContext, ProgressStatus};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -248,10 +248,47 @@ async fn run_capability_pipeline(
 
     tracing::info!("Running capability `{cap_name}`");
 
-    let timeout = std::time::Duration::from_secs(600);
-    let output = tokio::time::timeout(timeout, capability.execute(&ctx))
-        .await
-        .with_context(|| format!("Capability `{cap_name}` timed out after {timeout:?}"))??;
+    let timeout_dur = std::time::Duration::from_secs(600);
+    let poll_deadline = std::time::Duration::from_secs(5);
+    let mut execute_fut = std::pin::pin!(capability.execute(&ctx));
+    let mut next_poll = timeout_dur;
+
+    let output = loop {
+        match tokio::time::timeout(next_poll, &mut execute_fut).await {
+            Ok(result) => break result,
+            Err(_) => {
+                tracing::info!("Capability `{cap_name}` exceeded {next_poll:?}, polling in_progress");
+                match tokio::time::timeout(poll_deadline, capability.in_progress()).await {
+                    Ok(ProgressStatus::StillBusy(hint)) => {
+                        next_poll = match hint {
+                            Some(pct) if pct > 0 && pct < 100 => {
+                                let remaining_ratio = (100 - pct) as f64 / pct as f64;
+                                let secs = (remaining_ratio * timeout_dur.as_secs_f64()) as u64 + 30;
+                                tracing::info!("... {pct}% complete, polling again in {secs}s");
+                                std::time::Duration::from_secs(secs)
+                            }
+                            _ => {
+                                tracing::info!("... still busy (no hint), polling again in {timeout_dur:?}");
+                                timeout_dur
+                            }
+                        };
+                        continue;
+                    }
+                    Ok(ProgressStatus::Done(partial)) => {
+                        let n: usize = partial.sections.iter().map(|s| s.articles.len()).sum();
+                        tracing::warn!("Capability `{cap_name}` returning partial results ({n} articles)");
+                        break Ok(partial);
+                    }
+                    Ok(ProgressStatus::Stuck) => {
+                        break Err(anyhow::anyhow!("Capability `{cap_name}` is stuck"));
+                    }
+                    Err(_) => {
+                        break Err(anyhow::anyhow!("Capability `{cap_name}` in_progress poll unresponsive"));
+                    }
+                }
+            }
+        }
+    }?;
 
     let mut edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
 

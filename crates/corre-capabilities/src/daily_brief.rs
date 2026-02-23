@@ -1,4 +1,6 @@
-use corre_core::capability::{Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmMessage, LlmRequest, LlmRole};
+use corre_core::capability::{
+    Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmMessage, LlmRequest, LlmRole, ProgressStatus, ProgressTracker,
+};
 use corre_core::config::CapabilityConfig;
 use corre_core::publish::{Article, Section, Source, sanitize_html, sanitize_url};
 use std::fmt::Write;
@@ -18,11 +20,13 @@ use tokio::sync::Semaphore;
 /// 9. Group into sections -> CapabilityOutput
 pub struct DailyBrief {
     manifest: CapabilityManifest,
+    tracker: ProgressTracker,
 }
 
 impl DailyBrief {
     pub fn from_config(config: &CapabilityConfig) -> Self {
         Self {
+            tracker: ProgressTracker::new(&config.name),
             manifest: CapabilityManifest {
                 name: config.name.clone(),
                 description: config.description.clone(),
@@ -205,6 +209,8 @@ impl Capability for DailyBrief {
     }
 
     async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput> {
+        self.tracker.reset();
+
         let config_path = self
             .manifest
             .config_path
@@ -215,6 +221,7 @@ impl Capability for DailyBrief {
         let topics_content = std::fs::read_to_string(&config_path)?;
         let sections = load_topics(&topics_content)?;
         tracing::info!("Parsed {} topic sections", sections.len());
+        self.tracker.touch("parsed_topics");
 
         // ------------------------------------------------------------------
         // Step 2-3: Build one query per source and search via web + news
@@ -255,6 +262,7 @@ impl Capability for DailyBrief {
         }
 
         let search_results = futures::future::join_all(search_handles).await;
+        self.tracker.touch("searches_complete");
 
         // Group results by (section_title, source_index)
         let mut source_results: std::collections::HashMap<(String, usize), Vec<SearchResultItem>> = std::collections::HashMap::new();
@@ -279,6 +287,8 @@ impl Capability for DailyBrief {
                 tracing::info!("Cross-edition dedup removed {} previously seen URLs", before - after);
             }
         }
+
+        self.tracker.touch("dedup_complete");
 
         // ------------------------------------------------------------------
         // Step 4-5: Score each source's results (parallel LLM calls)
@@ -307,10 +317,14 @@ impl Capability for DailyBrief {
 
         let ranked: Vec<RankedResult> = scored_batches.into_iter().flatten().collect();
         tracing::info!("{} articles to summarise across all sections", ranked.len());
+        self.tracker.touch("scoring_complete");
+        self.tracker.set_expected(ranked.len());
 
         // ------------------------------------------------------------------
         // Step 6: Summarise each top result (parallel, semaphore-bounded)
         // ------------------------------------------------------------------
+        self.tracker.touch("summarizing");
+        let tracker = &self.tracker;
         let mut summary_handles = Vec::new();
         for result in &ranked {
             let section_name = result.section_name.clone();
@@ -369,16 +383,15 @@ impl Capability for DailyBrief {
                         (item.description.clone(), response.content.clone())
                     }
                 };
-                Some((
-                    section_name,
-                    Article {
-                        title: item.title.clone(),
-                        summary: sanitize_html(&summary),
-                        body: sanitize_html(&body),
-                        sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
-                        score,
-                    },
-                ))
+                let article = Article {
+                    title: item.title.clone(),
+                    summary: sanitize_html(&summary),
+                    body: sanitize_html(&body),
+                    sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
+                    score,
+                };
+                tracker.add_article(section_name.clone(), article.clone());
+                Some((section_name, article))
             });
         }
 
@@ -399,6 +412,12 @@ impl Capability for DailyBrief {
             .collect();
 
         Ok(CapabilityOutput { capability_name: self.manifest.name.clone(), produced_at: chrono::Utc::now(), sections: output_sections })
+    }
+
+    async fn in_progress(&self) -> ProgressStatus {
+        // 120s exceeds worst-case single LLM call with full rate-limit retries (~90s = 3 attempts x 30s backoff)
+        const STALENESS_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(120);
+        self.tracker.evaluate(STALENESS_THRESHOLD)
     }
 }
 
