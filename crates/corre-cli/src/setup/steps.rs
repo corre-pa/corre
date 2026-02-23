@@ -48,11 +48,12 @@ pub fn welcome(term: &console::Term) -> anyhow::Result<()> {
     println!();
     println!("This wizard will walk you through:");
     println!();
-    println!("  1. Choosing an LLM provider (Venice.ai, Ollama, OpenAI, or custom)");
+    println!("  1. Choosing a default LLM provider (Venice.ai, Ollama, OpenAI, or custom)");
     println!("  2. Setting up Brave Search for web queries");
     println!("  3. Selecting capabilities to enable");
-    println!("  4. Configuring your topics and preferences");
-    println!("  5. Writing corre.toml and starting the service");
+    println!("  4. Optionally choosing a different LLM per capability");
+    println!("  5. Configuring your topics and preferences");
+    println!("  6. Writing corre.toml and starting the service");
     println!();
     println!("{}", dim.apply_to("Prerequisites: an internet connection and API keys for your chosen providers."));
     println!();
@@ -194,9 +195,9 @@ pub fn capabilities(state: &mut SetupState, term: &console::Term) -> anyhow::Res
     Ok(())
 }
 
-/// Step 5: Topics configuration (only if daily-brief is enabled).
-pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
-    if !state.enabled_capabilities.iter().any(|c| c == "daily-brief") {
+/// Step 5: Per-capability LLM overrides.
+pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
+    if state.enabled_capabilities.is_empty() {
         state.completed_step = 5;
         state.save()?;
         return Ok(());
@@ -207,7 +208,90 @@ pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()
 
     term.clear_screen()?;
     println!();
-    println!("{}", heading.apply_to("Step 5: Topics"));
+    println!("{}", heading.apply_to("Step 5: Per-Capability LLM Settings"));
+    println!();
+    println!("Each capability uses the global LLM provider by default. You can override");
+    println!("the model, provider, or other settings for individual capabilities.");
+    println!();
+
+    let global_model = state.llm_model.as_deref().unwrap_or("(default)");
+    let global_provider = state.llm_provider.as_deref().unwrap_or("(default)");
+    println!("{}", dim.apply_to(format!("Global default: {global_model} via {global_provider}")));
+    println!();
+
+    for cap_name in state.enabled_capabilities.clone() {
+        let customize = Confirm::new().with_prompt(format!("Use a different LLM for \"{cap_name}\"?")).default(false).interact()?;
+
+        if !customize {
+            state.capability_llm_overrides.remove(&cap_name);
+            continue;
+        }
+
+        println!();
+        let labels: Vec<&str> = PROVIDERS.iter().map(|p| p.label).collect();
+        let selection = Select::new().with_prompt(format!("LLM provider for \"{cap_name}\"")).items(&labels).default(0).interact()?;
+
+        let provider = &PROVIDERS[selection];
+
+        // Base URL
+        let base_url: String = if provider.key == "custom" {
+            Input::new().with_prompt("Base URL").validate_with(|input: &String| validate::url_like(input)).interact_text()?
+        } else {
+            Input::new().with_prompt("Base URL").default(provider.base_url.into()).interact_text()?
+        };
+
+        // Model
+        let model: String = if provider.default_model.is_empty() {
+            Input::new().with_prompt("Model name").validate_with(|input: &String| validate::non_empty(input)).interact_text()?
+        } else {
+            Input::new().with_prompt("Model name").default(provider.default_model.into()).interact_text()?
+        };
+
+        // API key env var name
+        let api_key_env: String =
+            Input::new().with_prompt("Environment variable for API key").default(provider.api_key_env.into()).interact_text()?;
+
+        // Collect the actual API key if this provider needs one and we don't already have it
+        if provider.needs_api_key && !state.api_keys.contains_key(&api_key_env) {
+            println!();
+            let key: String =
+                Password::new().with_prompt(format!("Paste your {api_key_env} value (hidden)")).allow_empty_password(false).interact()?;
+            state.api_keys.insert(api_key_env.clone(), key);
+        }
+
+        state.capability_llm_overrides.insert(
+            cap_name,
+            super::state::CapabilityLlmState {
+                provider: Some(provider.key.into()),
+                base_url: Some(base_url),
+                model: Some(model),
+                api_key_env: Some(api_key_env),
+            },
+        );
+
+        println!();
+    }
+
+    state.completed_step = 5;
+    state.save()?;
+
+    Ok(())
+}
+
+/// Step 6: Topics configuration (only if daily-brief is enabled).
+pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
+    if !state.enabled_capabilities.iter().any(|c| c == "daily-brief") {
+        state.completed_step = 6;
+        state.save()?;
+        return Ok(());
+    }
+
+    let heading = Style::new().bold();
+    let dim = Style::new().dim();
+
+    term.clear_screen()?;
+    println!();
+    println!("{}", heading.apply_to("Step 6: Topics"));
     println!();
     println!("The daily brief searches for news on topics you define. Topics are organized");
     println!("into sections (e.g. \"Technology\", \"Science\"). Each section has a description");
@@ -243,19 +327,19 @@ pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()
         state.topics_yml = Some(topics);
     }
 
-    state.completed_step = 5;
+    state.completed_step = 6;
     state.save()?;
 
     Ok(())
 }
 
-/// Step 6: Preferences (schedule, port, title).
+/// Step 7: Preferences (schedule, port, title).
 pub fn preferences(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
     let heading = Style::new().bold();
 
     term.clear_screen()?;
     println!();
-    println!("{}", heading.apply_to("Step 6: Preferences"));
+    println!("{}", heading.apply_to("Step 7: Preferences"));
     println!();
 
     let hour: String = Input::new()
@@ -275,13 +359,13 @@ pub fn preferences(state: &mut SetupState, term: &console::Term) -> anyhow::Resu
     let title: String = Input::new().with_prompt("Newspaper title").default("Corre News".into()).interact_text()?;
     state.news_title = Some(title);
 
-    state.completed_step = 6;
+    state.completed_step = 7;
     state.save()?;
 
     Ok(())
 }
 
-/// Step 7: Review and write configuration files.
+/// Step 8: Review and write configuration files.
 pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
     let heading = Style::new().bold();
     let dim = Style::new().dim();
@@ -291,7 +375,7 @@ pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow:
 
     term.clear_screen()?;
     println!();
-    println!("{}", heading.apply_to("Step 7: Review Configuration"));
+    println!("{}", heading.apply_to("Step 8: Review Configuration"));
     println!();
     println!("{}", dim.apply_to("--- corre.toml ---"));
     println!("{config_toml}");
@@ -334,20 +418,20 @@ pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow:
     }
     println!("  Wrote {} (mode 600)", env_path.display());
 
-    state.completed_step = 7;
+    state.completed_step = 8;
     state.save()?;
 
     Ok(())
 }
 
-/// Step 8: Start / systemd / done.
+/// Step 9: Start / systemd / done.
 pub fn start(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
     let heading = Style::new().bold();
     let green = Style::new().green().bold();
 
     term.clear_screen()?;
     println!();
-    println!("{}", heading.apply_to("Step 8: Start Corre"));
+    println!("{}", heading.apply_to("Step 9: Start Corre"));
     println!();
 
     let mut options = vec!["Run now (one-shot test of daily-brief)", "Save config only (start later)"];
@@ -364,7 +448,7 @@ pub fn start(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()>
             println!("(This will take a few minutes while articles are scored and summarized)");
             println!();
 
-            state.completed_step = 8;
+            state.completed_step = 9;
             SetupState::cleanup();
             println!("{}", green.apply_to("Setup complete!"));
             print_summary(state);
@@ -401,14 +485,14 @@ pub fn start(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()>
                 println!("Service status: {active}. Check: journalctl -u corre -e");
             }
 
-            state.completed_step = 8;
+            state.completed_step = 9;
             SetupState::cleanup();
             println!();
             println!("{}", green.apply_to("Setup complete!"));
             print_summary(state);
         }
         _ => {
-            state.completed_step = 8;
+            state.completed_step = 9;
             SetupState::cleanup();
             println!();
             println!("{}", green.apply_to("Setup complete!"));

@@ -309,7 +309,14 @@ async fn run_capability_pipeline(
 
     let mcp_pool = corre_mcp::McpPool::new(mcp_defs);
 
-    let raw_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
+    // Resolve per-capability LLM overrides, falling back to the global config
+    let cap_config = config.capabilities.iter().find(|c| c.name == cap_name);
+    let effective_llm = match cap_config.and_then(|c| c.llm.as_ref()) {
+        Some(overrides) => config.llm.with_overrides(overrides),
+        None => config.llm.clone(),
+    };
+
+    let raw_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&effective_llm)?);
 
     // Conditionally wrap MCP and LLM with safety middleware
     let mcp: Box<dyn corre_core::capability::McpCaller> = if config.safety.enabled {
@@ -322,7 +329,7 @@ async fn run_capability_pipeline(
         if config.safety.enabled { Box::new(corre_safety::SafeLlmProvider::new(raw_llm, &config.safety)) } else { raw_llm };
 
     let config_dir = config.data_dir();
-    let ctx = CapabilityContext { mcp, llm, config_dir, max_concurrent_llm: config.llm.max_concurrent, seen_urls };
+    let ctx = CapabilityContext { mcp, llm, config_dir, max_concurrent_llm: effective_llm.max_concurrent, seen_urls };
 
     tracing::info!("Running capability `{cap_name}`");
     if let Some(t) = tracker {
@@ -391,7 +398,7 @@ async fn run_capability_pipeline(
     let mut edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
 
     // Generate a dad joke tagline inspired by the headline
-    let tagline_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&config.llm)?);
+    let tagline_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&effective_llm)?);
     let tagline_request = corre_core::capability::LlmRequest {
         messages: vec![
             corre_core::capability::LlmMessage {

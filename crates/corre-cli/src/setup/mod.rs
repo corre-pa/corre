@@ -62,18 +62,22 @@ pub async fn run_setup() -> anyhow::Result<()> {
     }
 
     if start_step <= 5 {
-        steps::topics(&mut state, &term)?;
+        steps::capability_llm(&mut state, &term)?;
     }
 
     if start_step <= 6 {
-        steps::preferences(&mut state, &term)?;
+        steps::topics(&mut state, &term)?;
     }
 
     if start_step <= 7 {
-        steps::review_and_write(&mut state, &term)?;
+        steps::preferences(&mut state, &term)?;
     }
 
     if start_step <= 8 {
+        steps::review_and_write(&mut state, &term)?;
+    }
+
+    if start_step <= 9 {
         steps::start(&mut state, &term)?;
     }
 

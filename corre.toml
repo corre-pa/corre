@@ -37,3 +37,11 @@ schedule = "0 0 5 * * *"
 mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
+
+# [capabilities.llm]
+# model = "gpt-4o"              # override the global model for this capability
+# temperature = 0.7             # override temperature
+# base_url = "https://..."      # use a different provider entirely
+# api_key_env = "OTHER_API_KEY"
+# max_tokens = 8192
+# max_concurrent = 5

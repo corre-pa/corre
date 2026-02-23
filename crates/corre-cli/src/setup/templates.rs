@@ -57,23 +57,37 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
     let capabilities: Vec<CapabilityConfig> = state
         .enabled_capabilities
         .iter()
-        .map(|name| match name.as_str() {
-            "daily-brief" => CapabilityConfig {
-                name: "daily-brief".into(),
-                description: "Researches topics and produces a daily news briefing".into(),
-                schedule: format!("0 0 {hour} * * *"),
-                mcp_servers: vec!["brave-search".into()],
-                config_path: Some("config/topics.yml".into()),
-                enabled: true,
-            },
-            other => CapabilityConfig {
-                name: other.into(),
-                description: String::new(),
-                schedule: format!("0 0 {hour} * * *"),
-                mcp_servers: Vec::new(),
-                config_path: None,
-                enabled: true,
-            },
+        .map(|name| {
+            let llm_override = state.capability_llm_overrides.get(name.as_str()).map(|ovr| CapabilityLlmConfig {
+                provider: ovr.provider.clone(),
+                base_url: ovr.base_url.clone(),
+                model: ovr.model.clone(),
+                api_key_env: ovr.api_key_env.clone(),
+                temperature: None,
+                max_tokens: None,
+                max_concurrent: None,
+            });
+
+            match name.as_str() {
+                "daily-brief" => CapabilityConfig {
+                    name: "daily-brief".into(),
+                    description: "Researches topics and produces a daily news briefing".into(),
+                    schedule: format!("0 0 {hour} * * *"),
+                    mcp_servers: vec!["brave-search".into()],
+                    config_path: Some("config/topics.yml".into()),
+                    enabled: true,
+                    llm: llm_override,
+                },
+                other => CapabilityConfig {
+                    name: other.into(),
+                    description: String::new(),
+                    schedule: format!("0 0 {hour} * * *"),
+                    mcp_servers: Vec::new(),
+                    config_path: None,
+                    enabled: true,
+                    llm: llm_override,
+                },
+            }
         })
         .collect();
 

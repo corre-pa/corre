@@ -117,6 +117,35 @@ fn default_max_concurrent() -> usize {
     10
 }
 
+/// Per-capability LLM overrides. Every field is optional — only specified
+/// fields replace the corresponding global `[llm]` value.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct CapabilityLlmConfig {
+    pub provider: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub api_key_env: Option<String>,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+    pub max_concurrent: Option<usize>,
+}
+
+impl LlmConfig {
+    /// Return a new `LlmConfig` where any `Some` field in `overrides` replaces
+    /// the corresponding field in `self`.
+    pub fn with_overrides(&self, overrides: &CapabilityLlmConfig) -> LlmConfig {
+        LlmConfig {
+            provider: overrides.provider.clone().unwrap_or_else(|| self.provider.clone()),
+            base_url: overrides.base_url.clone().unwrap_or_else(|| self.base_url.clone()),
+            model: overrides.model.clone().unwrap_or_else(|| self.model.clone()),
+            api_key_env: overrides.api_key_env.clone().unwrap_or_else(|| self.api_key_env.clone()),
+            temperature: overrides.temperature.unwrap_or(self.temperature),
+            max_tokens: overrides.max_tokens.unwrap_or(self.max_tokens),
+            max_concurrent: overrides.max_concurrent.unwrap_or(self.max_concurrent),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct McpConfig {
     #[serde(default)]
@@ -142,6 +171,8 @@ pub struct CapabilityConfig {
     pub config_path: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub llm: Option<CapabilityLlmConfig>,
 }
 
 fn default_enabled() -> bool {
@@ -208,6 +239,40 @@ mod tests {
         assert_eq!(config.capabilities.len(), 1);
         assert_eq!(config.capabilities[0].name, "daily-brief");
         assert!(config.mcp.servers.contains_key("brave-search"));
+    }
+
+    #[test]
+    fn parse_capability_llm_overrides() {
+        let toml_str = r#"
+            [general]
+            data_dir = "/tmp/corre"
+            [llm]
+            provider = "openai-compatible"
+            base_url = "https://api.example.com/v1"
+            model = "base-model"
+            api_key_env = "BASE_KEY"
+            [news]
+            bind = "127.0.0.1:3200"
+            [[capabilities]]
+            name = "test-cap"
+            description = "test"
+            schedule = "0 * * * * *"
+            [capabilities.llm]
+            model = "override-model"
+            temperature = 0.9
+        "#;
+        let config: CorreConfig = toml::from_str(toml_str).expect("Failed to parse config with capability LLM overrides");
+        let cap = &config.capabilities[0];
+        let overrides = cap.llm.as_ref().expect("capability llm overrides should be present");
+        assert_eq!(overrides.model.as_deref(), Some("override-model"));
+        assert_eq!(overrides.temperature, Some(0.9));
+        assert!(overrides.base_url.is_none());
+
+        let effective = config.llm.with_overrides(overrides);
+        assert_eq!(effective.model, "override-model");
+        assert_eq!(effective.temperature, 0.9);
+        assert_eq!(effective.base_url, "https://api.example.com/v1");
+        assert_eq!(effective.api_key_env, "BASE_KEY");
     }
 
     #[test]
