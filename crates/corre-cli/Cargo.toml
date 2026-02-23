@@ -29,3 +29,4 @@ toml = { workspace = true }
 dirs = { workspace = true }
 axum = { workspace = true }
 corre-dashboard = { workspace = true }
+dotenvy = "0.15.7"

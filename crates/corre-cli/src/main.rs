@@ -15,6 +15,10 @@ fn default_config_path() -> PathBuf {
     setup::templates::resolved_data_dir().join("corre.toml")
 }
 
+fn default_env_path() -> PathBuf {
+    setup::templates::resolved_data_dir().join(".env")
+}
+
 #[derive(Parser)]
 #[command(name = "corre", about = "Personal AI task scheduler and newspaper")]
 struct Cli {
@@ -45,6 +49,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = dotenvy::from_filename_override(default_env_path()).ok();
     let cli = Cli::parse();
     let config_path = cli.config.unwrap_or_else(default_config_path);
 
