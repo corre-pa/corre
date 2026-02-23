@@ -3,6 +3,28 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] - 2026-02-23
+
+### Added
+- **Dashboard for capability management** with a themed UI for monitoring
+  and controlling capabilities.
+- **System monitor** displaying host resource usage in the dashboard.
+- **Historical log viewer** with date picker for browsing past capability
+  run logs from the dashboard.
+- **Per-capability LLM configuration overrides** allowing each capability
+  to specify its own model, temperature, and token limits.
+- **In-progress polling** for capability timeouts so the scheduler can
+  detect and report stuck runs.
+
+### Changed
+- Scoring and summarization merged into a single LLM call per source,
+  reducing API usage and latency.
+- Capability timeout increased from 5 to 10 minutes.
+- Updated default daily-brief model.
+
+### Fixed
+- Reduced false positives in safety layer base64 detection.
+
 ## [1.2.1] - 2026-02-22
 
 ### Fixed
