@@ -38,6 +38,7 @@ pub fn build_router(state: Arc<DashboardState>) -> Router {
         .route("/api/dashboard/status", get(status_handler))
         .route("/api/dashboard/run/{name}", post(run_now_handler))
         .route("/api/dashboard/events", get(sse_handler))
+        .route("/api/dashboard/logs/{date}", get(historical_logs_handler))
         .route("/api/settings", get(get_settings_handler).put(put_settings_handler))
         .route("/dashboard/static/{*path}", get(static_handler))
         .with_state(state)
@@ -171,6 +172,64 @@ async fn sse_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMa
     };
 
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))).into_response()
+}
+
+async fn historical_logs_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Path(date): Path<String>,
+) -> Response<Body> {
+    let token_str = extract_token(&headers, &query);
+    let config = state.config.read().await;
+    if check_auth(&config.news.editor_token, token_str.as_deref()).is_err() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // Validate date format: YYYY-MM-DD
+    if date.len() != 10
+        || date.as_bytes()[4] != b'-'
+        || date.as_bytes()[7] != b'-'
+        || !date[0..4].chars().all(|c| c.is_ascii_digit())
+        || !date[5..7].chars().all(|c| c.is_ascii_digit())
+        || !date[8..10].chars().all(|c| c.is_ascii_digit())
+    {
+        return (StatusCode::BAD_REQUEST, "Invalid date format, expected YYYY-MM-DD").into_response();
+    }
+
+    let log_path = config.data_dir().join("capabilities_logs").join(format!("capability.log.{date}"));
+    drop(config);
+
+    let contents = match tokio::fs::read_to_string(&log_path).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return axum::Json(serde_json::json!([])).into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read log file: {e}")).into_response();
+        }
+    };
+
+    let entries: Vec<serde_json::Value> = contents
+        .lines()
+        .filter_map(|line| {
+            let obj: serde_json::Value = serde_json::from_str(line).ok()?;
+            let timestamp = obj.get("timestamp")?.as_str()?.to_string();
+            let level = obj.get("level")?.as_str()?.to_string();
+            let message = obj.get("fields").and_then(|f| f.get("message")).and_then(|m| m.as_str()).unwrap_or("").to_string();
+            let target = obj.get("target").and_then(|t| t.as_str()).unwrap_or("unknown").to_string();
+            Some(serde_json::json!({
+                "capability": target,
+                "entry": {
+                    "timestamp": timestamp,
+                    "level": level,
+                    "message": message,
+                }
+            }))
+        })
+        .collect();
+
+    axum::Json(entries).into_response()
 }
 
 async fn get_settings_handler(

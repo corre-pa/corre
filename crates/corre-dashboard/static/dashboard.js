@@ -11,6 +11,7 @@
     var capFilter = "";
     var searchText = "";
     var autoScroll = true;
+    var historicalMode = false;
     var logContainer = document.getElementById("log-container");
     var logTbody = document.getElementById("log-tbody");
     var capTbody = document.getElementById("capabilities-tbody");
@@ -42,7 +43,9 @@
                 updateCapability(event);
                 break;
             case "LogLine":
-                appendLog(event.capability, event.entry);
+                if (!historicalMode) {
+                    appendLog(event.capability, event.entry);
+                }
                 break;
             case "SystemMetrics":
                 updateMetrics(event);
@@ -273,6 +276,34 @@
             applyAllFilters();
         });
     }
+
+    // --- Historical log loading ---
+    document.getElementById("log-date").addEventListener("change", function (e) {
+        var date = e.target.value;
+        if (!date) return;
+        historicalMode = true;
+        logTbody.innerHTML = "";
+        fetch("/api/dashboard/logs/" + encodeURIComponent(date) + "?token=" + encodeURIComponent(TOKEN))
+            .then(function (resp) {
+                if (!resp.ok) return resp.text().then(function (t) { throw new Error(t); });
+                return resp.json();
+            })
+            .then(function (entries) {
+                for (var i = 0; i < entries.length; i++) {
+                    appendLog(entries[i].capability, entries[i].entry);
+                }
+            })
+            .catch(function (err) {
+                console.error("Failed to load historical logs:", err);
+            });
+    });
+
+    document.getElementById("log-live-btn").addEventListener("click", function () {
+        historicalMode = false;
+        logTbody.innerHTML = "";
+        document.getElementById("log-date").value = "";
+        autoScroll = true;
+    });
 
     // =========================================================================
     // Window minimize/restore via taskbar
