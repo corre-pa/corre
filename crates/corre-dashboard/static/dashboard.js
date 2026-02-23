@@ -130,9 +130,17 @@
         document.getElementById("cpu-bar").style.width = cpuPct + "%";
         document.getElementById("cpu-value").textContent = cpuPct + "%";
 
+        var procCpuPct = m.process_cpu_percent.toFixed(1);
+        document.getElementById("proc-cpu-bar").style.width = Math.min(procCpuPct, 100) + "%";
+        document.getElementById("proc-cpu-value").textContent = procCpuPct + "%";
+
         var memPct = m.memory_total_mb > 0 ? (m.memory_used_mb / m.memory_total_mb * 100).toFixed(1) : "0";
         document.getElementById("memory-bar").style.width = memPct + "%";
         document.getElementById("memory-value").textContent = m.memory_used_mb + " / " + m.memory_total_mb + " MB";
+
+        var procMemPct = m.memory_total_mb > 0 ? (m.process_memory_mb / m.memory_total_mb * 100).toFixed(1) : "0";
+        document.getElementById("proc-memory-bar").style.width = procMemPct + "%";
+        document.getElementById("proc-memory-value").textContent = m.process_memory_mb + " MB";
 
         document.getElementById("uptime-value").textContent = formatDuration(m.uptime_secs);
     }

@@ -140,6 +140,22 @@ body.xp-desktop {
     );
 }
 
+.process-cpu-fill {
+    background: repeating-linear-gradient(
+        90deg,
+        #5B8DEF 0px, #5B8DEF 8px,
+        #4678D6 8px, #4678D6 10px
+    );
+}
+
+.process-mem-fill {
+    background: repeating-linear-gradient(
+        90deg,
+        #C06DBF 0px, #C06DBF 8px,
+        #A95AA8 8px, #A95AA8 10px
+    );
+}
+
 .cap-progress-track {
     height: 12px;
     background: #FFF;
@@ -206,16 +222,18 @@ body.xp-desktop {
 }
 
 .metric-row label {
-    width: 80px;
+    width: 110px;
     font-weight: bold;
     font-size: 12px;
+    white-space: nowrap;
 }
 
 .metric-value {
-    width: 100px;
-    text-align: right;
+    width: 140px;
+    text-align: left;
     font-size: 12px;
     font-family: "Lucida Console", monospace;
+    white-space: nowrap;
 }
 
 /* === Taskbar === */

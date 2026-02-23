@@ -52,18 +52,32 @@
         </div>
         <div class="xp-window-body system-monitor">
             <div class="metric-row">
-                <label>CPU Usage</label>
+                <label>CPU (global)</label>
                 <div class="xp-progress-track">
                     <div class="xp-progress-fill" id="cpu-bar" style="width:0%"></div>
                 </div>
                 <span class="metric-value" id="cpu-value">0%</span>
             </div>
             <div class="metric-row">
-                <label>Memory</label>
+                <label>Memory (global)</label>
                 <div class="xp-progress-track">
                     <div class="xp-progress-fill memory-fill" id="memory-bar" style="width:0%"></div>
                 </div>
                 <span class="metric-value" id="memory-value">0 / 0 MB</span>
+            </div>
+            <div class="metric-row">
+                <label>CPU</label>
+                <div class="xp-progress-track">
+                    <div class="xp-progress-fill process-cpu-fill" id="proc-cpu-bar" style="width:0%"></div>
+                </div>
+                <span class="metric-value" id="proc-cpu-value">0%</span>
+            </div>
+            <div class="metric-row">
+                <label>Memory</label>
+                <div class="xp-progress-track">
+                    <div class="xp-progress-fill process-mem-fill" id="proc-memory-bar" style="width:0%"></div>
+                </div>
+                <span class="metric-value" id="proc-memory-value">0 MB</span>
             </div>
             <div class="metric-row">
                 <label>Uptime</label>

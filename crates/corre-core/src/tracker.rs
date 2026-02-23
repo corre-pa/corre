@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
-use sysinfo::System;
+use sysinfo::{Pid, Process, System};
 use tokio::sync::{RwLock, broadcast};
 
 const MAX_LOG_ENTRIES: usize = 100;
@@ -57,6 +57,10 @@ pub struct SystemMetrics {
     pub memory_used_mb: u64,
     pub memory_total_mb: u64,
     pub uptime_secs: u64,
+    /// CPU usage of the corre process tree (sum of main + all descendants).
+    pub process_cpu_percent: f32,
+    /// RSS memory of the corre process tree in MB.
+    pub process_memory_mb: u64,
 }
 
 pub struct ExecutionTracker {
@@ -176,13 +180,41 @@ impl ExecutionTracker {
         let mut sys = System::new();
         sys.refresh_memory();
         sys.refresh_cpu_usage();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+        let (process_cpu, process_mem) = Self::process_tree_usage(&sys);
 
         SystemMetrics {
             cpu_usage_percent: sys.global_cpu_usage(),
             memory_used_mb: sys.used_memory() / (1024 * 1024),
             memory_total_mb: sys.total_memory() / (1024 * 1024),
             uptime_secs: self.start_time.elapsed().as_secs(),
+            process_cpu_percent: process_cpu,
+            process_memory_mb: process_mem / (1024 * 1024),
         }
+    }
+
+    /// Walk the process tree rooted at our own PID and sum CPU + RSS.
+    fn process_tree_usage(sys: &System) -> (f32, u64) {
+        let root = Pid::from_u32(std::process::id());
+        let processes = sys.processes();
+
+        // Collect all PIDs that belong to our tree via iterative BFS.
+        let mut tree_pids = Vec::new();
+        let mut queue = vec![root];
+        while let Some(pid) = queue.pop() {
+            if processes.contains_key(&pid) {
+                tree_pids.push(pid);
+            }
+            // Find direct children of this PID.
+            queue.extend(processes.values().filter_map(|p: &Process| p.parent().filter(|&parent| parent == pid).map(|_| p.pid())));
+        }
+
+        let (cpu, mem) = tree_pids
+            .iter()
+            .fold((0.0_f32, 0_u64), |(cpu, mem), pid| processes.get(pid).map_or((cpu, mem), |p| (cpu + p.cpu_usage(), mem + p.memory())));
+
+        (cpu, mem)
     }
 
     /// Get the broadcast sender for external metrics publishing.
