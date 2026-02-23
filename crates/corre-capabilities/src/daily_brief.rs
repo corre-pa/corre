@@ -14,10 +14,9 @@ use tokio::sync::Semaphore;
 /// 2. Build one query per source (search + include phrases + exclude operators)
 /// 3. Search each query via brave_web_search AND brave_news_search in parallel
 /// 4. Deduplicate results by URL within each source, then cross-edition dedup
-/// 5. Score results for newsworthiness (one LLM call per source, parallel)
+/// 5. Score and summarise results in a single LLM call per source (parallel, semaphore-bounded)
 /// 6. Keep top 10 per source by score
-/// 8. Summarise each top result (parallel LLM calls, semaphore-bounded)
-/// 9. Group into sections -> CapabilityOutput
+/// 7. Group into sections -> CapabilityOutput
 pub struct DailyBrief {
     manifest: CapabilityManifest,
     tracker: ProgressTracker,
@@ -79,6 +78,22 @@ fn default_freshness() -> String {
 /// Check if an LLM error indicates a transient overload that warrants a longer backoff.
 fn is_retryable_overload(err: &str) -> bool {
     err.contains("429") || err.contains("503") || err.contains("rate limited") || err.contains("overloaded")
+}
+
+/// Parse a context-length error to extract the maximum completion tokens the model can accept.
+/// Returns `Some(available)` where `available = context_length - input_tokens`, or `None` if
+/// the error doesn't match the expected format.
+fn parse_context_length_limit(err: &str) -> Option<u32> {
+    // Pattern: "maximum context length is {ctx} tokens and your request has {input} input tokens"
+    let ctx_marker = "maximum context length is ";
+    let input_marker = "your request has ";
+    let ctx_start = err.find(ctx_marker)? + ctx_marker.len();
+    let ctx_end = err[ctx_start..].find(' ')? + ctx_start;
+    let input_start = err.find(input_marker)? + input_marker.len();
+    let input_end = err[input_start..].find(' ')? + input_start;
+    let ctx: u32 = err[ctx_start..ctx_end].parse().ok()?;
+    let input: u32 = err[input_start..input_end].parse().ok()?;
+    ctx.checked_sub(input)
 }
 
 /// Map human-friendly freshness values (1d, 1w, 1m, 1y) to Brave API values (pd, pw, pm, py).
@@ -191,13 +206,6 @@ fn parse_search_results(value: &serde_json::Value) -> Vec<SearchResultItem> {
     vec![]
 }
 
-/// A scored, deduplicated search result ready for summarisation.
-struct RankedResult {
-    section_name: String,
-    item: SearchResultItem,
-    score: f64,
-}
-
 // ---------------------------------------------------------------------------
 // Capability implementation
 // ---------------------------------------------------------------------------
@@ -291,11 +299,21 @@ impl Capability for DailyBrief {
         self.tracker.touch("dedup_complete");
 
         // ------------------------------------------------------------------
-        // Step 4-5: Score each source's results (parallel LLM calls)
+        // Step 4-6: Score and summarise each source (parallel LLM calls)
         // ------------------------------------------------------------------
         let semaphore = Arc::new(Semaphore::new(ctx.max_concurrent_llm));
 
-        let mut scoring_handles = Vec::new();
+        let total_sources: usize = sections
+            .iter()
+            .enumerate()
+            .flat_map(|(_, s)| s.sources.iter().enumerate().map(move |(i, _)| (s.title.clone(), i)))
+            .filter(|key| source_results.get(key).is_some_and(|r| !r.is_empty()))
+            .count();
+        self.tracker.set_expected(total_sources);
+        self.tracker.touch("scoring_and_summarizing");
+        let tracker = &self.tracker;
+
+        let mut handles = Vec::new();
         for section in &sections {
             for (src_idx, source) in section.sources.iter().enumerate() {
                 let key = (section.title.clone(), src_idx);
@@ -306,103 +324,27 @@ impl Capability for DailyBrief {
                 let section_name = section.title.clone();
                 let select_if = source.select_if.clone();
                 let sem = semaphore.clone();
-                scoring_handles.push(async move {
+                handles.push(async move {
                     let _permit = sem.acquire().await.unwrap();
-                    score_source(&ctx.llm, &section_name, &select_if, &results).await
+                    let articles = score_and_summarize_source(&ctx.llm, &section_name, &select_if, &results).await;
+                    for (sec, article) in &articles {
+                        tracker.add_article(sec.clone(), article.clone());
+                    }
+                    articles
                 });
             }
         }
 
-        let scored_batches = futures::future::join_all(scoring_handles).await;
-
-        let ranked: Vec<RankedResult> = scored_batches.into_iter().flatten().collect();
-        tracing::info!("{} articles to summarise across all sections", ranked.len());
-        self.tracker.touch("scoring_complete");
-        self.tracker.set_expected(ranked.len());
-
-        // ------------------------------------------------------------------
-        // Step 6: Summarise each top result (parallel, semaphore-bounded)
-        // ------------------------------------------------------------------
-        self.tracker.touch("summarizing");
-        let tracker = &self.tracker;
-        let mut summary_handles = Vec::new();
-        for result in &ranked {
-            let section_name = result.section_name.clone();
-            let item = result.item.clone();
-            let score = result.score;
-            let sem = semaphore.clone();
-            summary_handles.push(async move {
-                let _permit = sem.acquire().await.unwrap();
-                let summary_request = LlmRequest::simple(
-                    "You are a precise news writer. You respond ONLY with raw JSON, no markdown fencing.\n\
-                    Given a news item, produce a JSON object with two fields:\n\
-                    - \"summary\": One sentence (max 30 words) delivering the single main takeaway. No filler.\n\
-                    - \"body\": A factual precis of the article in under 500 words. Stick strictly to concrete facts, \
-                    names, numbers, and dates from the source. Do not editorialize or pad with generic context. \
-                    The reader will decide whether to click through to the full article.",
-                    format!(
-                        "Title: {title}\nDescription: {desc}\nURL: {url}",
-                        title = item.title,
-                        desc = item.description,
-                        url = item.url,
-                    ),
-                );
-
-                let mut response = None;
-                for attempt in 0..3 {
-                    match ctx.llm.complete(summary_request.clone()).await {
-                        Ok(r) => {
-                            response = Some(r);
-                            break;
-                        }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            let is_rate_limit = is_retryable_overload(&err_str);
-                            let backoff = if is_rate_limit { 10 * (attempt as u64 + 1) } else { 1u64 << attempt };
-                            tracing::info!("Summary LLM call for `{}` failed (attempt {}): {err_str}", item.title, attempt + 1);
-                            tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
-                        }
-                    }
-                }
-
-                let Some(response) = response else {
-                    tracing::warn!("Failed to summarise `{}` after 3 attempts", item.title);
-                    return None;
-                };
-
-                tracing::info!("Summarised: {}", item.title);
-                let json_str = extract_json(&response.content);
-                let (summary, body) = match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(obj) => {
-                        let s = obj.get("summary").and_then(|v| v.as_str()).unwrap_or(&item.description);
-                        let b = obj.get("body").and_then(|v| v.as_str()).unwrap_or(&response.content);
-                        (s.to_string(), b.to_string())
-                    }
-                    Err(_) => {
-                        tracing::warn!("Failed to parse summary JSON for `{}`, using raw response", item.title);
-                        (item.description.clone(), response.content.clone())
-                    }
-                };
-                let article = Article {
-                    title: item.title.clone(),
-                    summary: sanitize_html(&summary),
-                    body: sanitize_html(&body),
-                    sources: vec![Source { title: item.title, url: sanitize_url(&item.url) }],
-                    score,
-                };
-                tracker.add_article(section_name.clone(), article.clone());
-                Some((section_name, article))
-            });
-        }
-
-        let summaries = futures::future::join_all(summary_handles).await;
+        let batches = futures::future::join_all(handles).await;
 
         // ------------------------------------------------------------------
         // Step 7: Group into sections
         // ------------------------------------------------------------------
         let mut article_map: std::collections::HashMap<String, Vec<Article>> = std::collections::HashMap::new();
-        for pair in summaries.into_iter().flatten() {
-            article_map.entry(pair.0).or_default().push(pair.1);
+        for batch in batches {
+            for (section_name, article) in batch {
+                article_map.entry(section_name).or_default().push(article);
+            }
         }
 
         // Preserve section ordering from the YAML
@@ -421,14 +363,14 @@ impl Capability for DailyBrief {
     }
 }
 
-/// Score a source's search results for newsworthiness via a single LLM call.
-/// Returns the top 10 results above the threshold.
-async fn score_source(
+/// Score and summarise a source's search results in a single LLM call.
+/// Returns the top 10 results as fully-built Articles.
+async fn score_and_summarize_source(
     llm: &Box<dyn corre_core::capability::LlmProvider>,
     section_name: &str,
     select_if: &str,
     results: &[SearchResultItem],
-) -> Vec<RankedResult> {
+) -> Vec<(String, Article)> {
     let results_json = serde_json::to_string(
         &results
             .iter()
@@ -437,6 +379,7 @@ async fn score_source(
                 serde_json::json!({
                     "index": i,
                     "title": r.title,
+                    "url": r.url,
                     "description": r.description,
                 })
             })
@@ -444,23 +387,27 @@ async fn score_source(
     )
     .unwrap_or_default();
 
-    let scoring_request = LlmRequest {
+    let request = LlmRequest {
         messages: vec![
             LlmMessage {
                 role: LlmRole::System,
-                content: "You are a news editor. Score each result for newsworthiness from 0.0 to 1.0.\n\
+                content: "You are a news editor and writer. For each search result:\n\
+                    1. Score it for newsworthiness from 0.0 to 1.0.\n\
+                    2. Write a one-sentence summary (max 30 words) with the main takeaway.\n\
+                    3. Write a factual body (under 500 words) sticking to concrete facts, names, numbers, and dates.\n\n\
                     Respond with ONLY a raw JSON array, no markdown fencing, no explanation.\n\
-                    Each element: {\"index\": <number>, \"score\": <number>, \"reasoning\": \"<string>\"}\n\
-                    Include ALL results in the response."
+                    Each element: {\"index\": <number>, \"score\": <number>, \"summary\": \"<string>\", \"body\": \"<string>\"}\n\
+                    Include ALL results."
                     .into(),
             },
             LlmMessage {
                 role: LlmRole::User,
                 content: if select_if.is_empty() {
-                    format!("Score these search results for the \"{section_name}\" section:\n{results_json}")
+                    format!("Score and summarise these search results for the \"{section_name}\" section:\n{results_json}")
                 } else {
                     format!(
-                        "Score these search results for the \"{section_name}\" section.\nEditorial guidance: {select_if}\n{results_json}"
+                        "Score and summarise these search results for the \"{section_name}\" section.\n\
+                        Editorial guidance: {select_if}\n{results_json}"
                     )
                 },
             },
@@ -471,75 +418,82 @@ async fn score_source(
     };
 
     #[derive(serde::Deserialize)]
-    struct ScoredItem {
+    struct ScoredSummary {
         index: usize,
         score: f64,
-        #[allow(dead_code)]
-        reasoning: String,
+        #[serde(default)]
+        summary: String,
+        #[serde(default)]
+        body: String,
     }
 
-    let mut scored: Option<Vec<ScoredItem>> = None;
-    for attempt in 0..3 {
-        let response = match llm.complete(scoring_request.clone()).await {
+    let mut request = request;
+    let mut parsed: Option<Vec<ScoredSummary>> = None;
+    for attempt in 0..3u64 {
+        let response = match llm.complete(request.clone()).await {
             Ok(r) => r,
             Err(e) => {
                 let err_str = e.to_string();
-                let is_rate_limit = is_retryable_overload(&err_str);
-                let backoff = if is_rate_limit {
-                    let secs = 10 * (attempt as u64 + 1);
-                    tracing::info!("Scoring for section `{section_name}` rate limited (attempt {}), backing off {secs}s", attempt + 1);
-                    secs
+                let backoff = 5 << attempt;
+                if let Some(available) = parse_context_length_limit(&err_str) {
+                    tracing::info!("Source `{section_name}` max_tokens too large (attempt {}), reducing to {available}", attempt + 1);
+                    request.max_tokens = Some(available);
+                } else if is_retryable_overload(&err_str) {
+                    tracing::info!("Source `{section_name}` rate limited (attempt {}), backing off {backoff}s", attempt + 1);
                 } else {
-                    let secs = 1u64 << attempt;
-                    tracing::info!("Scoring LLM call for section `{section_name}` failed (attempt {}): {err_str}", attempt + 1);
-                    secs
-                };
+                    tracing::info!("LLM call for source `{section_name}` failed (attempt {}): {err_str}", attempt + 1);
+                }
                 tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
                 continue;
             }
         };
 
         let json_str = extract_json(&response.content);
-        match serde_json::from_str::<Vec<ScoredItem>>(json_str) {
+        match serde_json::from_str::<Vec<ScoredSummary>>(json_str) {
             Ok(items) => {
-                scored = Some(items);
+                parsed = Some(items);
                 break;
             }
             Err(e) => {
+                let backoff = 5 << attempt;
                 tracing::info!(
-                    "Scoring JSON parse failed for section `{section_name}` (attempt {}): {e}. Raw: {}",
+                    "JSON parse failed for source `{section_name}` (attempt {}): {e}. Raw: {}",
                     attempt + 1,
                     &response.content[..response.content.len().min(200)]
                 );
-                tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
             }
         }
     }
 
-    let scored = match scored {
+    let mut items = match parsed {
         Some(items) => items,
         None => {
-            tracing::warn!("Scoring failed for section `{section_name}` after 3 attempts");
+            tracing::warn!("Score+summarise failed for source `{section_name}` after 3 attempts");
             return vec![];
         }
     };
-    scored.iter().for_each(|scored_item| {
-        tracing::debug!(
-            "Scoring result. {section_name}#{} -> {:0.2}. Reasoning: {}",
-            scored_item.index,
-            scored_item.score,
-            scored_item.reasoning
-        );
-    });
-    tracing::info!("Scored {} results above threshold for section `{section_name}`", scored.len());
 
-    let mut top: Vec<_> = scored.into_iter().map(|s| (s.index, s.score)).collect();
-    top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    top.truncate(10);
+    items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    items.truncate(10);
 
-    top.into_iter()
-        .filter_map(|(idx, score)| {
-            results.get(idx).map(|item| RankedResult { section_name: section_name.to_string(), item: item.clone(), score })
+    tracing::info!("Scored and summarised {} articles for source `{section_name}`", items.len());
+
+    items
+        .into_iter()
+        .filter_map(|scored| {
+            results.get(scored.index).map(|item| {
+                let summary = if scored.summary.is_empty() { &item.description } else { &scored.summary };
+                let body = if scored.body.is_empty() { &item.description } else { &scored.body };
+                let article = Article {
+                    title: item.title.clone(),
+                    summary: sanitize_html(summary),
+                    body: sanitize_html(body),
+                    sources: vec![Source { title: item.title.clone(), url: sanitize_url(&item.url) }],
+                    score: scored.score,
+                };
+                (section_name.to_string(), article)
+            })
         })
         .collect()
 }
@@ -644,5 +598,19 @@ daily-briefing:
     fn extract_json_bare_array() {
         let input = "Some preamble [{\"a\":1}] trailing";
         assert_eq!(extract_json(input), "[{\"a\":1}]");
+    }
+
+    #[test]
+    fn parse_context_length_limit_extracts_available_tokens() {
+        let err = "LLM API returned 400 Bad Request: {\"error\":\"'max_tokens' or 'max_completion_tokens' is too large: 65536. \
+            This model's maximum context length is 32768 tokens and your request has 2789 input tokens (65536 > 32768 - 2789). \
+            None\",\"request_id\":\"DERYTCex_4QMLyruMM8UV\"}";
+        assert_eq!(parse_context_length_limit(err), Some(32768 - 2789));
+    }
+
+    #[test]
+    fn parse_context_length_limit_returns_none_for_unrelated_errors() {
+        assert_eq!(parse_context_length_limit("429 Too Many Requests"), None);
+        assert_eq!(parse_context_length_limit("connection refused"), None);
     }
 }
