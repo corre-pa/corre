@@ -8,7 +8,6 @@ base_url = "https://api.venice.ai/api/v1"
 model = "llama-3.3-70b"
 api_key_env = "VENICE_API_KEY"
 temperature = 0.3
-max_tokens = 4096
 max_concurrent = 10        # parallel LLM requests; tune to your provider's rate limit
 
 [news]
@@ -43,5 +42,4 @@ enabled = true
 # temperature = 0.7             # override temperature
 # base_url = "https://..."      # use a different provider entirely
 # api_key_env = "OTHER_API_KEY"
-# max_tokens = 8192
 # max_concurrent = 5

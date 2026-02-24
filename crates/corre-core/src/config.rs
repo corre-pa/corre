@@ -97,8 +97,6 @@ pub struct LlmConfig {
     pub api_key_env: String,
     #[serde(default = "default_temperature")]
     pub temperature: f32,
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u32,
     /// Maximum concurrent requests to the LLM API. Set this based on your
     /// provider's rate limits (e.g. Venice.ai M-tier = 50 req/min).
     #[serde(default = "default_max_concurrent")]
@@ -107,10 +105,6 @@ pub struct LlmConfig {
 
 fn default_temperature() -> f32 {
     0.3
-}
-
-fn default_max_tokens() -> u32 {
-    4096
 }
 
 fn default_max_concurrent() -> usize {
@@ -126,7 +120,7 @@ pub struct CapabilityLlmConfig {
     pub model: Option<String>,
     pub api_key_env: Option<String>,
     pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
+    pub max_completion_tokens: Option<u32>,
     pub max_concurrent: Option<usize>,
 }
 
@@ -140,7 +134,6 @@ impl LlmConfig {
             model: overrides.model.clone().unwrap_or_else(|| self.model.clone()),
             api_key_env: overrides.api_key_env.clone().unwrap_or_else(|| self.api_key_env.clone()),
             temperature: overrides.temperature.unwrap_or(self.temperature),
-            max_tokens: overrides.max_tokens.unwrap_or(self.max_tokens),
             max_concurrent: overrides.max_concurrent.unwrap_or(self.max_concurrent),
         }
     }

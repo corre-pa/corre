@@ -33,7 +33,7 @@ pub trait LlmProvider: Send + Sync {
 pub struct LlmRequest {
     pub messages: Vec<LlmMessage>,
     pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
+    pub max_completion_tokens: Option<u32>,
     pub json_mode: bool,
 }
 
@@ -58,7 +58,7 @@ impl LlmRequest {
                 LlmMessage { role: LlmRole::User, content: user.into() },
             ],
             temperature: None,
-            max_tokens: None,
+            max_completion_tokens: None,
             json_mode: false,
         }
     }

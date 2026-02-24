@@ -93,7 +93,7 @@ fn parse_context_length_limit(err: &str) -> Option<u32> {
     let input_end = err[input_start..].find(' ')? + input_start;
     let ctx: u32 = err[ctx_start..ctx_end].parse().ok()?;
     let input: u32 = err[input_start..input_end].parse().ok()?;
-    ctx.checked_sub(input)
+    ctx.checked_sub(input)?.checked_sub(100) // leave a safety margin of 100 tokens for the response
 }
 
 /// Map human-friendly freshness values (1d, 1w, 1m, 1y) to Brave API values (pd, pw, pm, py).
@@ -413,7 +413,7 @@ async fn score_and_summarize_source(
             },
         ],
         temperature: Some(0.1),
-        max_tokens: Some(1024 * 64),
+        max_completion_tokens: None,
         json_mode: false,
     };
 
@@ -436,8 +436,8 @@ async fn score_and_summarize_source(
                 let err_str = e.to_string();
                 let backoff = 5 << attempt;
                 if let Some(available) = parse_context_length_limit(&err_str) {
-                    tracing::info!("Source `{section_name}` max_tokens too large (attempt {}), reducing to {available}", attempt + 1);
-                    request.max_tokens = Some(available);
+                    tracing::info!("Source `{section_name}` max_completion_tokens too large (attempt {}), reducing to {available}",attempt + 1);
+                    request.max_completion_tokens = Some(available);
                 } else if is_retryable_overload(&err_str) {
                     tracing::info!("Source `{section_name}` rate limited (attempt {}), backing off {backoff}s", attempt + 1);
                 } else {
@@ -474,6 +474,8 @@ async fn score_and_summarize_source(
         }
     };
 
+    // Filter out low-scoring items, sort by score desc, and keep top 10.
+    items = items.into_iter().filter(|i| i.score > 0.2).collect();
     items.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     items.truncate(10);
 
@@ -605,7 +607,7 @@ daily-briefing:
         let err = "LLM API returned 400 Bad Request: {\"error\":\"'max_tokens' or 'max_completion_tokens' is too large: 65536. \
             This model's maximum context length is 32768 tokens and your request has 2789 input tokens (65536 > 32768 - 2789). \
             None\",\"request_id\":\"DERYTCex_4QMLyruMM8UV\"}";
-        assert_eq!(parse_context_length_limit(err), Some(32768 - 2789));
+        assert_eq!(parse_context_length_limit(err), Some(32768 - 2789 - 100));
     }
 
     #[test]

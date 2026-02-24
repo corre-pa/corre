@@ -64,7 +64,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                 model: ovr.model.clone(),
                 api_key_env: ovr.api_key_env.clone(),
                 temperature: None,
-                max_tokens: None,
+                max_completion_tokens: None,
                 max_concurrent: None,
             });
 
@@ -99,7 +99,6 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
             model: state.llm_model.clone().unwrap_or_else(|| "openai-gpt-oss-120b".into()),
             api_key_env: state.llm_api_key_env.clone().unwrap_or_else(|| "VENICE_API_KEY".into()),
             temperature: 0.3,
-            max_tokens: 32 * 1024,
             max_concurrent: 10,
         },
         news: NewsConfig {

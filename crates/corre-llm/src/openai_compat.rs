@@ -10,11 +10,10 @@ pub struct OpenAiCompatProvider {
     api_key: String,
     default_model: String,
     default_temperature: f32,
-    default_max_tokens: u32,
 }
 
 impl OpenAiCompatProvider {
-    pub fn new(base_url: String, api_key: String, model: String, temperature: f32, max_tokens: u32) -> Self {
+    pub fn new(base_url: String, api_key: String, model: String, temperature: f32) -> Self {
         let client = reqwest::Client::new();
         Self {
             client,
@@ -22,14 +21,13 @@ impl OpenAiCompatProvider {
             api_key,
             default_model: model,
             default_temperature: temperature,
-            default_max_tokens: max_tokens,
         }
     }
 
     pub fn from_config(config: &corre_core::config::LlmConfig) -> anyhow::Result<Self> {
         let api_key =
             std::env::var(&config.api_key_env).with_context(|| format!("Missing env var `{}` for LLM API key", config.api_key_env))?;
-        Ok(Self::new(config.base_url.clone(), api_key, config.model.clone(), config.temperature, config.max_tokens))
+        Ok(Self::new(config.base_url.clone(), api_key, config.model.clone(), config.temperature))
     }
 }
 
@@ -54,7 +52,7 @@ impl LlmProvider for OpenAiCompatProvider {
             model: self.default_model.clone(),
             messages: convert_messages(&request.messages),
             temperature: Some(request.temperature.unwrap_or(self.default_temperature)),
-            max_tokens: Some(request.max_tokens.unwrap_or(self.default_max_tokens)),
+            max_completion_tokens: request.max_completion_tokens,
             response_format: None,
         };
 
@@ -91,7 +89,7 @@ impl LlmProvider for OpenAiCompatProvider {
             if reason == "length" {
                 let truncated = choice.message.content.as_deref().unwrap_or("");
                 anyhow::bail!(
-                    "LLM response truncated (finish_reason=length, got {} chars). Consider increasing max_tokens",
+                    "LLM response truncated (finish_reason=length, got {} chars). Consider increasing max_completion_tokens",
                     truncated.len()
                 );
             }

@@ -394,7 +394,6 @@
         setVal("llm_model", config.llm.model);
         setVal("llm_api_key_env", config.llm.api_key_env);
         setVal("llm_temperature", config.llm.temperature);
-        setVal("llm_max_tokens", config.llm.max_tokens);
         setVal("llm_max_concurrent", config.llm.max_concurrent);
 
         setVal("news_bind", config.news.bind);
@@ -438,7 +437,6 @@
                 model: getVal("llm_model"),
                 api_key_env: getVal("llm_api_key_env"),
                 temperature: parseFloat(getVal("llm_temperature")) || 0.3,
-                max_tokens: parseInt(getVal("llm_max_tokens"), 10) || 4096,
                 max_concurrent: parseInt(getVal("llm_max_concurrent"), 10) || 10,
             },
             news: {

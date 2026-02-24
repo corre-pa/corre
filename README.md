@@ -323,7 +323,6 @@ base_url = "https://api.venice.ai/api/v1"
 model = "llama-3.3-70b"
 api_key_env = "VENICE_API_KEY"       # env var name, never the actual key
 temperature = 0.3
-max_tokens = 4096
 
 [news]
 bind = "127.0.0.1:3200"

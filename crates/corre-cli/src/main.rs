@@ -415,7 +415,7 @@ async fn run_capability_pipeline(
             corre_core::capability::LlmMessage { role: corre_core::capability::LlmRole::User, content: edition.headline.clone() },
         ],
         temperature: Some(0.9),
-        max_tokens: Some(60),
+        max_completion_tokens: Some(200),
         json_mode: false,
     };
     match tagline_llm.complete(tagline_request).await {
@@ -425,7 +425,7 @@ async fn run_capability_pipeline(
                 edition.tagline = tagline;
             }
         }
-        Err(e) => tracing::warn!("Failed to generate tagline, using default: {e}"),
+        Err(e) => tracing::warn!("Failed to generate tagline, using default: {e}."),
     }
 
     Ok((edition, mcp_pool))
