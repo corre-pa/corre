@@ -3,6 +3,15 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] - 2026-02-24
+
+### Fixed
+- Removed irrelevant articles from daily brief output.
+- Fixed `build-all` script.
+
+### Changed
+- Environment variables are now loaded from `.env` file automatically.
+
 ## [1.3.0] - 2026-02-23
 
 ### Added
