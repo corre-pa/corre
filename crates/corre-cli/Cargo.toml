@@ -30,6 +30,7 @@ toml = { workspace = true }
 dirs = { workspace = true }
 axum = { workspace = true }
 corre-dashboard = { workspace = true }
+corre-registry = { workspace = true }
 corre-db = { workspace = true }
 csv = { workspace = true }
 uuid = { workspace = true }

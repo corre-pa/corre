@@ -1,26 +1,24 @@
-use std::collections::HashMap;
+use regex::Regex;
+use std::sync::LazyLock;
 
-/// Resolves environment variable references in a config env map.
-///
-/// Every value is treated as an environment variable name and looked up from the
-/// host environment. This matches the same pattern used for `api_key_env` in the
-/// LLM config -- you never put actual secrets in `corre.toml`, only the names of
-/// the env vars that hold them.
-///
-/// ```toml
-/// [mcp.servers.brave-search]
-/// env = { BRAVE_API_KEY = "BRAVE_API_KEY" }
-///        ^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^
-///        passed to child   looked up from host env
-/// ```
-pub fn resolve_env_vars(env_map: &HashMap<String, String>) -> HashMap<String, String> {
-    env_map
-        .iter()
-        .map(|(key, var_name)| {
-            let resolved = std::env::var(var_name).unwrap_or_default();
-            (key.clone(), resolved)
+static ENV_VAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\\?\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
+
+/// Interpolate `${VAR_NAME}` references in a string with values from the host
+/// environment. Missing variables resolve to the empty string. A leading
+/// backslash (`\${VAR}`) produces the literal `${VAR}` (escape removed).
+pub fn interpolate_env_vars(input: &str) -> String {
+    ENV_VAR_RE
+        .replace_all(input, |caps: &regex::Captures| {
+            let full = caps.get(0).unwrap().as_str();
+            if full.starts_with('\\') {
+                // Escaped: produce literal ${NAME}
+                full[1..].to_string()
+            } else {
+                let name = &caps[1];
+                std::env::var(name).unwrap_or_default()
+            }
         })
-        .collect()
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -28,22 +26,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolves_env_var_by_name() {
-        unsafe { std::env::set_var("TEST_CORRE_KEY", "secret123") };
-        let mut env = HashMap::new();
-        env.insert("API_KEY".into(), "TEST_CORRE_KEY".into());
-
-        let resolved = resolve_env_vars(&env);
-        assert_eq!(resolved["API_KEY"], "secret123");
-        unsafe { std::env::remove_var("TEST_CORRE_KEY") };
+    fn interpolate_replaces_env_vars() {
+        unsafe { std::env::set_var("TEST_INTERP_A", "hello") };
+        let result = interpolate_env_vars("value = \"${TEST_INTERP_A}\"");
+        assert_eq!(result, "value = \"hello\"");
+        unsafe { std::env::remove_var("TEST_INTERP_A") };
     }
 
     #[test]
-    fn missing_env_var_resolves_to_empty() {
-        let mut env = HashMap::new();
-        env.insert("MISSING".into(), "DEFINITELY_NOT_SET_XYZ".into());
+    fn interpolate_escaped_dollar_produces_literal() {
+        let result = interpolate_env_vars(r"value = \${NOT_REPLACED}");
+        assert_eq!(result, "value = ${NOT_REPLACED}");
+    }
 
-        let resolved = resolve_env_vars(&env);
-        assert_eq!(resolved["MISSING"], "");
+    #[test]
+    fn interpolate_missing_var_becomes_empty() {
+        let result = interpolate_env_vars("key = \"${DEFINITELY_NOT_SET_XYZ_123}\"");
+        assert_eq!(result, "key = \"\"");
     }
 }

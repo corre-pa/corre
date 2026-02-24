@@ -196,12 +196,6 @@
                 </div>
 
                 <div class="xp-fieldset">
-                    <div class="xp-fieldset-legend">MCP Servers</div>
-                    <div id="mcpServers"></div>
-                    <button type="button" class="xp-button" id="add-mcp-btn">+ Add server</button>
-                </div>
-
-                <div class="xp-fieldset">
                     <div class="xp-fieldset-legend">Capabilities</div>
                     <div id="capabilitiesConfig"></div>
                     <button type="button" class="xp-button" id="add-cap-btn">+ Add capability</button>
@@ -212,6 +206,99 @@
                     <span id="saveStatus" class="save-status"></span>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Unified MCP Store Window -->
+    <div class="xp-window" id="mcp-store-window" style="top:340px;left:20px;width:58%;min-height:300px;">
+        <div class="xp-titlebar">
+            <span class="xp-titlebar-icon">&#128722;</span>
+            <span class="xp-titlebar-text">MCP Store</span>
+            <div class="xp-titlebar-buttons">
+                <button class="xp-btn-minimize" data-window="mcp-store-window">_</button>
+                <button class="xp-btn-maximize">&#9633;</button>
+                <button class="xp-btn-close" data-window="mcp-store-window">X</button>
+            </div>
+        </div>
+        <div class="xp-toolbar">
+            <input type="text" id="store-search" placeholder="Search MCP servers..." class="xp-input xp-input-wide">
+            <button class="xp-button" id="store-refresh-btn" title="Refresh catalog">Refresh</button>
+        </div>
+        <div class="xp-window-body store-body">
+            <table class="xp-table" id="store-table">
+                <thead>
+                    <tr>
+                        <th style="width:24px;"></th>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th style="width:60px;">Version</th>
+                        <th style="width:24px;" title="Verified"></th>
+                        <th style="width:24px;" title="Configure"></th>
+                        <th style="width:100px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="store-tbody">
+                    <tr><td colspan="7" class="loading-cell">Loading catalog...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- MCP Install Modal -->
+    <div class="xp-modal-overlay" id="install-modal" style="display:none;">
+        <div class="xp-modal">
+            <div class="xp-titlebar">
+                <span class="xp-titlebar-icon">&#128268;</span>
+                <span class="xp-titlebar-text" id="install-modal-title">Install MCP Server</span>
+                <div class="xp-titlebar-buttons">
+                    <button class="xp-btn-close" id="install-modal-close">X</button>
+                </div>
+            </div>
+            <div class="xp-window-body" style="padding:12px;">
+                <div id="install-modal-deps" class="install-deps"></div>
+                <div id="install-modal-env" class="install-env"></div>
+                <div class="install-actions">
+                    <button class="xp-button xp-button-primary" id="install-modal-confirm">Install</button>
+                    <button class="xp-button" id="install-modal-cancel">Cancel</button>
+                    <span id="install-modal-status" class="save-status"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configure Modal -->
+    <div class="xp-modal-overlay" id="configure-modal" style="display:none;">
+        <div class="xp-modal">
+            <div class="xp-titlebar">
+                <span class="xp-titlebar-icon">&#9881;</span>
+                <span class="xp-titlebar-text" id="configure-modal-title">Configure MCP Server</span>
+                <div class="xp-titlebar-buttons">
+                    <button class="xp-btn-close" id="configure-modal-close">X</button>
+                </div>
+            </div>
+            <div class="xp-window-body" style="padding:12px;">
+                <div id="configure-modal-fields"></div>
+                <div class="install-actions">
+                    <button class="xp-button xp-button-primary" id="configure-modal-save">Save</button>
+                    <button class="xp-button" id="configure-modal-cancel">Cancel</button>
+                    <span id="configure-modal-status" class="save-status"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action Modal (reusable popup for test results, progress, etc.) -->
+    <div class="xp-modal-overlay" id="action-modal" style="display:none;">
+        <div class="xp-modal" style="width:500px;">
+            <div class="xp-titlebar">
+                <span class="xp-titlebar-icon">&#128268;</span>
+                <span class="xp-titlebar-text" id="action-modal-title">Action</span>
+                <div class="xp-titlebar-buttons">
+                    <button class="xp-btn-close" id="action-modal-close">X</button>
+                </div>
+            </div>
+            <div class="xp-window-body action-modal-body" id="action-modal-body">
+            </div>
         </div>
     </div>
 
@@ -266,6 +353,7 @@
         <div class="taskbar-windows">
             <button class="taskbar-item active" data-window="capabilities-window">Capabilities Manager</button>
             <button class="taskbar-item active" data-window="system-window">System Monitor</button>
+            <button class="taskbar-item active" data-window="mcp-store-window">MCP Store</button>
             <button class="taskbar-item" data-window="settings-window">Settings</button>
             <button class="taskbar-item active" data-window="log-window">Event Viewer</button>
         </div>
@@ -282,6 +370,7 @@
         </div>
         <div class="start-menu-body">
             <a href="/" target="_blank" class="start-menu-item">&#128240; Newspaper</a>
+            <a href="#" class="start-menu-item" id="start-mcp-store">&#128722; MCP Store</a>
             <a href="#" class="start-menu-item" id="start-settings">&#9881; Settings</a>
             <div class="start-menu-submenu-container">
                 <a href="#" class="start-menu-item start-menu-has-submenu">&#128196; Daily Brief &#9656;</a>

@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 corre-core = { workspace = true }
+corre-registry = { workspace = true }
+corre-mcp = { workspace = true }
 axum = { workspace = true }
 askama = { workspace = true }
 tokio = { workspace = true }

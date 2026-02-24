@@ -584,6 +584,243 @@ mark { background: #FFE566; padding: 0; }
 .cap-error { color: #CC2200; font-size: 11px; margin-top: 2px; }
 .cap-phase { color: #666; font-size: 11px; }
 
+/* === MCP Store === */
+.store-body {
+    padding: 8px;
+    overflow-y: auto;
+    max-height: 500px;
+}
+
+.store-loading {
+    text-align: center;
+    color: #888;
+    padding: 30px;
+}
+
+.store-verified-badge {
+    display: inline-block;
+    color: #33AA33;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.mcp-installed-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ACA899;
+}
+
+.mcp-installed-dot.active {
+    background: #33AA33;
+}
+
+.store-test-dot {
+    cursor: pointer;
+}
+
+.store-test-dot:hover {
+    box-shadow: 0 0 0 3px rgba(51,170,51,0.4);
+}
+
+.store-desc-cell {
+    max-width: 300px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11px;
+    color: #444;
+}
+
+.xp-button-icon {
+    background: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 2px;
+    line-height: 1;
+}
+
+.xp-button-icon:hover {
+    border-color: #ACA899;
+    background: #F5F3EB;
+    border-radius: 2px;
+}
+
+/* === MCP Install Modal === */
+.xp-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 10100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.xp-modal {
+    background: #ECE9D8;
+    border: 2px solid #0054E3;
+    border-radius: 8px 8px 0 0;
+    box-shadow: 4px 4px 20px rgba(0,0,0,0.5);
+    width: 420px;
+    max-width: 90%;
+}
+
+.install-deps {
+    margin-bottom: 8px;
+}
+
+.install-dep-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 12px;
+}
+
+.dep-ok { color: #33AA33; }
+.dep-missing { color: #CC2200; }
+
+.install-env {
+    margin-bottom: 10px;
+}
+
+.install-env .xp-field {
+    margin-bottom: 6px;
+}
+
+.install-env .xp-field label {
+    font-size: 11px;
+    color: #333;
+}
+
+.install-env .xp-field .env-desc {
+    font-size: 10px;
+    color: #777;
+    margin-top: 1px;
+}
+
+.install-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #D6D2C2;
+}
+
+/* === Action Modal === */
+.action-modal-body {
+    padding: 12px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.action-modal-spinner {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+    font-size: 12px;
+}
+
+.action-modal-spinner::before {
+    content: "";
+    display: block;
+    width: 24px;
+    height: 24px;
+    margin: 0 auto 8px;
+    border: 3px solid #D6D2C2;
+    border-top-color: #0054E3;
+    border-radius: 50%;
+    animation: modal-spin 0.8s linear infinite;
+}
+
+@keyframes modal-spin {
+    to { transform: rotate(360deg); }
+}
+
+.action-modal-step {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 12px;
+}
+
+.action-modal-step-icon {
+    width: 16px;
+    text-align: center;
+    font-weight: bold;
+}
+
+.action-modal-step-done .action-modal-step-icon { color: #33AA33; }
+.action-modal-step-active .action-modal-step-icon { color: #0054E3; }
+.action-modal-step-error .action-modal-step-icon { color: #CC2200; }
+
+.action-modal-tools {
+    margin-top: 8px;
+    border: 1px solid #D6D2C2;
+    border-radius: 2px;
+    background: #FFF;
+}
+
+.action-modal-tools-header {
+    font-weight: bold;
+    font-size: 11px;
+    padding: 4px 8px;
+    background: #F5F3EB;
+    border-bottom: 1px solid #D6D2C2;
+}
+
+.action-modal-tool-row {
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: "Lucida Console", monospace;
+    border-bottom: 1px solid #EEE;
+}
+
+.action-modal-tool-row:last-child { border-bottom: none; }
+
+.action-modal-error {
+    color: #CC2200;
+    font-size: 12px;
+    padding: 8px;
+    background: #FFF5F5;
+    border: 1px solid #CC2200;
+    border-radius: 2px;
+    margin-top: 8px;
+}
+
+/* === MCP Manager table tweaks === */
+.mcp-tools-list {
+    font-size: 10px;
+    color: #666;
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mcp-source-badge {
+    display: inline-block;
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+.mcp-source-registry { background: #DFF0D8; color: #3C763D; }
+.mcp-source-manual { background: #E8E4D8; color: #555; }
+
+.mcp-test-result {
+    font-size: 10px;
+    margin-top: 2px;
+}
+
+.mcp-test-ok { color: #33AA33; }
+.mcp-test-err { color: #CC2200; }
+
 /* === Responsive tweaks === */
 @media (max-width: 900px) {
     .xp-window {

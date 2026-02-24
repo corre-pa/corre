@@ -326,7 +326,10 @@ async fn score_and_summarize_source(
                 let err_str = e.to_string();
                 let backoff = 5 << attempt;
                 if let Some(available) = parse_context_length_limit(&err_str) {
-                    tracing::info!("Source `{section_name}` max_completion_tokens too large (attempt {}), reducing to {available}",attempt + 1);
+                    tracing::info!(
+                        "Source `{section_name}` max_completion_tokens too large (attempt {}), reducing to {available}",
+                        attempt + 1
+                    );
                     request.max_completion_tokens = Some(available);
                 } else if is_retryable_overload(&err_str) {
                     tracing::info!("Source `{section_name}` rate limited (attempt {}), backing off {backoff}s", attempt + 1);

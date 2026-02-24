@@ -162,12 +162,19 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
     // Create run-now channel for dashboard triggers
     let (run_tx, mut run_rx) = tokio::sync::mpsc::channel::<String>(8);
 
+    // Build registry client and installer
+    let registry_client =
+        Arc::new(corre_registry::RegistryClient::new(config.general.mcp_repository.clone(), config.registry.cache_ttl_secs));
+    let installer = Arc::new(corre_registry::McpInstaller::new(data_dir.clone(), config.general.mcp_repository.clone()));
+
     // Build dashboard state and router
     let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
         tracker: tracker.clone(),
         config: Arc::new(RwLock::new(config.clone())),
         config_path: config_path.clone(),
         run_trigger: run_tx,
+        registry_client: registry_client.clone(),
+        installer: installer.clone(),
     });
     let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
 
@@ -299,11 +306,18 @@ async fn cmd_serve(config: corre_core::config::CorreConfig, config_path: PathBuf
     // Create a dummy sender that will never be read (run-now disabled in serve mode)
     let (run_tx, _run_rx) = tokio::sync::mpsc::channel::<String>(1);
 
+    let data_dir = config.data_dir();
+    let registry_client =
+        Arc::new(corre_registry::RegistryClient::new(config.general.mcp_repository.clone(), config.registry.cache_ttl_secs));
+    let installer = Arc::new(corre_registry::McpInstaller::new(data_dir.clone(), config.general.mcp_repository.clone()));
+
     let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
         tracker: tracker.clone(),
         config: Arc::new(RwLock::new(config.clone())),
         config_path: config_path.clone(),
         run_trigger: run_tx,
+        registry_client,
+        installer,
     });
     let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
 
@@ -348,11 +362,18 @@ async fn run_capability_pipeline(
 ) -> anyhow::Result<(corre_core::publish::Edition, corre_mcp::McpPool)> {
     let capability = registry.get(cap_name).with_context(|| format!("Unknown capability: `{cap_name}`"))?.clone();
 
-    let mcp_defs = capability
-        .manifest()
-        .mcp_servers
+    let mcp_servers = config.resolved_mcp_servers()?;
+    let required = &capability.manifest().mcp_servers;
+    let missing: Vec<_> = required.iter().filter(|name| !mcp_servers.contains_key(name.as_str())).collect();
+    if !missing.is_empty() {
+        let names = missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+        tracing::error!("Missing MCP server config for: {names}");
+        anyhow::bail!("Missing MCP server config for: {names}");
+    }
+
+    let mcp_defs = required
         .iter()
-        .filter_map(|name| config.mcp.servers.get(name).map(|cfg| (name.clone(), corre_mcp::McpServerDef::from_config(name, cfg))))
+        .filter_map(|name| mcp_servers.get(name).map(|cfg| (name.clone(), corre_mcp::McpServerDef::from_config(name, cfg))))
         .collect();
 
     let mcp_pool = corre_mcp::McpPool::new(mcp_defs);

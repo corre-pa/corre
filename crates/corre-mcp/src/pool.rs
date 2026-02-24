@@ -1,7 +1,8 @@
 use crate::server_def::McpServerDef;
 use anyhow::Context;
 use corre_core::capability::McpCaller;
-use rmcp::{ServiceExt, model::CallToolRequestParam, transport::child_process::TokioChildProcess};
+use rmcp::service::Peer;
+use rmcp::{RoleClient, ServiceExt, model::CallToolRequestParam, transport::child_process::TokioChildProcess};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -22,13 +23,28 @@ impl McpPool {
         Self { definitions, clients: Arc::new(Mutex::new(HashMap::new())) }
     }
 
-    async fn ensure_client(&self, server_name: &str) -> anyhow::Result<()> {
+    /// Return a cloned `Peer` handle for the given server, starting it if needed.
+    /// The `Peer` is `Clone` and safe to use outside the lock.
+    async fn get_peer(&self, server_name: &str) -> anyhow::Result<Peer<RoleClient>> {
+        // Fast path: server already running
+        {
+            let clients = self.clients.lock().await;
+            if let Some(client) = clients.get(server_name) {
+                return Ok(client.peer().clone());
+            }
+        }
+
+        // Slow path: start the server without holding the lock
+        let client = self.start_server(server_name).await?;
+        let peer = client.peer().clone();
+
         let mut clients = self.clients.lock().await;
+        // Another task may have started the same server concurrently
         if !clients.contains_key(server_name) {
-            let client = self.start_server(server_name).await?;
             clients.insert(server_name.to_string(), client);
         }
-        Ok(())
+
+        Ok(peer)
     }
 
     async fn start_server(&self, server_name: &str) -> anyhow::Result<RunningClient> {
@@ -61,11 +77,9 @@ impl McpPool {
 #[async_trait::async_trait]
 impl McpCaller for McpPool {
     async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-        self.ensure_client(server_name).await?;
-        let clients = self.clients.lock().await;
-        let client = clients.get(server_name).unwrap();
+        let peer = self.get_peer(server_name).await?;
 
-        let result = client
+        let result = peer
             .call_tool(CallToolRequestParam {
                 name: tool_name.to_string().into(),
                 arguments: match args {
@@ -94,11 +108,8 @@ impl McpCaller for McpPool {
     }
 
     async fn list_tools(&self, server_name: &str) -> anyhow::Result<Vec<String>> {
-        self.ensure_client(server_name).await?;
-        let clients = self.clients.lock().await;
-        let client = clients.get(server_name).unwrap();
-
-        let tools = client.list_tools(None).await?;
-        Ok(tools.tools.iter().map(|t| t.name.to_string()).collect())
+        let peer = self.get_peer(server_name).await?;
+        let tools = peer.list_all_tools().await?;
+        Ok(tools.iter().map(|t| t.name.to_string()).collect())
     }
 }

@@ -47,6 +47,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                     env.insert("BRAVE_API_KEY".into(), state.brave_api_key_env.clone().unwrap_or_else(|| "BRAVE_API_KEY".into()));
                     env
                 },
+                registry_id: None,
             },
         );
     }
@@ -92,7 +93,11 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
         .collect();
 
     CorreConfig {
-        general: GeneralConfig { data_dir: default_data_dir(), log_level: "info".into() },
+        general: GeneralConfig {
+            data_dir: default_data_dir(),
+            log_level: "info".into(),
+            mcp_repository: corre_core::config::default_mcp_repository(),
+        },
         llm: LlmConfig {
             provider: "openai-compatible".into(),
             base_url: state.llm_base_url.clone().unwrap_or_else(|| "https://api.venice.ai/api/v1".into()),
@@ -109,6 +114,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
         mcp: McpConfig { servers: mcp_servers },
         capabilities,
         safety: SafetyConfig::default(),
+        registry: RegistryConfig::default(),
     }
 }
 

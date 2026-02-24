@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -7,12 +8,14 @@ pub struct CorreConfig {
     pub general: GeneralConfig,
     pub llm: LlmConfig,
     pub news: NewsConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
     pub mcp: McpConfig,
     #[serde(default)]
     pub capabilities: Vec<CapabilityConfig>,
     #[serde(default)]
     pub safety: SafetyConfig,
+    #[serde(default)]
+    pub registry: RegistryConfig,
 }
 
 /// Action to take when a policy rule matches.
@@ -78,15 +81,44 @@ impl SafetyConfig {
     }
 }
 
+/// Configuration for the MCP server registry.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RegistryConfig {
+    #[serde(default = "default_registry_url")]
+    pub url: String,
+    #[serde(default = "default_cache_ttl_secs")]
+    pub cache_ttl_secs: u64,
+}
+
+fn default_registry_url() -> String {
+    "http://localhost:5580".to_string()
+}
+
+fn default_cache_ttl_secs() -> u64 {
+    3600
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self { url: default_registry_url(), cache_ttl_secs: default_cache_ttl_secs() }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GeneralConfig {
     pub data_dir: String,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    #[serde(default = "default_mcp_repository")]
+    pub mcp_repository: String,
 }
 
 fn default_log_level() -> String {
     "info".into()
+}
+
+pub fn default_mcp_repository() -> String {
+    "http://localhost:5580".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -145,6 +177,12 @@ pub struct McpConfig {
     pub servers: HashMap<String, McpServerConfig>,
 }
 
+impl McpConfig {
+    pub fn is_empty(&self) -> bool {
+        self.servers.is_empty()
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpServerConfig {
     pub command: String,
@@ -152,6 +190,9 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// If this server was installed from the registry, tracks the registry entry ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -192,7 +233,8 @@ fn default_title() -> String {
 
 impl CorreConfig {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
+        let raw = std::fs::read_to_string(path)?;
+        let content = crate::secret::interpolate_env_vars(&raw);
         let config: Self = toml::from_str(&content)?;
         Ok(config)
     }
@@ -208,6 +250,28 @@ impl CorreConfig {
     pub fn data_dir(&self) -> PathBuf {
         expand_tilde(&self.general.data_dir)
     }
+
+    /// Returns the path to the per-MCP config directory.
+    pub fn mcp_dir(&self) -> PathBuf {
+        self.data_dir().join("config").join("mcp")
+    }
+
+    /// Load per-MCP config files where `installed = true` and return them as
+    /// the legacy `McpServerConfig` map that downstream consumers expect.
+    /// Bare command names are resolved against `{data_dir}/bin/`.
+    pub fn resolved_mcp_servers(&self) -> anyhow::Result<HashMap<String, McpServerConfig>> {
+        let mcp_dir = self.mcp_dir();
+        let bin_dir = self.data_dir().join("bin");
+        let file_configs = load_mcp_configs(&mcp_dir)?;
+        Ok(file_configs
+            .into_iter()
+            .filter(|(_, cfg)| cfg.installed)
+            .map(|(name, cfg)| {
+                let server_cfg = cfg.to_server_config_with_bin_dir(Some(&bin_dir));
+                (name, server_cfg)
+            })
+            .collect())
+    }
 }
 
 pub fn expand_tilde(path: &str) -> PathBuf {
@@ -217,6 +281,91 @@ pub fn expand_tilde(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+// =========================================================================
+// Per-MCP config files ({data_dir}/config/mcp/{name}.toml)
+// =========================================================================
+
+/// Configuration for a single MCP server stored as its own file.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct McpServerFileConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_id: Option<String>,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Config files persist after removal so settings are preserved.
+    /// This flag tracks whether the server is actually installed.
+    #[serde(default)]
+    pub installed: bool,
+}
+
+impl McpServerFileConfig {
+    /// Convert to the legacy `McpServerConfig` used by downstream consumers.
+    /// When `bin_dir` is provided, bare command names (no path separator) are
+    /// resolved to `{bin_dir}/{command}` if the file exists there.
+    pub fn to_server_config_with_bin_dir(&self, bin_dir: Option<&Path>) -> McpServerConfig {
+        let command = if let Some(dir) = bin_dir {
+            if !self.command.contains(std::path::MAIN_SEPARATOR) && !self.command.contains('/') {
+                let candidate = dir.join(&self.command);
+                if candidate.exists() { candidate.to_string_lossy().into_owned() } else { self.command.clone() }
+            } else {
+                self.command.clone()
+            }
+        } else {
+            self.command.clone()
+        };
+        McpServerConfig { command, args: self.args.clone(), env: self.env.clone(), registry_id: self.registry_id.clone() }
+    }
+
+    /// Convert to the legacy `McpServerConfig` without resolving bare commands.
+    pub fn to_server_config(&self) -> McpServerConfig {
+        self.to_server_config_with_bin_dir(None)
+    }
+}
+
+/// Scan `{mcp_dir}/*.toml`, interpolate env vars, and parse each file.
+/// Keys are the file stem (e.g. `brave-search` from `brave-search.toml`).
+pub fn load_mcp_configs(mcp_dir: &Path) -> anyhow::Result<HashMap<String, McpServerFileConfig>> {
+    let mut configs = HashMap::new();
+    let entries = match std::fs::read_dir(mcp_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(configs),
+        Err(e) => return Err(e).context("reading MCP config directory"),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "toml") {
+            let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let raw = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            let interpolated = crate::secret::interpolate_env_vars(&raw);
+            let cfg: McpServerFileConfig = toml::from_str(&interpolated).with_context(|| format!("parsing {}", path.display()))?;
+            configs.insert(name, cfg);
+        }
+    }
+    Ok(configs)
+}
+
+/// Load a single MCP config file *without* env var interpolation, so the
+/// caller can see raw `${VAR}` references (used by the configure modal).
+pub fn load_mcp_config_raw(mcp_dir: &Path, name: &str) -> anyhow::Result<McpServerFileConfig> {
+    let path = mcp_dir.join(format!("{name}.toml"));
+    let raw = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let cfg: McpServerFileConfig = toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(cfg)
+}
+
+/// Serialize and write a per-MCP config file.
+pub fn save_mcp_config(mcp_dir: &Path, name: &str, config: &McpServerFileConfig) -> anyhow::Result<()> {
+    std::fs::create_dir_all(mcp_dir).with_context(|| format!("creating {}", mcp_dir.display()))?;
+    let path = mcp_dir.join(format!("{name}.toml"));
+    let content = toml::to_string_pretty(config)?;
+    std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -232,7 +381,6 @@ mod tests {
         assert_eq!(config.capabilities.len(), 2);
         assert_eq!(config.capabilities[0].name, "daily-brief");
         assert_eq!(config.capabilities[1].name, "rolodex");
-        assert!(config.mcp.servers.contains_key("brave-search"));
     }
 
     #[test]

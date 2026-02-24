@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "updated_at": "2026-02-25T10:56:01Z",
+  "servers": [
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "description": "Web search via the Brave Search API",
+      "version": "1.1.2",
+      "install": {
+        "method": "npx",
+        "package": "@brave/brave-search-mcp-server",
+        "command": "npx",
+        "args": ["-y", "@brave/brave-search-mcp-server"]
+      },
+      "config": [
+        {
+          "name": "BRAVE_API_KEY",
+          "description": "Brave Search API key (https://brave.com/search/api/)",
+          "required": true
+        }
+      ],
+      "tags": ["search", "web"],
+      "verified": true
+    },
+    {
+      "id": "kagi-search",
+      "name": "Kagi Search",
+      "description": "Search and summarization via the Kagi API",
+      "version": "0.1.3",
+      "install": {
+        "method": "pip",
+        "package": "kagimcp",
+        "command": "uvx",
+        "args": ["kagimcp"]
+      },
+      "config": [
+        {
+          "name": "KAGI_API_KEY",
+          "description": "Kagi API key (https://www.kagi.com/account/api)",
+          "required": true
+        },
+        {
+          "name": "KAGI_SUMMARIZER_ENGINE",
+          "description": "Choose which Kagi summarization engine to use: 'cecil' or 'gemini-1.5-pro'. Defaults to 'cecil' if not set.",
+          "required": false
+        }
+      ],
+      "tags": ["search", "web"],
+      "verified": false
+    },
+    {
+      "id": "smtp",
+      "name": "SMTP Email",
+      "description": "Send and draft emails via SMTP",
+      "version": "1.4.0",
+      "install": {
+        "method": "binary",
+        "download_url_template": "/mcp/bin/mcp-smtp-{platform}-{arch}",
+        "binary_name": "mcp-smtp",
+        "sha256": {"linux-x86_64": "9164ae11f3a431d041dc91eb1e78f759b00fca9ced374e1824c79a5a55b7871d", "linux-aarch64": "3e4235757ddd619bc46fc9e6de82dd8d3b756a10ce77b488209ee32fe6b20a49", "linux-armv7": "69a7c3731052f2c29f9fb3827f81601d2cd970d6a161d3fc8b721fdfdaffb50a", "windows-x86_64": "4acf998e192101305b06ad7b378ff15ca812d9ba76868ef107166a4f8b5a9687"},
+        "command": "mcp-smtp",
+        "args": []
+      },
+      "config": [
+        {
+          "name": "SMTP_HOST",
+          "description": "SMTP server hostname",
+          "required": true
+        },
+        {
+          "name": "SMTP_PORT",
+          "description": "SMTP server port (default: 587)",
+          "required": false
+        },
+        {
+          "name": "SMTP_USER",
+          "description": "SMTP authentication username",
+          "required": true
+        },
+        {
+          "name": "SMTP_PASSWORD",
+          "description": "SMTP authentication password",
+          "required": true
+        },
+        {
+          "name": "SMTP_FROM",
+          "description": "Sender email address",
+          "required": true
+        }
+      ],
+      "tags": ["email", "messaging"],
+      "verified": true
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "description": "Send and draft messages via Telegram Bot API",
+      "version": "1.4.0",
+      "install": {
+        "method": "binary",
+        "download_url_template": "/mcp/bin/mcp-telegram-{platform}-{arch}",
+        "binary_name": "mcp-telegram",
+        "sha256": {"linux-x86_64": "824a99b4c5e85b9e1f3eb9a4fac24b801e3ba280fb8fcdffd56caa47421d947a", "linux-aarch64": "f341dc0e838a8bafcca8c3bed3d3536025c730eb460cb52535fd845a8f2cddf9", "linux-armv7": "99b154d88448d3a375046cef7014099ca75eeab7ba8e34d06a0479c878fce344", "windows-x86_64": "e34cc24c53ab5cf966129771398c6a88a2e36df1a86b2e8ee4569103bd394ea6"},
+        "command": "mcp-telegram",
+        "args": []
+      },
+      "config": [
+        {
+          "name": "TELEGRAM_BOT_TOKEN",
+          "description": "Telegram Bot API token from @BotFather",
+          "required": true
+        }
+      ],
+      "tags": ["messaging", "telegram"],
+      "verified": true
+    }
+  ]
+}

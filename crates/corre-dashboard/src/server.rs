@@ -8,6 +8,8 @@ use axum::response::{Html, IntoResponse, Response, Sse};
 use axum::routing::{get, post};
 use corre_core::config::CorreConfig;
 use corre_core::tracker::{DashboardEvent, ExecutionTracker};
+use corre_registry::McpInstaller;
+use corre_registry::RegistryClient;
 use rust_embed::RustEmbed;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -30,6 +32,8 @@ pub struct DashboardState {
     pub config: Arc<RwLock<CorreConfig>>,
     pub config_path: std::path::PathBuf,
     pub run_trigger: mpsc::Sender<String>,
+    pub registry_client: Arc<RegistryClient>,
+    pub installer: Arc<McpInstaller>,
 }
 
 pub fn build_router(state: Arc<DashboardState>) -> Router {
@@ -40,6 +44,17 @@ pub fn build_router(state: Arc<DashboardState>) -> Router {
         .route("/api/dashboard/events", get(sse_handler))
         .route("/api/dashboard/logs/{date}", get(historical_logs_handler))
         .route("/api/settings", get(get_settings_handler).put(put_settings_handler))
+        // Registry & MCP management routes
+        .route("/api/registry/catalog", get(registry_catalog_handler))
+        .route("/api/registry/search", get(registry_search_handler))
+        .route("/api/registry/refresh", post(registry_refresh_handler))
+        .route("/api/mcp/installed", get(mcp_installed_handler))
+        .route("/api/mcp/install", post(mcp_install_handler))
+        .route("/api/mcp/uninstall/{name}", post(mcp_uninstall_handler))
+        .route("/api/mcp/test/{name}", post(mcp_test_handler))
+        .route("/api/mcp/config/{name}", get(mcp_config_handler))
+        .route("/api/mcp/configure/{name}", axum::routing::put(mcp_configure_handler))
+        .route("/api/mcp/deps/{id}", get(mcp_deps_handler))
         .route("/dashboard/static/{*path}", get(static_handler))
         .with_state(state)
 }
@@ -63,6 +78,14 @@ fn check_auth(editor_token: &Option<String>, provided: Option<&str>) -> Result<(
         Some(t) if t == expected => Ok(()),
         _ => Err(StatusCode::FORBIDDEN),
     }
+}
+
+/// Helper: extract token and check auth, returning the token string on success.
+async fn require_auth(state: &DashboardState, headers: &HeaderMap, query: &TokenQuery) -> Result<String, Response<Body>> {
+    let token_str = extract_token(headers, query);
+    let config = state.config.read().await;
+    check_auth(&config.news.editor_token, token_str.as_deref()).map_err(|s| s.into_response())?;
+    Ok(token_str.unwrap_or_default())
 }
 
 async fn dashboard_page_handler(
@@ -267,6 +290,323 @@ async fn put_settings_handler(
     }
     *state.config.write().await = new_config;
     (StatusCode::OK, "Settings saved.").into_response()
+}
+
+// =========================================================================
+// Registry & MCP management endpoints
+// =========================================================================
+
+/// GET /api/registry/catalog — return the full cached manifest.
+async fn registry_catalog_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    match state.registry_client.get_manifest().await {
+        Ok(manifest) => axum::Json(manifest).into_response(),
+        Err(e) => (StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+struct SearchQuery {
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    q: String,
+}
+
+/// GET /api/registry/search?q=... — search entries by name/description/tags.
+async fn registry_search_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<SearchQuery>,
+) -> Response<Body> {
+    let tq = TokenQuery { token: query.token.clone() };
+    if let Err(resp) = require_auth(&state, &headers, &tq).await {
+        return resp;
+    }
+
+    match state.registry_client.search(&query.q).await {
+        Ok(results) => axum::Json(results).into_response(),
+        Err(e) => (StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/registry/refresh — force-refresh the registry cache.
+async fn registry_refresh_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    match state.registry_client.refresh().await {
+        Ok(manifest) => axum::Json(serde_json::json!({
+            "ok": true,
+            "server_count": manifest.servers.len(),
+            "updated_at": manifest.updated_at,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string()).into_response(),
+    }
+}
+
+/// GET /api/mcp/installed — list installed MCP servers from per-MCP config files.
+async fn mcp_installed_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let config = state.config.read().await;
+    let mcp_dir = config.mcp_dir();
+    drop(config);
+
+    let file_configs = match corre_core::config::load_mcp_configs(&mcp_dir) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to load MCP configs: {e}")).into_response(),
+    };
+
+    let servers: Vec<serde_json::Value> = file_configs
+        .iter()
+        .filter(|(_, cfg)| cfg.installed)
+        .map(|(name, cfg)| {
+            serde_json::json!({
+                "name": name,
+                "command": cfg.command,
+                "args": cfg.args,
+                "env": cfg.env,
+                "registry_id": cfg.registry_id,
+                "source": if cfg.registry_id.is_some() { "registry" } else { "manual" },
+            })
+        })
+        .collect();
+
+    axum::Json(servers).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct InstallRequest {
+    id: String,
+    #[serde(default)]
+    env_values: std::collections::HashMap<String, String>,
+}
+
+/// POST /api/mcp/install — install an MCP server from the registry.
+async fn mcp_install_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    body: String,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let req: InstallRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid request: {e}")).into_response(),
+    };
+
+    // Look up the registry entry
+    let entry = match state.registry_client.get_entry(&req.id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return (StatusCode::NOT_FOUND, format!("Registry entry `{}` not found", req.id)).into_response(),
+        Err(e) => {
+            return (StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string()).into_response();
+        }
+    };
+
+    let config = state.config.read().await;
+    let mcp_dir = config.mcp_dir();
+    drop(config);
+
+    // Check if already installed via per-MCP config file
+    if let Ok(existing) = corre_core::config::load_mcp_config_raw(&mcp_dir, &entry.id) {
+        if existing.installed {
+            return (StatusCode::CONFLICT, format!("`{}` is already installed", entry.id)).into_response();
+        }
+    }
+
+    // Run the installer
+    let server_config = match state.installer.install(&entry, &req.env_values).await {
+        Ok(cfg) => cfg,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Install failed: {e}")).into_response(),
+    };
+
+    // Save per-MCP config file with installed = true
+    let file_config = corre_core::config::McpServerFileConfig {
+        registry_id: server_config.registry_id.clone(),
+        command: server_config.command.clone(),
+        args: server_config.args.clone(),
+        env: server_config.env.clone(),
+        installed: true,
+    };
+    if let Err(e) = corre_core::config::save_mcp_config(&mcp_dir, &entry.id, &file_config) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save MCP config: {e}")).into_response();
+    }
+
+    axum::Json(serde_json::json!({ "ok": true, "id": entry.id, "name": entry.name })).into_response()
+}
+
+/// POST /api/mcp/uninstall/{name} — uninstall an MCP server and mark config as not installed.
+async fn mcp_uninstall_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Path(name): Path<String>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let config = state.config.read().await;
+    let mcp_dir = config.mcp_dir();
+    drop(config);
+
+    // Load existing config file
+    let mut file_config = match corre_core::config::load_mcp_config_raw(&mcp_dir, &name) {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::NOT_FOUND, format!("MCP server `{name}` not found")).into_response(),
+    };
+
+    if !file_config.installed {
+        return (StatusCode::NOT_FOUND, format!("MCP server `{name}` is not installed")).into_response();
+    }
+
+    // Run uninstall (binary/npm/pip cleanup)
+    let server_config = file_config.to_server_config();
+    if let Err(e) = state.installer.uninstall(&name, &server_config).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Uninstall failed: {e}")).into_response();
+    }
+
+    // Mark as not installed (keep the file so settings are preserved)
+    file_config.installed = false;
+    if let Err(e) = corre_core::config::save_mcp_config(&mcp_dir, &name, &file_config) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update MCP config: {e}")).into_response();
+    }
+
+    axum::Json(serde_json::json!({ "ok": true, "removed": name })).into_response()
+}
+
+/// POST /api/mcp/test/{name} — start the MCP server, list tools, shut down.
+async fn mcp_test_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Path(name): Path<String>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let config = state.config.read().await;
+    let mcp_dir = config.mcp_dir();
+    let bin_dir = config.data_dir().join("bin");
+    drop(config);
+
+    // Load per-MCP config file (with interpolation for resolved env values)
+    let file_configs = match corre_core::config::load_mcp_configs(&mcp_dir) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to load MCP configs: {e}")).into_response(),
+    };
+
+    let server_config = match file_configs.get(&name) {
+        Some(cfg) => cfg.to_server_config_with_bin_dir(Some(&bin_dir)),
+        None => return (StatusCode::NOT_FOUND, format!("MCP server `{name}` not found")).into_response(),
+    };
+
+    match corre_registry::tester::test_mcp_server(&name, &server_config).await {
+        Ok(tools) => axum::Json(serde_json::json!({ "ok": true, "tools": tools })).into_response(),
+        Err(e) => axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response(),
+    }
+}
+
+/// GET /api/mcp/config/{name} — return raw config (un-interpolated, shows `${VAR}` refs).
+async fn mcp_config_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Path(name): Path<String>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let config = state.config.read().await;
+    let mcp_dir = config.mcp_dir();
+    drop(config);
+
+    match corre_core::config::load_mcp_config_raw(&mcp_dir, &name) {
+        Ok(cfg) => axum::Json(cfg).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, format!("MCP config `{name}` not found")).into_response(),
+    }
+}
+
+/// PUT /api/mcp/configure/{name} — save updated config vars to per-MCP config file.
+async fn mcp_configure_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Path(name): Path<String>,
+    body: String,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let updates: corre_core::config::McpServerFileConfig = match serde_json::from_str(&body) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid config JSON: {e}")).into_response(),
+    };
+
+    let config = state.config.read().await;
+    let mcp_dir = config.mcp_dir();
+    drop(config);
+
+    // Preserve the installed flag from the existing file
+    let installed = corre_core::config::load_mcp_config_raw(&mcp_dir, &name).map(|c| c.installed).unwrap_or(updates.installed);
+
+    let file_config = corre_core::config::McpServerFileConfig { installed, ..updates };
+
+    if let Err(e) = corre_core::config::save_mcp_config(&mcp_dir, &name, &file_config) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save MCP config: {e}")).into_response();
+    }
+
+    axum::Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+/// GET /api/mcp/deps/{id} — check dependencies for a registry entry.
+async fn mcp_deps_handler(
+    State(state): State<Arc<DashboardState>>,
+    headers: HeaderMap,
+    Query(query): Query<TokenQuery>,
+    Path(id): Path<String>,
+) -> Response<Body> {
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
+    }
+
+    let entry = match state.registry_client.get_entry(&id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return (StatusCode::NOT_FOUND, format!("Registry entry `{id}` not found")).into_response(),
+        Err(e) => {
+            return (StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string()).into_response();
+        }
+    };
+
+    let results = corre_registry::deps::check_deps(&entry.dependencies).await;
+    axum::Json(results).into_response()
 }
 
 async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {

@@ -15,11 +15,6 @@ bind = "192.168.1.101:5555"
 title = "Corre News"
 editor_token = "edit"   # set to enable /settings and /settings/topics
 
-[mcp.servers.brave-search]
-command = "npx"
-args = ["-y", "@brave/brave-search-mcp-server"]
-env = { BRAVE_API_KEY = "BRAVE_API_KEY" }
-
 # [safety]
 # enabled = true                    # toggle the prompt-injection defense layer
 # max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size
@@ -36,21 +31,6 @@ schedule = "0 0 5 * * *"
 mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
-
-[mcp.servers.smtp]
-command = "mcp-smtp"
-args = []
-env = { SMTP_HOST = "SMTP_HOST", SMTP_PORT = "SMTP_PORT", SMTP_USER = "SMTP_USER", SMTP_PASSWORD = "SMTP_PASSWORD", SMTP_FROM = "SMTP_FROM" }
-
-[mcp.servers.telegram]
-command = "mcp-telegram"
-args = []
-env = { TELEGRAM_BOT_TOKEN = "TELEGRAM_BOT_TOKEN" }
-
-[mcp.servers.whatsapp]
-command = "mcp-whatsapp"
-args = []
-env = { WHATSAPP_STORE_PATH = "WHATSAPP_STORE_PATH" }
 
 [[capabilities]]
 name = "rolodex"

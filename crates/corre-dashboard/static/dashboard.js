@@ -367,13 +367,25 @@
     // Start > Settings opens the settings window
     document.getElementById("start-settings").addEventListener("click", function (e) {
         e.preventDefault();
-        var win = document.getElementById("settings-window");
-        if (win.classList.contains("minimized")) {
+        openWindow("settings-window");
+        document.getElementById("start-menu").style.display = "none";
+    });
+
+    // Start > MCP Store
+    document.getElementById("start-mcp-store").addEventListener("click", function (e) {
+        e.preventDefault();
+        openWindow("mcp-store-window");
+        loadUnifiedStore();
+        document.getElementById("start-menu").style.display = "none";
+    });
+
+    function openWindow(winId) {
+        var win = document.getElementById(winId);
+        if (win && win.classList.contains("minimized")) {
             win.classList.remove("minimized");
             syncTaskbarState();
         }
-        document.getElementById("start-menu").style.display = "none";
-    });
+    }
 
     document.addEventListener("click", function (e) {
         var menu = document.getElementById("start-menu");
@@ -406,16 +418,6 @@
         setChecked("safety_detect_leaks", config.safety.detect_leaks);
         setChecked("safety_boundary_wrap", config.safety.boundary_wrap);
         setVal("safety_high_severity_action", config.safety.high_severity_action);
-
-        // MCP servers
-        var mcpContainer = document.getElementById("mcpServers");
-        mcpContainer.innerHTML = "";
-        if (config.mcp && config.mcp.servers) {
-            Object.keys(config.mcp.servers).forEach(function (name) {
-                var srv = config.mcp.servers[name];
-                addMcpServerRow(name, srv.command, srv.args || [], srv.env || {});
-            });
-        }
 
         // Capabilities
         var capContainer = document.getElementById("capabilitiesConfig");
@@ -459,24 +461,6 @@
         var token = getVal("news_editor_token");
         if (token) config.news.editor_token = token;
 
-        // Gather MCP servers
-        document.querySelectorAll("#mcpServers .xp-dynamic-row").forEach(function (row) {
-            var name = row.querySelector(".mcp-name").value.trim();
-            if (!name) return;
-            var command = row.querySelector(".mcp-command").value.trim();
-            var argsStr = row.querySelector(".mcp-args").value.trim();
-            var envStr = row.querySelector(".mcp-env").value.trim();
-            var args = argsStr ? argsStr.split(",").map(function (s) { return s.trim(); }) : [];
-            var env = {};
-            if (envStr) {
-                envStr.split(",").forEach(function (pair) {
-                    var parts = pair.split("=");
-                    if (parts.length === 2) env[parts[0].trim()] = parts[1].trim();
-                });
-            }
-            config.mcp.servers[name] = { command: command, args: args, env: env };
-        });
-
         // Gather capabilities
         document.querySelectorAll("#capabilitiesConfig .xp-dynamic-row").forEach(function (row) {
             var cap = {
@@ -492,29 +476,6 @@
         });
 
         return config;
-    }
-
-    function addMcpServerRow(name, command, args, env) {
-        var container = document.getElementById("mcpServers");
-        var row = document.createElement("div");
-        row.className = "xp-dynamic-row";
-
-        var envParts = [];
-        if (env) {
-            Object.keys(env).forEach(function (k) { envParts.push(k + "=" + env[k]); });
-        }
-
-        row.innerHTML =
-            '<div class="xp-fields-grid">' +
-            '<div class="xp-field"><label>Name</label><input type="text" class="xp-input xp-input-wide mcp-name" value="' + esc(name || "") + '"></div>' +
-            '<div class="xp-field"><label>Command</label><input type="text" class="xp-input xp-input-wide mcp-command" value="' + esc(command || "") + '"></div>' +
-            '<div class="xp-field"><label>Args (comma-sep)</label><input type="text" class="xp-input xp-input-wide mcp-args" value="' + esc((args || []).join(", ")) + '"></div>' +
-            '<div class="xp-field"><label>Env (K=V, ...)</label><input type="text" class="xp-input xp-input-wide mcp-env" value="' + esc(envParts.join(", ")) + '"></div>' +
-            '</div>' +
-            '<button type="button" class="xp-button xp-button-remove">Remove</button>';
-
-        row.querySelector(".xp-button-remove").addEventListener("click", function () { row.remove(); });
-        container.appendChild(row);
     }
 
     function addCapabilityRow(cap) {
@@ -579,16 +540,460 @@
         saveSettings();
     });
 
-    document.getElementById("add-mcp-btn").addEventListener("click", function () {
-        addMcpServerRow("", "", [], {});
-    });
-
     document.getElementById("add-cap-btn").addEventListener("click", function () {
         addCapabilityRow({});
     });
 
     // Load settings form with initial config
     loadSettingsForm(CONFIG);
+
+    // =========================================================================
+    // Unified MCP Store (table layout)
+    // =========================================================================
+    var storeTbody = document.getElementById("store-tbody");
+    var storeCatalog = null;        // cached RegistryManifest
+    var installedMcps = [];         // array from /api/mcp/installed
+    var storeSearchText = "";
+    var mcpTestResults = {};        // name -> { ok, tools, error }
+
+    function loadUnifiedStore() {
+        storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading...</td></tr>';
+
+        Promise.all([
+            apiFetch("/api/registry/catalog"),
+            apiFetch("/api/mcp/installed"),
+        ]).then(function (results) {
+            storeCatalog = results[0];
+            installedMcps = results[1];
+            renderStoreTable();
+        }).catch(function (err) {
+            storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Failed to load: ' +
+                escapeHtml(String(err)) + '</td></tr>';
+        });
+    }
+
+    function renderStoreTable() {
+        if (!storeCatalog) return;
+        var servers = storeCatalog.servers || [];
+        var filtered = servers;
+
+        if (storeSearchText) {
+            var q = storeSearchText.toLowerCase();
+            filtered = servers.filter(function (s) {
+                return s.name.toLowerCase().indexOf(q) !== -1 ||
+                    s.description.toLowerCase().indexOf(q) !== -1 ||
+                    (s.tags || []).some(function (t) { return t.toLowerCase().indexOf(q) !== -1; });
+            });
+        }
+
+        if (filtered.length === 0) {
+            storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No servers found</td></tr>';
+            return;
+        }
+
+        // Build installed lookup by registry_id or name
+        var installedIds = {};
+        installedMcps.forEach(function (m) {
+            installedIds[m.registry_id || m.name] = true;
+            installedIds[m.name] = true;
+        });
+
+        var html = "";
+        for (var i = 0; i < filtered.length; i++) {
+            var s = filtered[i];
+            var isInstalled = installedIds[s.id] || false;
+            var dotHtml;
+            if (isInstalled) {
+                dotHtml = '<span class="mcp-installed-dot active store-test-dot" data-name="' +
+                    escapeAttr(s.id) + '" title="Test: list tools"></span>';
+            } else {
+                dotHtml = '<span class="mcp-installed-dot"></span>';
+            }
+            var verifiedHtml = s.verified ? '<span class="store-verified-badge" title="Verified">&#10003;</span>' : '';
+
+            var configHtml = isInstalled
+                ? '<button class="xp-button-icon store-configure-btn" data-name="' + escapeAttr(s.id) + '" title="Configure">&#9881;</button>'
+                : '';
+
+            var actionHtml;
+            if (isInstalled) {
+                actionHtml = '<button class="xp-button xp-button-remove store-remove-btn" data-name="' +
+                    escapeAttr(s.id) + '">Remove</button>';
+            } else {
+                actionHtml = '<button class="xp-button xp-button-primary store-install-btn" data-id="' +
+                    escapeAttr(s.id) + '">Install</button>';
+            }
+
+            html += '<tr>' +
+                '<td style="text-align:center;">' + dotHtml + '</td>' +
+                '<td><span class="cap-name">' + escapeHtml(s.name) + '</span></td>' +
+                '<td class="store-desc-cell" title="' + escapeAttr(s.description) + '">' + escapeHtml(s.description) + '</td>' +
+                '<td>v' + escapeHtml(s.version) + '</td>' +
+                '<td style="text-align:center;">' + verifiedHtml + '</td>' +
+                '<td style="text-align:center;">' + configHtml + '</td>' +
+                '<td>' + actionHtml + '</td>' +
+                '</tr>';
+        }
+        storeTbody.innerHTML = html;
+
+        // Bind install buttons
+        storeTbody.querySelectorAll(".store-install-btn").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var id = btn.getAttribute("data-id");
+                var entry = storeCatalog.servers.find(function (s) { return s.id === id; });
+                if (entry) openInstallModal(entry);
+            });
+        });
+
+        // Bind remove buttons
+        storeTbody.querySelectorAll(".store-remove-btn").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var name = btn.getAttribute("data-name");
+                onMcpRemove(name, btn);
+            });
+        });
+
+        // Bind configure buttons
+        storeTbody.querySelectorAll(".store-configure-btn").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var name = btn.getAttribute("data-name");
+                openConfigureModal(name);
+            });
+        });
+
+        // Bind installed-dot test buttons
+        storeTbody.querySelectorAll(".store-test-dot").forEach(function (dot) {
+            dot.addEventListener("click", function () {
+                var name = dot.getAttribute("data-name");
+                onDotTest(name);
+            });
+        });
+    }
+
+    function onMcpRemove(name, btn) {
+        if (!confirm('Remove MCP server "' + name + '"?')) return;
+        if (btn) btn.disabled = true;
+        apiFetch("/api/mcp/uninstall/" + encodeURIComponent(name), { method: "POST" })
+            .then(function () {
+                loadUnifiedStore();
+            })
+            .catch(function (err) {
+                alert("Uninstall failed: " + err);
+                if (btn) btn.disabled = false;
+            });
+    }
+
+    function onDotTest(name) {
+        openActionModal("Test: " + name);
+        updateActionModal(renderStepHtml([{ label: "Running list_tools on " + name + "...", state: "active" }]));
+
+        apiFetch("/api/mcp/test/" + encodeURIComponent(name), { method: "POST" })
+            .then(function (result) {
+                if (result.ok) {
+                    updateActionModal(
+                        renderStepHtml([{ label: "Test complete", state: "done" }]) +
+                        renderToolList(result.tools)
+                    );
+                } else {
+                    updateActionModal(
+                        renderStepHtml([{ label: "Test failed", state: "error" }]) +
+                        '<div class="action-modal-error">' + escapeHtml(result.error) + '</div>'
+                    );
+                }
+            })
+            .catch(function (err) {
+                updateActionModal(
+                    renderStepHtml([{ label: "Test failed", state: "error" }]) +
+                    '<div class="action-modal-error">' + escapeHtml(String(err)) + '</div>'
+                );
+            });
+    }
+
+    // Store search
+    document.getElementById("store-search").addEventListener("input", function (e) {
+        storeSearchText = e.target.value;
+        renderStoreTable();
+    });
+
+    // Store refresh
+    document.getElementById("store-refresh-btn").addEventListener("click", function () {
+        apiFetch("/api/registry/refresh", { method: "POST" })
+            .then(function () { loadUnifiedStore(); })
+            .catch(function (err) { alert("Refresh failed: " + err); });
+    });
+
+    // Load unified store on init
+    loadUnifiedStore();
+
+    // =========================================================================
+    // Install Modal
+    // =========================================================================
+    var installModal = document.getElementById("install-modal");
+    var currentInstallEntry = null;
+
+    function renderInstallEnvVars(container, envSpecs, existingEnv) {
+        var html = '<div style="font-size:11px;font-weight:bold;margin-bottom:4px;">Environment variables:</div>';
+        envSpecs.forEach(function (spec) {
+            var val = existingEnv[spec.name] || spec.name;
+            html += '<div class="xp-field">' +
+                '<label>' + escapeHtml(spec.name) + (spec.required ? ' *' : '') + '</label>' +
+                '<input type="text" class="xp-input xp-input-wide install-env-input" ' +
+                'data-env-name="' + escapeAttr(spec.name) + '" ' +
+                'value="' + escapeAttr(val) + '" ' +
+                'placeholder="env var name for ' + escapeAttr(spec.name) + '">' +
+                '<div class="env-desc">' + escapeHtml(spec.description) + '</div>' +
+                '</div>';
+        });
+        container.innerHTML = html;
+    }
+
+    function openInstallModal(entry) {
+        currentInstallEntry = entry;
+        document.getElementById("install-modal-title").textContent = "Install " + entry.name;
+        document.getElementById("install-modal-status").textContent = "";
+
+        // Show dependency status
+        var depsDiv = document.getElementById("install-modal-deps");
+        if (entry.dependencies && entry.dependencies.length > 0) {
+            depsDiv.innerHTML = '<div style="font-size:11px;font-weight:bold;margin-bottom:4px;">Dependencies:</div>';
+            depsDiv.innerHTML += entry.dependencies.map(function (d) {
+                return '<div class="install-dep-row"><span>Checking ' + escapeHtml(d) + '...</span></div>';
+            }).join("");
+
+            // Check deps async
+            apiFetch("/api/mcp/deps/" + encodeURIComponent(entry.id))
+                .then(function (results) {
+                    var html = '<div style="font-size:11px;font-weight:bold;margin-bottom:4px;">Dependencies:</div>';
+                    Object.keys(results).forEach(function (dep) {
+                        var status = results[dep];
+                        var cls = status.found ? "dep-ok" : "dep-missing";
+                        var icon = status.found ? "&#10003;" : "&#10007;";
+                        var ver = status.version ? " (" + escapeHtml(status.version) + ")" : "";
+                        html += '<div class="install-dep-row"><span class="' + cls + '">' + icon + '</span> ' +
+                            escapeHtml(dep) + ver + '</div>';
+                    });
+                    depsDiv.innerHTML = html;
+                })
+                .catch(function () {
+                    depsDiv.innerHTML = '<div style="color:#CC2200;font-size:11px;">Failed to check dependencies</div>';
+                });
+        } else {
+            depsDiv.innerHTML = "";
+        }
+
+        // Show env var inputs, pre-populated from existing config if available
+        var envDiv = document.getElementById("install-modal-env");
+        if (entry.config && entry.config.length > 0) {
+            renderInstallEnvVars(envDiv, entry.config, {});
+            // Try to load existing config to pre-populate values
+            apiFetch("/api/mcp/config/" + encodeURIComponent(entry.id))
+                .then(function (cfg) {
+                    if (cfg && cfg.env) {
+                        renderInstallEnvVars(envDiv, entry.config, cfg.env);
+                    }
+                })
+                .catch(function () { /* no existing config, keep defaults */ });
+        } else {
+            envDiv.innerHTML = "";
+        }
+
+        installModal.style.display = "flex";
+    }
+
+    function closeInstallModal() {
+        installModal.style.display = "none";
+        currentInstallEntry = null;
+    }
+
+    document.getElementById("install-modal-close").addEventListener("click", closeInstallModal);
+    document.getElementById("install-modal-cancel").addEventListener("click", closeInstallModal);
+
+    document.getElementById("install-modal-confirm").addEventListener("click", function () {
+        if (!currentInstallEntry) return;
+        var entry = currentInstallEntry;
+        var statusEl = document.getElementById("install-modal-status");
+        statusEl.textContent = "Installing...";
+        statusEl.className = "save-status";
+
+        // Gather env values
+        var envValues = {};
+        document.querySelectorAll("#install-modal-env .install-env-input").forEach(function (input) {
+            var name = input.getAttribute("data-env-name");
+            var val = input.value.trim();
+            if (val) envValues[name] = val;
+        });
+
+        apiFetch("/api/mcp/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: entry.id, env_values: envValues }),
+        }).then(function () {
+            statusEl.textContent = "Installed!";
+            statusEl.className = "save-status save-ok";
+            setTimeout(function () {
+                closeInstallModal();
+                loadUnifiedStore();
+            }, 800);
+        }).catch(function (err) {
+            statusEl.textContent = "Error: " + err;
+            statusEl.className = "save-status save-err";
+        });
+    });
+
+    // Close modal on overlay click
+    installModal.addEventListener("click", function (e) {
+        if (e.target === installModal) closeInstallModal();
+    });
+
+    // =========================================================================
+    // Configure Modal
+    // =========================================================================
+    var configureModal = document.getElementById("configure-modal");
+    var currentConfigureName = null;
+
+    function openConfigureModal(name) {
+        currentConfigureName = name;
+        document.getElementById("configure-modal-title").textContent = "Configure: " + name;
+        document.getElementById("configure-modal-status").textContent = "";
+        var fieldsDiv = document.getElementById("configure-modal-fields");
+        fieldsDiv.innerHTML = '<div style="color:#888;font-size:12px;">Loading...</div>';
+        configureModal.style.display = "flex";
+
+        apiFetch("/api/mcp/config/" + encodeURIComponent(name))
+            .then(function (cfg) {
+                var html = '';
+                html += '<div class="xp-field"><label>Command</label>' +
+                    '<input type="text" class="xp-input xp-input-wide cfg-command" value="' + esc(cfg.command) + '"></div>';
+                html += '<div class="xp-field"><label>Args (comma-sep)</label>' +
+                    '<input type="text" class="xp-input xp-input-wide cfg-args" value="' + esc((cfg.args || []).join(", ")) + '"></div>';
+
+                var envKeys = Object.keys(cfg.env || {});
+                if (envKeys.length > 0) {
+                    html += '<div style="font-size:11px;font-weight:bold;margin:8px 0 4px;">Environment variables:</div>';
+                    envKeys.forEach(function (k) {
+                        html += '<div class="xp-field">' +
+                            '<label>' + escapeHtml(k) + '</label>' +
+                            '<input type="text" class="xp-input xp-input-wide cfg-env-input" data-env-key="' + escapeAttr(k) + '" value="' + esc(cfg.env[k]) + '">' +
+                            '</div>';
+                    });
+                }
+
+                fieldsDiv.innerHTML = html;
+            })
+            .catch(function (err) {
+                fieldsDiv.innerHTML = '<div style="color:#CC2200;font-size:12px;">Failed to load config: ' + escapeHtml(String(err)) + '</div>';
+            });
+    }
+
+    function closeConfigureModal() {
+        configureModal.style.display = "none";
+        currentConfigureName = null;
+    }
+
+    document.getElementById("configure-modal-close").addEventListener("click", closeConfigureModal);
+    document.getElementById("configure-modal-cancel").addEventListener("click", closeConfigureModal);
+
+    document.getElementById("configure-modal-save").addEventListener("click", function () {
+        if (!currentConfigureName) return;
+        var statusEl = document.getElementById("configure-modal-status");
+        statusEl.textContent = "Saving...";
+        statusEl.className = "save-status";
+
+        var command = configureModal.querySelector(".cfg-command").value.trim();
+        var argsStr = configureModal.querySelector(".cfg-args").value.trim();
+        var args = argsStr ? argsStr.split(",").map(function (s) { return s.trim(); }) : [];
+        var env = {};
+        configureModal.querySelectorAll(".cfg-env-input").forEach(function (input) {
+            var key = input.getAttribute("data-env-key");
+            env[key] = input.value.trim();
+        });
+
+        var body = { command: command, args: args, env: env, installed: true };
+
+        apiFetch("/api/mcp/configure/" + encodeURIComponent(currentConfigureName), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        }).then(function () {
+            statusEl.textContent = "Saved!";
+            statusEl.className = "save-status save-ok";
+            setTimeout(closeConfigureModal, 600);
+        }).catch(function (err) {
+            statusEl.textContent = "Error: " + err;
+            statusEl.className = "save-status save-err";
+        });
+    });
+
+    configureModal.addEventListener("click", function (e) {
+        if (e.target === configureModal) closeConfigureModal();
+    });
+
+    // =========================================================================
+    // Action Modal (reusable popup)
+    // =========================================================================
+    var actionModal = document.getElementById("action-modal");
+
+    function openActionModal(title) {
+        document.getElementById("action-modal-title").textContent = title;
+        document.getElementById("action-modal-body").innerHTML =
+            '<div class="action-modal-spinner">Working...</div>';
+        actionModal.style.display = "flex";
+    }
+
+    function updateActionModal(html) {
+        document.getElementById("action-modal-body").innerHTML = html;
+    }
+
+    function closeActionModal() {
+        actionModal.style.display = "none";
+    }
+
+    document.getElementById("action-modal-close").addEventListener("click", closeActionModal);
+    actionModal.addEventListener("click", function (e) {
+        if (e.target === actionModal) closeActionModal();
+    });
+
+    function renderToolList(tools) {
+        if (!tools || tools.length === 0) {
+            return '<div style="padding:8px;color:#888;font-size:12px;">No tools reported</div>';
+        }
+        var html = '<div class="action-modal-tools">' +
+            '<div class="action-modal-tools-header">' + tools.length + ' tools available</div>';
+        for (var i = 0; i < tools.length; i++) {
+            html += '<div class="action-modal-tool-row">' + escapeHtml(tools[i]) + '</div>';
+        }
+        return html + '</div>';
+    }
+
+    function renderStepHtml(steps) {
+        var html = '';
+        for (var i = 0; i < steps.length; i++) {
+            var s = steps[i];
+            var cls = 'action-modal-step action-modal-step-' + s.state;
+            var icon = s.state === 'done' ? '&#10003;' : s.state === 'active' ? '&#9679;' : '&#10007;';
+            html += '<div class="' + cls + '"><span class="action-modal-step-icon">' +
+                icon + '</span> ' + escapeHtml(s.label) + '</div>';
+        }
+        return html;
+    }
+
+    // =========================================================================
+    // Shared API helper
+    // =========================================================================
+    function apiFetch(url, opts) {
+        opts = opts || {};
+        var sep = url.indexOf("?") === -1 ? "?" : "&";
+        var fullUrl = url + sep + "token=" + encodeURIComponent(TOKEN);
+        var headers = opts.headers || {};
+        headers["Authorization"] = "Bearer " + TOKEN;
+        return fetch(fullUrl, Object.assign({}, opts, { headers: headers }))
+            .then(function (resp) {
+                if (!resp.ok) {
+                    return resp.text().then(function (t) { throw new Error(t); });
+                }
+                return resp.json();
+            });
+    }
 
     // =========================================================================
     // Clock

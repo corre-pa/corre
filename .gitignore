@@ -7,3 +7,4 @@ Cargo.lock
 .idea/
 todos.md
 dist/
+mcp-registry/site/
