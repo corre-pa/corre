@@ -20,15 +20,12 @@ PLATFORMS=(
 )
 
 # Files to include in every bundle (relative to REPO_DIR)
+# Note: templates/ and static/ are embedded into the binary at compile time
+# via rust_embed and askama, so they are not needed here.
 STATIC_FILES=(
     README.md
+    CHANGELOG.md
     config/topics.yml
-    templates/newspaper.html
-    templates/settings.html
-    templates/topics.html
-    static/style.css
-    static/settings.css
-    static/settings.js
 )
 
 # ── Color helpers ────────────────────────────────────────────────────────────
@@ -87,7 +84,7 @@ bundle_platform() {
 
     # Create directory structure
     rm -rf "${staging}"
-    mkdir -p "${staging}/config" "${staging}/templates" "${staging}/static"
+    mkdir -p "${staging}/config"
 
     # Copy binary
     cp "${binary_src}" "${staging}/${BINARY_NAME}${exe_suffix}"
