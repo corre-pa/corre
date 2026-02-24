@@ -1,3 +1,8 @@
+//! Dependency detection and auto-installation for the setup wizard.
+//!
+//! Checks whether required external tools (Node.js, npx) are on `PATH` and offers
+//! to install them via the platform's package manager.
+
 use console::Style;
 use dialoguer::{Confirm, Select};
 use std::process::Command;

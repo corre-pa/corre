@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "updated_at": "2026-02-26T08:37:04Z",
   "servers": [
     {
@@ -142,5 +142,6 @@
       ],
       "verified": true
     }
-  ]
+  ],
+  "capabilities": []
 }

@@ -1,3 +1,8 @@
+//! Structured reporting of safety pipeline findings.
+//!
+//! `SanitizationReport` accumulates every finding for a single pipeline run and emits
+//! them as structured `tracing` events. `FindingDetail` carries per-finding metadata.
+
 /// Extract a context window around a byte offset, clamped to the input bounds.
 /// Returns up to `radius` chars either side of the matched span.
 pub fn excerpt(input: &str, start: usize, end: usize, radius: usize) -> String {

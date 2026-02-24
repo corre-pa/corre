@@ -1,0 +1,514 @@
+//! Subprocess-based capability that implements the CCPP v1/v2 protocol.
+//!
+//! Spawns a child process, sends `initialize`, then serves `mcp/callTool`,
+//! `mcp/listTools`, `llm/complete`, and `output/*` requests from the plugin
+//! using the host's safety-wrapped MCP and LLM providers.
+
+use corre_core::capability::{Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, ProgressEvent, ProgressStatus};
+use corre_core::sandbox::LandlockSandbox;
+use corre_sdk::manifest::{OutputDeclaration, OutputType, SandboxPermissions};
+use corre_sdk::protocol::{
+    self, CapabilityErrorParams, CapabilityResultParams, ErrorCode, InitializeParams, LogParams, McpCallToolParams, McpListToolsParams,
+    Message, Notification, OutputRestParams, OutputStreamParams, OutputWebhookParams, OutputWriteParams, PROTOCOL_VERSION, ProgressParams,
+    Request, Response,
+};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+
+/// A capability backed by an external subprocess speaking CCPP v1/v2.
+pub struct SubprocessCapability {
+    manifest: CapabilityManifest,
+    binary: PathBuf,
+    plugin_dir: PathBuf,
+    /// Declared output destinations from the plugin manifest.
+    output_declarations: Vec<OutputDeclaration>,
+    /// Sandbox permissions from the plugin manifest (None = no sandbox).
+    sandbox_perms: Option<SandboxPermissions>,
+    /// Data directory root for resolving output paths.
+    data_dir: PathBuf,
+    progress: Mutex<SubprocessProgress>,
+}
+
+struct SubprocessProgress {
+    phase: String,
+    percent: Option<u8>,
+    output: Option<CapabilityOutput>,
+    error: Option<String>,
+}
+
+impl SubprocessCapability {
+    pub fn new(manifest: CapabilityManifest, binary: PathBuf, plugin_dir: PathBuf) -> Self {
+        Self {
+            manifest,
+            binary,
+            plugin_dir,
+            output_declarations: Vec::new(),
+            sandbox_perms: None,
+            data_dir: PathBuf::new(),
+            progress: Mutex::new(SubprocessProgress { phase: "init".into(), percent: None, output: None, error: None }),
+        }
+    }
+
+    /// Set the output declarations from the plugin manifest.
+    pub fn with_outputs(mut self, outputs: Vec<OutputDeclaration>) -> Self {
+        self.output_declarations = outputs;
+        self
+    }
+
+    /// Set the sandbox permissions from the plugin manifest.
+    pub fn with_sandbox(mut self, perms: Option<SandboxPermissions>) -> Self {
+        self.sandbox_perms = perms;
+        self
+    }
+
+    /// Set the data directory for resolving output paths.
+    pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
+        self.data_dir = data_dir;
+        self
+    }
+
+    /// Send a newline-terminated JSON message to the child's stdin.
+    async fn write_msg(stdin: &mut tokio::process::ChildStdin, value: &serde_json::Value) -> anyhow::Result<()> {
+        let mut json = serde_json::to_string(value)?;
+        json.push('\n');
+        stdin.write_all(json.as_bytes()).await?;
+        stdin.flush().await?;
+        Ok(())
+    }
+
+    /// Read one newline-terminated JSON message from the child's stdout.
+    async fn read_msg(reader: &mut BufReader<tokio::process::ChildStdout>) -> anyhow::Result<Option<serde_json::Value>> {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            return Ok(None);
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        if trimmed.len() > protocol::MAX_MESSAGE_BYTES {
+            anyhow::bail!("message exceeds {} byte limit", protocol::MAX_MESSAGE_BYTES);
+        }
+        Ok(Some(serde_json::from_str(trimmed)?))
+    }
+
+    /// Send `initialize` and wait for the response.
+    async fn initialize(
+        stdin: &mut tokio::process::ChildStdin,
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+        params: &InitializeParams,
+    ) -> anyhow::Result<()> {
+        let req = Request::new(1, "initialize", Some(serde_json::to_value(params)?));
+        Self::write_msg(stdin, &serde_json::to_value(&req)?).await?;
+
+        let resp_val = Self::read_msg(reader).await?.ok_or_else(|| anyhow::anyhow!("plugin closed before initialize response"))?;
+
+        let resp: Response = serde_json::from_value(resp_val)?;
+        if let Some(err) = resp.error {
+            anyhow::bail!("plugin initialize failed ({}): {}", err.code, err.message);
+        }
+
+        Ok(())
+    }
+
+    /// Send `shutdown` notification and wait for the process to exit.
+    async fn shutdown(stdin: &mut tokio::process::ChildStdin, child: &mut Child) {
+        let notif = Notification::new("shutdown", None);
+        let _ = Self::write_msg(stdin, &serde_json::to_value(&notif).unwrap()).await;
+
+        // 5s grace period
+        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
+            Ok(_) => {}
+            Err(_) => {
+                tracing::warn!("plugin did not exit in 5s, killing");
+                let _ = child.kill().await;
+            }
+        }
+    }
+
+    /// Dispatch a single request from the plugin.
+    async fn dispatch_request(ctx: &CapabilityContext, req: &Request, outputs: &[OutputDeclaration], data_dir: &Path) -> Response {
+        match req.method.as_str() {
+            "mcp/callTool" => Self::handle_mcp_call_tool(ctx, req).await,
+            "mcp/listTools" => Self::handle_mcp_list_tools(ctx, req).await,
+            "llm/complete" => Self::handle_llm_complete(ctx, req).await,
+            "output/write" => Self::handle_output_write(req, outputs, data_dir).await,
+            "output/rest" => Self::handle_output_rest(req, outputs).await,
+            "output/webhook" => Self::handle_output_webhook(req, outputs).await,
+            _ => Response::err(req.id, ErrorCode::METHOD_NOT_FOUND, format!("unknown method: {}", req.method)),
+        }
+    }
+
+    async fn handle_mcp_call_tool(ctx: &CapabilityContext, req: &Request) -> Response {
+        let params: McpCallToolParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+            Some(p) => p,
+            None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid mcp/callTool params"),
+        };
+
+        match ctx.mcp.call_tool(&params.server_name, &params.tool_name, params.arguments).await {
+            Ok(result) => Response::ok(req.id, result),
+            Err(e) => Response::err(req.id, ErrorCode::MCP_TOOL_ERROR, format!("{e:#}")),
+        }
+    }
+
+    async fn handle_mcp_list_tools(ctx: &CapabilityContext, req: &Request) -> Response {
+        let params: McpListToolsParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+            Some(p) => p,
+            None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid mcp/listTools params"),
+        };
+
+        match ctx.mcp.list_tools(&params.server_name).await {
+            Ok(tools) => Response::ok(req.id, serde_json::to_value(&tools).unwrap_or_default()),
+            Err(e) => Response::err(req.id, ErrorCode::MCP_SERVER_UNAVAILABLE, format!("{e:#}")),
+        }
+    }
+
+    async fn handle_llm_complete(ctx: &CapabilityContext, req: &Request) -> Response {
+        // SDK and core LLM types are identical (core re-exports from SDK).
+        let llm_req: corre_core::capability::LlmRequest = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+            Some(r) => r,
+            None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid llm/complete params"),
+        };
+
+        match ctx.llm.complete(llm_req).await {
+            Ok(resp) => Response::ok(req.id, serde_json::to_value(&resp).unwrap_or_default()),
+            Err(e) => {
+                let err_str = format!("{e:#}");
+                if err_str.contains("429") || err_str.contains("rate limited") {
+                    Response::err(req.id, ErrorCode::LLM_RATE_LIMITED, err_str)
+                } else {
+                    Response::err(req.id, ErrorCode::LLM_PROVIDER_ERROR, err_str)
+                }
+            }
+        }
+    }
+
+    // ── Output handlers ──────────────────────────────────────────────────
+
+    async fn handle_output_write(req: &Request, outputs: &[OutputDeclaration], data_dir: &Path) -> Response {
+        let params: OutputWriteParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+            Some(p) => p,
+            None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid output/write params"),
+        };
+
+        if !is_output_permitted(&params.path, OutputType::Filesystem, outputs) {
+            return Response::err(req.id, ErrorCode::OUTPUT_DENIED, format!("output/write to `{}` not declared in manifest", params.path));
+        }
+
+        let full_path = data_dir.join(&params.path);
+        if let Some(parent) = full_path.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            return Response::err(
+                req.id,
+                ErrorCode::OUTPUT_FAILED,
+                format!("failed to create directories for {}: {e}", full_path.display()),
+            );
+        }
+
+        match tokio::fs::write(&full_path, params.data.as_bytes()).await {
+            Ok(()) => Response::ok(req.id, serde_json::json!({"written": full_path.display().to_string()})),
+            Err(e) => Response::err(req.id, ErrorCode::OUTPUT_FAILED, format!("write to {} failed: {e}", full_path.display())),
+        }
+    }
+
+    async fn handle_output_rest(req: &Request, outputs: &[OutputDeclaration]) -> Response {
+        let params: OutputRestParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+            Some(p) => p,
+            None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid output/rest params"),
+        };
+
+        if !is_output_permitted(&params.url, OutputType::Rest, outputs) {
+            return Response::err(req.id, ErrorCode::OUTPUT_DENIED, format!("output/rest to `{}` not declared in manifest", params.url));
+        }
+
+        let client = reqwest::Client::new();
+        let mut request = client.post(&params.url).json(&params.body);
+        if let Some(ref ct) = params.content_type {
+            request = request.header("Content-Type", ct);
+        }
+
+        match request.send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                Response::ok(req.id, serde_json::json!({"status": status}))
+            }
+            Err(e) => Response::err(req.id, ErrorCode::OUTPUT_FAILED, format!("REST POST failed: {e}")),
+        }
+    }
+
+    async fn handle_output_webhook(req: &Request, outputs: &[OutputDeclaration]) -> Response {
+        let params: OutputWebhookParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+            Some(p) => p,
+            None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid output/webhook params"),
+        };
+
+        if !is_output_permitted(&params.url, OutputType::Webhook, outputs) {
+            return Response::err(req.id, ErrorCode::OUTPUT_DENIED, format!("output/webhook to `{}` not declared in manifest", params.url));
+        }
+
+        let client = reqwest::Client::new();
+        match client.post(&params.url).json(&params.body).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                Response::ok(req.id, serde_json::json!({"status": status}))
+            }
+            Err(e) => Response::err(req.id, ErrorCode::OUTPUT_FAILED, format!("webhook failed: {e}")),
+        }
+    }
+
+    /// Compute the per-capability scoped data directory.
+    fn scoped_data_dir(&self) -> PathBuf {
+        self.data_dir.join(&self.manifest.name)
+    }
+
+    /// Build the `Command` for spawning the plugin, optionally sandboxed with Landlock + seccomp.
+    fn build_spawn_command(&self) -> Command {
+        let mut cmd = Command::new(&self.binary);
+        cmd.current_dir(&self.plugin_dir);
+        if let Some(ref perms) = self.sandbox_perms {
+            let sandbox = LandlockSandbox::from_permissions(perms, &self.plugin_dir, &self.data_dir, &self.manifest.name);
+            sandbox.apply_to_command(&mut cmd);
+        }
+        cmd
+    }
+}
+
+/// Check whether a given target (path or URL) matches a declared output.
+fn is_output_permitted(target: &str, output_type: OutputType, declarations: &[OutputDeclaration]) -> bool {
+    // If no outputs are declared, deny all output requests
+    declarations.iter().any(|d| d.output_type == output_type && target_matches_declaration(target, &d.target))
+}
+
+/// Simple glob-style matching: a declaration target is a prefix/pattern.
+/// For filesystem: "editions/{date}/edition.json" matches "editions/2026-02-26/edition.json"
+/// For URLs: exact prefix match.
+fn target_matches_declaration(target: &str, pattern: &str) -> bool {
+    if pattern.contains('{') {
+        // Convert template to a simple prefix match: everything before the first `{`
+        let prefix = pattern.split('{').next().unwrap_or("");
+        target.starts_with(prefix)
+    } else {
+        target == pattern || target.starts_with(pattern)
+    }
+}
+
+#[async_trait::async_trait]
+impl Capability for SubprocessCapability {
+    fn manifest(&self) -> &CapabilityManifest {
+        &self.manifest
+    }
+
+    async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput> {
+        // Reset progress state
+        {
+            let mut progress = self.progress.lock().unwrap();
+            progress.phase = "init".into();
+            progress.percent = None;
+            progress.output = None;
+            progress.error = None;
+        }
+
+        // Per-capability scoped directory — create it and config/ subdir before spawning
+        let scoped_data_dir = self.scoped_data_dir();
+        tokio::fs::create_dir_all(scoped_data_dir.join("config"))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to create capability dir {}: {e}", scoped_data_dir.display()))?;
+
+        let mut child = self
+            .build_spawn_command()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                anyhow::anyhow!("failed to spawn plugin {} (workdir: {}): {e}", self.binary.display(), self.plugin_dir.display())
+            })?;
+
+        let mut stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
+
+        let mut reader = BufReader::new(stdout);
+
+        // Capture stderr in background
+        let cap_name = self.manifest.name.clone();
+        tokio::spawn(async move {
+            let mut stderr_reader = BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) = stderr_reader.read_line(&mut line).await {
+                if n == 0 {
+                    break;
+                }
+                tracing::debug!("[plugin:{cap_name}:stderr] {}", line.trim_end());
+                line.clear();
+            }
+        });
+
+        // Send initialize — config_dir points at the capability's scoped directory
+        let init_params = InitializeParams {
+            protocol_version: PROTOCOL_VERSION.into(),
+            capability_name: self.manifest.name.clone(),
+            config_dir: scoped_data_dir.to_string_lossy().into_owned(),
+            config_path: self.manifest.config_path.clone(),
+            seen_urls: ctx.seen_urls.iter().cloned().collect(),
+            max_concurrent_llm: ctx.max_concurrent_llm,
+            mcp_servers: self.manifest.mcp_servers.clone(),
+            timeout_secs: 600,
+        };
+
+        Self::initialize(&mut stdin, &mut reader, &init_params).await?;
+
+        // Main message loop: read from plugin, dispatch, respond
+        loop {
+            let msg_val = match Self::read_msg(&mut reader).await? {
+                Some(v) => v,
+                None => {
+                    // EOF — plugin exited
+                    break;
+                }
+            };
+
+            let msg: Message = serde_json::from_value(msg_val)?;
+
+            match msg {
+                Message::Request(req) => {
+                    // Validate method is in the allowlist
+                    if !protocol::ALLOWED_METHODS.contains(&req.method.as_str()) {
+                        let resp = Response::err(req.id, ErrorCode::METHOD_NOT_FOUND, format!("method not allowed: {}", req.method));
+                        Self::write_msg(&mut stdin, &serde_json::to_value(&resp)?).await?;
+                        continue;
+                    }
+
+                    let resp = Self::dispatch_request(ctx, &req, &self.output_declarations, &scoped_data_dir).await;
+                    Self::write_msg(&mut stdin, &serde_json::to_value(&resp)?).await?;
+                }
+                Message::Notification(notif) => match notif.method.as_str() {
+                    "capability/result" => {
+                        if let Some(params) = notif.params
+                            && let Ok(result) = serde_json::from_value::<CapabilityResultParams>(params)
+                        {
+                            let mut progress = self.progress.lock().unwrap();
+                            progress.output = Some(result.output);
+                            progress.phase = "done".into();
+                        }
+                        Self::shutdown(&mut stdin, &mut child).await;
+                        break;
+                    }
+                    "capability/error" => {
+                        if let Some(params) = notif.params
+                            && let Ok(err_params) = serde_json::from_value::<CapabilityErrorParams>(params)
+                        {
+                            let mut progress = self.progress.lock().unwrap();
+                            progress.error = Some(err_params.message.clone());
+                            if let Some(partial) = err_params.partial_output {
+                                progress.output = Some(partial);
+                            }
+                        }
+                        Self::shutdown(&mut stdin, &mut child).await;
+                        break;
+                    }
+                    "output/stream" => {
+                        if let Some(params) = notif.params
+                            && let Ok(stream) = serde_json::from_value::<OutputStreamParams>(params)
+                        {
+                            tracing::info!("[plugin:{}] stream: {}", self.manifest.name, stream.chunk.trim_end());
+                        }
+                    }
+                    "progress" => {
+                        if let Some(params) = notif.params
+                            && let Ok(p) = serde_json::from_value::<ProgressParams>(params)
+                        {
+                            if let Some(ref tx) = ctx.progress_tx {
+                                let _ = tx.send(ProgressEvent::Progress { pct: p.percent, phase: p.phase.clone() });
+                            }
+                            let mut progress = self.progress.lock().unwrap();
+                            progress.phase = p.phase;
+                            progress.percent = p.percent;
+                            if let Some(msg) = p.message {
+                                tracing::info!("[plugin:{}] progress: {msg}", self.manifest.name);
+                            }
+                        }
+                    }
+                    "log" => {
+                        if let Some(params) = notif.params
+                            && let Ok(log) = serde_json::from_value::<LogParams>(params)
+                        {
+                            if let Some(ref tx) = ctx.progress_tx {
+                                let _ = tx.send(ProgressEvent::Log { level: log.level.clone(), message: log.message.clone() });
+                            }
+                            match log.level.to_uppercase().as_str() {
+                                "ERROR" => tracing::error!("[plugin:{}] {}", self.manifest.name, log.message),
+                                "WARN" => tracing::warn!("[plugin:{}] {}", self.manifest.name, log.message),
+                                "DEBUG" => tracing::debug!("[plugin:{}] {}", self.manifest.name, log.message),
+                                _ => tracing::info!("[plugin:{}] {}", self.manifest.name, log.message),
+                            }
+                        }
+                    }
+                    _ => {
+                        tracing::debug!("ignoring unknown notification: {}", notif.method);
+                    }
+                },
+                Message::Response(_) => {
+                    tracing::debug!("ignoring unexpected response from plugin");
+                }
+            }
+        }
+
+        // Extract result
+        let progress = self.progress.lock().unwrap();
+        if let Some(ref error) = progress.error {
+            if let Some(ref partial) = progress.output {
+                tracing::warn!("[plugin:{}] error with partial output: {error}", self.manifest.name);
+                return Ok(partial.clone());
+            }
+            anyhow::bail!("plugin error: {error}");
+        }
+
+        progress.output.clone().ok_or_else(|| anyhow::anyhow!("plugin exited without sending capability/result"))
+    }
+
+    async fn in_progress(&self) -> ProgressStatus {
+        let progress = self.progress.lock().unwrap();
+        if let Some(ref output) = progress.output {
+            return ProgressStatus::Done(output.clone());
+        }
+        ProgressStatus::StillBusy(progress.percent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corre_sdk::manifest::{OutputDeclaration, OutputType};
+
+    #[test]
+    fn output_permission_filesystem() {
+        let decls = vec![OutputDeclaration {
+            output_type: OutputType::Filesystem,
+            target: "editions/{date}/edition.json".into(),
+            content_type: None,
+        }];
+        assert!(is_output_permitted("editions/2026-02-26/edition.json", OutputType::Filesystem, &decls));
+        assert!(!is_output_permitted("secrets/keys.json", OutputType::Filesystem, &decls));
+    }
+
+    #[test]
+    fn output_permission_url() {
+        let decls = vec![OutputDeclaration {
+            output_type: OutputType::Rest,
+            target: "http://localhost:5510/api/editions".into(),
+            content_type: None,
+        }];
+        assert!(is_output_permitted("http://localhost:5510/api/editions", OutputType::Rest, &decls));
+        assert!(!is_output_permitted("http://evil.com/steal", OutputType::Rest, &decls));
+    }
+
+    #[test]
+    fn no_declarations_denies_all() {
+        assert!(!is_output_permitted("anything", OutputType::Filesystem, &[]));
+    }
+}

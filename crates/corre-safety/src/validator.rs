@@ -1,3 +1,8 @@
+//! Stage 1 of the safety pipeline: structural validation of raw MCP tool output.
+//!
+//! Enforces size limits, strips null bytes, collapses whitespace obfuscation,
+//! and truncates token-stuffing character runs before pattern matching begins.
+
 use crate::report::SanitizationReport;
 
 const MAX_IDENTICAL_RUN: usize = 500;

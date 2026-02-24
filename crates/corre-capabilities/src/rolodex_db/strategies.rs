@@ -1,5 +1,11 @@
-use crate::db::Database;
-use crate::models::{Contact, Importance, OutreachLog, OutreachStrategy, StrategyType};
+//! Outreach strategy management, execution scheduling, and the outreach log.
+//!
+//! Extends `Database` with methods to insert, query, and replace strategies, determine
+//! which are due based on elapsed interval, mark them executed, and generate default
+//! strategy sets from a contact's importance level.
+
+use super::db::Database;
+use super::models::{Contact, Importance, OutreachLog, OutreachStrategy, StrategyType};
 use anyhow::Context;
 use rusqlite::params;
 
@@ -188,8 +194,8 @@ fn row_to_log(row: &rusqlite::Row) -> rusqlite::Result<OutreachLog> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::contacts::new_contact;
     use super::*;
-    use crate::contacts::new_contact;
 
     fn test_db_with_contact() -> (Database, Contact) {
         let db = Database::open_in_memory().unwrap();

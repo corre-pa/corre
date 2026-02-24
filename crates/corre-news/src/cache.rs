@@ -1,6 +1,11 @@
+//! In-memory edition cache backed by the filesystem `Archive`.
+//!
+//! Loads all editions into a `BTreeMap` at startup so HTTP handlers never touch the filesystem
+//! during a request. Also tracks all source URLs for cross-edition deduplication.
+
 use crate::archive::Archive;
+use crate::edition::Edition;
 use chrono::NaiveDate;
-use corre_core::publish::Edition;
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::RwLock;
@@ -80,6 +85,31 @@ impl EditionCache {
         Ok(path)
     }
 
+    /// Rescan the filesystem archive and load any editions not already cached.
+    pub async fn refresh(&self) {
+        let Ok(dates) = self.archive.list_dates() else { return };
+        let inner = self.inner.read().await;
+        let new_dates: Vec<NaiveDate> = dates.into_iter().filter(|d| !inner.editions.contains_key(d)).collect();
+        drop(inner);
+
+        if new_dates.is_empty() {
+            return;
+        }
+
+        let mut inner = self.inner.write().await;
+        for date in new_dates {
+            // Re-check under write lock to avoid TOCTOU
+            if inner.editions.contains_key(&date) {
+                continue;
+            }
+            if let Ok(Some(edition)) = self.archive.load(date) {
+                tracing::info!("Discovered new edition for {date}");
+                collect_urls(&edition, &mut inner.seen_urls);
+                inner.editions.insert(date, edition);
+            }
+        }
+    }
+
     /// Return a clone of all seen source URLs across all editions.
     pub async fn seen_urls(&self) -> HashSet<String> {
         self.inner.read().await.seen_urls.clone()
@@ -97,7 +127,7 @@ impl EditionCache {
 /// The headline is re-derived from the highest-scoring article.
 fn merge_editions(existing: &Edition, incoming: &Edition) -> Edition {
     use std::collections::HashMap;
-    let mut section_map: HashMap<String, Vec<corre_core::publish::Article>> = HashMap::new();
+    let mut section_map: HashMap<String, Vec<crate::edition::Article>> = HashMap::new();
     let mut section_order: Vec<String> = Vec::new();
 
     // Collect existing sections in order
@@ -114,9 +144,9 @@ fn merge_editions(existing: &Edition, incoming: &Edition) -> Edition {
         section_map.entry(section.title.clone()).or_default().extend(section.articles.clone());
     }
 
-    let sections: Vec<corre_core::publish::Section> = section_order
+    let sections: Vec<crate::edition::Section> = section_order
         .into_iter()
-        .filter_map(|title| section_map.remove(&title).map(|articles| corre_core::publish::Section { title, articles }))
+        .filter_map(|title| section_map.remove(&title).map(|articles| crate::edition::Section { title, articles }))
         .collect();
 
     let mut edition = Edition::new(existing.date, sections);
@@ -143,7 +173,7 @@ fn collect_urls(edition: &Edition, seen_urls: &mut HashSet<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use corre_core::publish::{Article, Section, Source};
+    use crate::edition::{Article, Section, Source};
     use tempfile::tempdir;
 
     fn edition_with_urls(date: NaiveDate, urls: &[&str]) -> Edition {

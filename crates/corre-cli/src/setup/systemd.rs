@@ -1,3 +1,8 @@
+//! systemd service integration for Corre on Linux.
+//!
+//! Generates a `corre.service` unit file and installs it via `sudo systemctl`
+//! during setup step 9 when the user opts for automatic startup on boot.
+
 use std::path::Path;
 
 /// Generate a systemd unit file for the Corre daemon.

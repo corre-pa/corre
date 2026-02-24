@@ -1,5 +1,11 @@
-use corre_db::contacts::new_contact;
-use corre_db::{Contact, Database, Importance};
+//! Contact import helpers for the Rolodex database.
+//!
+//! Supports CSV, Google Contacts, Outlook, Facebook, and vCard formats.
+//! Each format parser normalises rows into `Contact` structs and inserts them
+//! into the database with configurable duplicate handling.
+
+use crate::rolodex_db::contacts::new_contact;
+use crate::rolodex_db::{Contact, Database, Importance};
 use std::path::Path;
 
 #[derive(Debug, Clone)]

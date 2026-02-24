@@ -1,3 +1,9 @@
+//! Stage 2 of the safety pipeline: injection phrase and encoded payload sanitization.
+//!
+//! Detects ~45 known prompt injection phrases via Aho-Corasick, neutralizes
+//! `eval()`/`exec()` calls and unicode escapes, inspects base64 blobs for hidden
+//! injections, escapes special LLM tokens, and prefixes role markers with `[DATA]`.
+
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use base64::Engine;
 use regex::Regex;

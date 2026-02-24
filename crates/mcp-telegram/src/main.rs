@@ -1,3 +1,8 @@
+//! MCP server binary for the Telegram Bot API.
+//!
+//! Exposes `send_message` and `draft_message` tools over the MCP stdio transport.
+//! Reads `TELEGRAM_BOT_TOKEN` from the environment at call time.
+
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, ServiceExt, tool};
 

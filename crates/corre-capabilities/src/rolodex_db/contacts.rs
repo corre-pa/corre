@@ -1,5 +1,10 @@
-use crate::db::Database;
-use crate::models::{Contact, ContactMethod, Importance};
+//! Contact CRUD operations and the `new_contact` constructor.
+//!
+//! Extends `Database` with methods for inserting, updating, deleting, and querying
+//! contacts, including birthday lookup, importance filtering, and free-text search.
+
+use super::db::Database;
+use super::models::{Contact, ContactMethod, Importance};
 use anyhow::Context;
 use rusqlite::params;
 

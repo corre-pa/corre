@@ -11,10 +11,9 @@ path = "src/main.rs"
 corre-core = { workspace = true }
 corre-mcp = { workspace = true }
 corre-llm = { workspace = true }
-corre-news = { workspace = true }
 corre-capabilities = { workspace = true }
 corre-safety = { workspace = true }
-dotenvy = "0.15.7"
+dotenvy = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
@@ -31,6 +30,5 @@ dirs = { workspace = true }
 axum = { workspace = true }
 corre-dashboard = { workspace = true }
 corre-registry = { workspace = true }
-corre-db = { workspace = true }
 csv = { workspace = true }
 uuid = { workspace = true }

@@ -584,7 +584,42 @@ mark { background: #FFE566; padding: 0; }
 .cap-error { color: #CC2200; font-size: 11px; margin-top: 2px; }
 .cap-phase { color: #666; font-size: 11px; }
 
-/* === MCP Store === */
+/* === Store === */
+.store-tabs {
+    display: inline-flex;
+    gap: 2px;
+    margin-right: 8px;
+}
+
+.store-tab {
+    font-size: 11px;
+    padding: 2px 10px;
+}
+
+.store-tab.active {
+    background: #FFF;
+    border-bottom-color: #FFF;
+    font-weight: bold;
+}
+
+.store-tab-content { }
+
+.store-restart-banner {
+    background: #FFF8C4;
+    border: 1px solid #E0C838;
+    color: #665500;
+    padding: 6px 12px;
+    margin: 4px 8px 0;
+    font-size: 11px;
+}
+
+.store-restart-banner code {
+    background: #F5F3EB;
+    padding: 1px 4px;
+    border: 1px solid #ACA899;
+    font-size: 11px;
+}
+
 .store-body {
     padding: 8px;
     overflow-y: auto;

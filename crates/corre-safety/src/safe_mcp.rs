@@ -1,3 +1,8 @@
+//! `SafeMcpCaller`: a safety-wrapping decorator for `McpCaller`.
+//!
+//! Intercepts every `call_tool` response and runs it through the full four-stage
+//! pipeline (validate, sanitize, detect leaks, evaluate policy).
+
 use crate::config::{PolicyAction, SafetyConfig};
 use crate::report::SanitizationReport;
 use crate::{leak_detector, policy, sanitizer, validator};

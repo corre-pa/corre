@@ -23,10 +23,11 @@ for arg in "$@"; do
 done
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REGISTRY_DIR="${REPO_DIR}/mcp-registry"
-REGISTERED_DIR="${REGISTRY_DIR}/registered"
+REGISTRY_DIR="${REPO_DIR}/corre-registry"
+MCP_REGISTERED_DIR="${REGISTRY_DIR}/registered"
+CAP_REGISTERED_DIR="${REGISTRY_DIR}/capabilities/registered"
 SITE_DIR="${REGISTRY_DIR}/site"
-OUTPUT="${SITE_DIR}/registry.json"
+OUTPUT="${SITE_DIR}/mcp/registry.json"
 VERSION="$(grep -m1 '^version' "${REPO_DIR}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
 TODAY="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 CROSS_TARGET_DIR="${REPO_DIR}/target-cross"
@@ -58,7 +59,7 @@ fi
 # install.binary_name is both the cargo package name and the staged artifact.
 BINARIES=()
 MCP_PACKAGES=""
-for f in "${REGISTERED_DIR}"/*.json; do
+for f in "${MCP_REGISTERED_DIR}"/*.json; do
     [[ -f "$f" ]] || continue
     method="$(jq -r '.install.method' "$f")"
     if [[ "${method}" == "binary" ]]; then
@@ -67,6 +68,26 @@ for f in "${REGISTERED_DIR}"/*.json; do
         MCP_PACKAGES+=" --package ${bin}"
     fi
 done
+
+# ── Discover binary capabilities from registered definitions ──────────────
+
+CAP_BINARIES=()
+CAP_PACKAGES=""
+if [[ -d "${CAP_REGISTERED_DIR}" ]]; then
+    for f in "${CAP_REGISTERED_DIR}"/*.json; do
+        [[ -f "$f" ]] || continue
+        method="$(jq -r '.install.method' "$f")"
+        if [[ "${method}" == "binary" ]]; then
+            bin="$(jq -r '.install.binary_name' "$f")"
+            CAP_BINARIES+=("${bin}")
+            CAP_PACKAGES+=" --package ${bin}"
+        fi
+    done
+fi
+
+# Merge all binary names for the build step
+ALL_BINARIES=("${BINARIES[@]}" "${CAP_BINARIES[@]}")
+ALL_PACKAGES="${MCP_PACKAGES}${CAP_PACKAGES}"
 
 # Target definitions: triple|platform_key|build_tool|os_required
 # platform_key matches the keys the installer uses ("{platform}-{arch}")
@@ -92,7 +113,8 @@ sha256_hex() {
 # ── Prepare staging directory ────────────────────────────────────────────────
 
 rm -rf "${SITE_DIR}"
-mkdir -p "${SITE_DIR}/bin"
+mkdir -p "${SITE_DIR}/mcp/bin"
+mkdir -p "${SITE_DIR}/capabilities/bin"
 
 # ── Build binaries per target ────────────────────────────────────────────────
 
@@ -100,7 +122,7 @@ mkdir -p "${SITE_DIR}/bin"
 declare -A CHECKSUMS
 BUILT_KEYS=()
 
-if [[ ${#BINARIES[@]} -gt 0 ]]; then
+if [[ ${#ALL_BINARIES[@]} -gt 0 ]]; then
     for target_entry in "${TARGETS[@]}"; do
         IFS='|' read -r TRIPLE PLATFORM_KEY BUILD_TOOL OS_REQUIRED <<< "${target_entry}"
 
@@ -113,7 +135,7 @@ if [[ ${#BINARIES[@]} -gt 0 ]]; then
         if [[ "${NO_BUILD}" == true ]]; then
             # In --no-build mode, check whether binaries exist for this target
             found_all=true
-            for bin in "${BINARIES[@]}"; do
+            for bin in "${ALL_BINARIES[@]}"; do
                 if [[ "${TRIPLE}" == *"-windows-"* ]]; then
                     binary_path="${TARGET_DIR}/${TRIPLE}/release/${bin}.exe"
                 else
@@ -142,13 +164,13 @@ if [[ ${#BINARIES[@]} -gt 0 ]]; then
                     info "Installing rustup target ${TRIPLE}..."
                     rustup target add "${TRIPLE}"
                 fi
-                cargo build --release ${MCP_PACKAGES} --target "${TRIPLE}"
+                cargo build --release ${ALL_PACKAGES} --target "${TRIPLE}"
             else
-                CARGO_TARGET_DIR="${CROSS_TARGET_DIR}" cross build --release ${MCP_PACKAGES} --target "${TRIPLE}"
+                CARGO_TARGET_DIR="${CROSS_TARGET_DIR}" cross build --release ${ALL_PACKAGES} --target "${TRIPLE}"
             fi
         fi
 
-        for bin in "${BINARIES[@]}"; do
+        for bin in "${ALL_BINARIES[@]}"; do
             # Windows binaries have .exe extension
             if [[ "${TRIPLE}" == *"-windows-"* ]]; then
                 binary_path="${TARGET_DIR}/${TRIPLE}/release/${bin}.exe"
@@ -162,11 +184,28 @@ if [[ ${#BINARIES[@]} -gt 0 ]]; then
             checksum="$(sha256_hex "${binary_path}")"
             CHECKSUMS["${bin}|${PLATFORM_KEY}"]="${checksum}"
             ok "${bin} ${PLATFORM_KEY}: ${checksum}"
+        done
 
-            # Stage binary into site/bin/
+        # Stage MCP binaries into site/mcp/bin/
+        for bin in "${BINARIES[@]}"; do
             staged_name="${bin}-${PLATFORM_KEY}"
-            cp "${binary_path}" "${SITE_DIR}/bin/${staged_name}"
-            ok "Staged ${staged_name}"
+            if [[ "${TRIPLE}" == *"-windows-"* ]]; then
+                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}.exe" "${SITE_DIR}/mcp/bin/${staged_name}"
+            else
+                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}" "${SITE_DIR}/mcp/bin/${staged_name}"
+            fi
+            ok "Staged MCP binary ${staged_name}"
+        done
+
+        # Stage capability binaries into site/capabilities/bin/
+        for bin in "${CAP_BINARIES[@]}"; do
+            staged_name="${bin}-${PLATFORM_KEY}"
+            if [[ "${TRIPLE}" == *"-windows-"* ]]; then
+                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}.exe" "${SITE_DIR}/capabilities/bin/${staged_name}"
+            else
+                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}" "${SITE_DIR}/capabilities/bin/${staged_name}"
+            fi
+            ok "Staged capability binary ${staged_name}"
         done
 
         BUILT_KEYS+=("${PLATFORM_KEY}")
@@ -177,7 +216,7 @@ if [[ ${#BINARIES[@]} -gt 0 ]]; then
         exit 1
     fi
 else
-    info "No binary MCP servers to build — skipping compilation"
+    info "No binary servers or capabilities to build — skipping compilation"
 fi
 
 # ── Helper: emit sha256 JSON object for a binary ────────────────────────────
@@ -198,47 +237,80 @@ sha256_json() {
     echo -n "}"
 }
 
-# ── Assemble registry from individual server definitions ─────────────────────
+# ── Helper: substitute version and sha256 placeholders ──────────────────────
 
-info "Assembling registry from ${REGISTERED_DIR}/*.json ..."
-
-# Collect server entries, applying build-time substitutions:
-#   ${VERSION}           -> crate version from Cargo.toml
-#   "${SHA256:<binary>}" -> per-platform checksum object from the build step
-SERVERS="[]"
-for server_file in "${REGISTERED_DIR}"/*.json; do
-    [[ -f "${server_file}" ]] || continue
-    id="$(jq -r '.id' "${server_file}")"
-
-    # Start with the raw JSON from the file
-    server_json="$(cat "${server_file}")"
+substitute_entry() {
+    local entry_json="$1"
 
     # Substitute ${VERSION} with the crate version
-    server_json="$(echo "${server_json}" | sed "s/\\\${VERSION}/${VERSION}/g")"
+    entry_json="$(echo "${entry_json}" | sed "s/\\\${VERSION}/${VERSION}/g")"
 
     # Substitute "${SHA256:<binary>}" with actual checksum objects
-    if echo "${server_json}" | grep -q '"\${SHA256:' ; then
-        bin_name="$(echo "${server_json}" | grep -oP '"\$\{SHA256:\K[^}]+' | head -1)"
+    if echo "${entry_json}" | grep -q '"\${SHA256:' ; then
+        bin_name="$(echo "${entry_json}" | grep -oP '"\$\{SHA256:\K[^}]+' | head -1)"
         if [[ -n "${bin_name}" ]]; then
             sha_obj="$(sha256_json "${bin_name}")"
-            # Replace the placeholder string with the JSON object (remove surrounding quotes)
-            server_json="$(echo "${server_json}" | sed "s|\"\\\${SHA256:${bin_name}}\"|${sha_obj}|g")"
+            entry_json="$(echo "${entry_json}" | sed "s|\"\\\${SHA256:${bin_name}}\"|${sha_obj}|g")"
         fi
     fi
 
-    # Validate the result and append
-    if ! echo "${server_json}" | jq . > /dev/null 2>&1; then
-        echo "ERROR: invalid JSON after substitution in ${server_file}" >&2
-        exit 1
+    # Validate the result
+    if ! echo "${entry_json}" | jq . > /dev/null 2>&1; then
+        return 1
     fi
 
+    echo "${entry_json}"
+}
+
+# ── Assemble MCP server entries ──────────────────────────────────────────────
+
+info "Assembling MCP servers from ${MCP_REGISTERED_DIR}/*.json ..."
+
+SERVERS="[]"
+for server_file in "${MCP_REGISTERED_DIR}"/*.json; do
+    [[ -f "${server_file}" ]] || continue
+    id="$(jq -r '.id' "${server_file}")"
+
+    server_json="$(substitute_entry "$(cat "${server_file}")")" || {
+        echo "ERROR: invalid JSON after substitution in ${server_file}" >&2
+        exit 1
+    }
+
     SERVERS="$(echo "${SERVERS}" | jq --argjson entry "${server_json}" '. + [$entry]')"
-    ok "Added ${id}"
+    ok "Added MCP server: ${id}"
 done
 
 if [[ "$(echo "${SERVERS}" | jq 'length')" -eq 0 ]]; then
-    echo "ERROR: no server definitions found in ${REGISTERED_DIR}/" >&2
+    echo "ERROR: no server definitions found in ${MCP_REGISTERED_DIR}/" >&2
     exit 1
+fi
+
+# ── Assemble capability entries ──────────────────────────────────────────────
+
+CAPABILITIES="[]"
+if [[ -d "${CAP_REGISTERED_DIR}" ]]; then
+    info "Assembling capabilities from ${CAP_REGISTERED_DIR}/*.json ..."
+
+    for cap_file in "${CAP_REGISTERED_DIR}"/*.json; do
+        [[ -f "${cap_file}" ]] || continue
+        id="$(jq -r '.id' "${cap_file}")"
+
+        cap_json="$(substitute_entry "$(cat "${cap_file}")")" || {
+            echo "ERROR: invalid JSON after substitution in ${cap_file}" >&2
+            exit 1
+        }
+
+        CAPABILITIES="$(echo "${CAPABILITIES}" | jq --argjson entry "${cap_json}" '. + [$entry]')"
+        ok "Added capability: ${id}"
+    done
+fi
+
+# ── Determine registry version ──────────────────────────────────────────────
+
+if [[ "$(echo "${CAPABILITIES}" | jq 'length')" -gt 0 ]]; then
+    REGISTRY_VERSION=2
+else
+    REGISTRY_VERSION=1
 fi
 
 # ── Generate JSON ────────────────────────────────────────────────────────────
@@ -246,9 +318,11 @@ fi
 info "Generating ${OUTPUT}..."
 
 jq -n \
+    --argjson version "${REGISTRY_VERSION}" \
     --arg updated_at "${TODAY}" \
     --argjson servers "${SERVERS}" \
-    '{ version: 1, updated_at: $updated_at, servers: $servers }' \
+    --argjson capabilities "${CAPABILITIES}" \
+    '{ version: $version, updated_at: $updated_at, servers: $servers, capabilities: $capabilities }' \
     > "${OUTPUT}"
 
 ok "Registry written to ${OUTPUT}"
@@ -260,13 +334,18 @@ ok "Copied to ${REGISTRY_DIR}/mcp-registry.json"
 # ── Build docker image ────────────────────────────────────────────────────────────
 
 info "Building Docker image for registry site..."
-docker build -t mcp-registry "${REGISTRY_DIR}"
+docker build -t corre-registry "${REGISTRY_DIR}"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
 echo -e "${BOLD}Registry summary:${NC}"
-jq -r '.servers[] | "  \(.id) (v\(.version)) — \(.description)"' "${OUTPUT}"
+echo -e "  Version: ${REGISTRY_VERSION}"
+jq -r '.servers[] | "  [mcp] \(.id) (v\(.version)) — \(.description)"' "${OUTPUT}"
+jq -r '.capabilities[] | "  [cap] \(.id) (v\(.version)) — \(.description)"' "${OUTPUT}" 2>/dev/null || true
 echo ""
 echo -e "${BOLD}Staged files:${NC}"
-ls -lh "${SITE_DIR}/bin/" 2>/dev/null || echo "  (no binaries staged)"
+echo "  MCP binaries:"
+ls -lh "${SITE_DIR}/mcp/bin/" 2>/dev/null || echo "    (none)"
+echo "  Capability binaries:"
+ls -lh "${SITE_DIR}/capabilities/bin/" 2>/dev/null || echo "    (none)"

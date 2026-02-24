@@ -1,5 +1,10 @@
+//! Askama template structs for the CorreNews HTML pages.
+//!
+//! `NewspaperTemplate` renders the standard newspaper layout and `TopicsTemplate` renders
+//! the settings editor. Both templates resolve at compile time from `templates/`.
+
+use crate::edition::Edition;
 use askama::Template;
-use corre_core::publish::Edition;
 
 /// Package version, baked in at compile time.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

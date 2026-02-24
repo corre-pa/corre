@@ -1,3 +1,8 @@
+//! Thin async cron scheduler wrapper around `tokio-cron-scheduler`.
+//!
+//! `Scheduler` accepts 6-field cron expressions (`sec min hour day month weekday`) and
+//! registers async callbacks. Business logic for running capabilities lives in `corre-cli`.
+
 use anyhow::Context;
 use std::future::Future;
 use std::pin::Pin;

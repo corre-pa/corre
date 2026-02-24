@@ -1,10 +1,16 @@
+//! Rolodex capability: automated personal contact engagement.
+//!
+//! Checks the SQLite contact database for outreach strategies that are due,
+//! then executes each strategy (birthday messages, news searches, profile scrapes,
+//! congratulations drafts, periodic check-ins) and publishes the results.
+
+use crate::rolodex_db::{Contact, Database, Importance, ProfileCategory, ProfileEntry, ProfileSource, StrategyType};
 use crate::tools::{extract_json, normalize_freshness, parse_search_results};
 use corre_core::capability::{
     Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmRequest, ProgressStatus, ProgressTracker,
 };
 use corre_core::config::CapabilityConfig;
-use corre_core::publish::{Article, Section, Source};
-use corre_db::{Contact, Database, Importance, ProfileCategory, ProfileEntry, ProfileSource, StrategyType};
+use corre_sdk::types::{Article, Section, Source};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -318,7 +324,13 @@ impl Capability for Rolodex {
         self.tracker.set_expected(total);
         tracing::info!("Rolodex produced {total} articles across {} sections", all_sections.len());
 
-        Ok(CapabilityOutput { capability_name: self.manifest.name.clone(), produced_at: now, sections: all_sections })
+        Ok(CapabilityOutput {
+            capability_name: self.manifest.name.clone(),
+            produced_at: now,
+            sections: all_sections,
+            content_type: Default::default(),
+            custom_content: None,
+        })
     }
 
     async fn in_progress(&self) -> ProgressStatus {
@@ -534,7 +546,7 @@ async fn scrape_contact_profiles(
     Ok(facts
         .into_iter()
         .map(|fact| {
-            corre_db::profiles::new_profile_entry(
+            crate::rolodex_db::profiles::new_profile_entry(
                 &contact.id,
                 ProfileSource::News,
                 ProfileCategory::from_str_loose(&fact.category),
@@ -576,19 +588,21 @@ async fn send_or_draft_message(
 
     // Auto mode: dispatch via appropriate MCP server
     let (server, tool, args) = match contact.preferred_contact_method {
-        corre_db::ContactMethod::Email => {
+        crate::rolodex_db::ContactMethod::Email => {
             let to = contact.email.as_deref().unwrap_or_default();
             ("smtp", "send_email", serde_json::json!({"to": to, "subject": subject, "body": message}))
         }
-        corre_db::ContactMethod::Telegram => {
+        crate::rolodex_db::ContactMethod::Telegram => {
             let chat_id = contact.telegram.as_deref().unwrap_or_default();
             ("telegram", "send_message", serde_json::json!({"chat_id": chat_id, "text": message}))
         }
-        corre_db::ContactMethod::WhatsApp => {
+        crate::rolodex_db::ContactMethod::WhatsApp => {
             let phone = contact.whatsapp.as_deref().or(contact.phone.as_deref()).unwrap_or_default();
             ("whatsapp", "send_message", serde_json::json!({"phone": phone, "text": message}))
         }
-        corre_db::ContactMethod::Signal | corre_db::ContactMethod::Facebook | corre_db::ContactMethod::LinkedIn => {
+        crate::rolodex_db::ContactMethod::Signal
+        | crate::rolodex_db::ContactMethod::Facebook
+        | crate::rolodex_db::ContactMethod::LinkedIn => {
             tracing::warn!("No MCP server for {} — falling back to draft mode", contact.preferred_contact_method);
             return Ok(Some(Article {
                 title: format!("Draft: {subject}"),
@@ -620,11 +634,11 @@ async fn send_or_draft_message(
 
 fn contact_address(contact: &Contact) -> String {
     match contact.preferred_contact_method {
-        corre_db::ContactMethod::Email => contact.email.clone().unwrap_or_default(),
-        corre_db::ContactMethod::Telegram => contact.telegram.clone().unwrap_or_default(),
-        corre_db::ContactMethod::Signal => contact.signal.clone().or_else(|| contact.phone.clone()).unwrap_or_default(),
-        corre_db::ContactMethod::WhatsApp => contact.whatsapp.clone().or_else(|| contact.phone.clone()).unwrap_or_default(),
-        corre_db::ContactMethod::Facebook => contact.facebook.clone().unwrap_or_default(),
-        corre_db::ContactMethod::LinkedIn => contact.linkedin.clone().unwrap_or_default(),
+        crate::rolodex_db::ContactMethod::Email => contact.email.clone().unwrap_or_default(),
+        crate::rolodex_db::ContactMethod::Telegram => contact.telegram.clone().unwrap_or_default(),
+        crate::rolodex_db::ContactMethod::Signal => contact.signal.clone().or_else(|| contact.phone.clone()).unwrap_or_default(),
+        crate::rolodex_db::ContactMethod::WhatsApp => contact.whatsapp.clone().or_else(|| contact.phone.clone()).unwrap_or_default(),
+        crate::rolodex_db::ContactMethod::Facebook => contact.facebook.clone().unwrap_or_default(),
+        crate::rolodex_db::ContactMethod::LinkedIn => contact.linkedin.clone().unwrap_or_default(),
     }
 }

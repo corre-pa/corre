@@ -1,3 +1,9 @@
+//! Live connectivity test for installed MCP servers.
+//!
+//! [`test_mcp_server`] starts a temporary [`corre_mcp::McpPool`] for a single server,
+//! calls `list_tools` with a 30-second timeout, shuts the pool down, and returns the
+//! list of tool names (or an error string).
+
 use corre_core::capability::McpCaller;
 use corre_core::config::McpServerConfig;
 use corre_mcp::{McpPool, McpServerDef};

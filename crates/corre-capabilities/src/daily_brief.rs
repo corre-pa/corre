@@ -1,11 +1,19 @@
+//! Daily Research Brief capability.
+//!
+//! A multi-step pipeline that reads topics, searches the web via the Brave Search MCP
+//! server, deduplicates and scores results for newsworthiness, summarises the top stories,
+//! and emits a `CapabilityOutput` grouped by section.
+
 use crate::tools::{
     SearchResultItem, extract_json, is_retryable_overload, normalize_freshness, parse_context_length_limit, parse_search_results,
 };
+use anyhow::Context as _;
 use corre_core::capability::{
     Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmMessage, LlmRequest, LlmRole, ProgressStatus, ProgressTracker,
 };
 use corre_core::config::CapabilityConfig;
-use corre_core::publish::{Article, Section, Source, sanitize_html, sanitize_url};
+use corre_sdk::html::{sanitize_html, sanitize_url};
+use corre_sdk::types::{Article, Section, Source};
 use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -116,7 +124,8 @@ impl Capability for DailyBrief {
             .map(|p| ctx.config_dir.join(p))
             .ok_or_else(|| anyhow::anyhow!("daily-brief requires a config_path pointing to topics.yml"))?;
 
-        let topics_content = std::fs::read_to_string(&config_path)?;
+        let topics_content =
+            std::fs::read_to_string(&config_path).with_context(|| format!("failed to read topics file {}", config_path.display()))?;
         let sections = load_topics(&topics_content)?;
         tracing::info!("Parsed {} topic sections", sections.len());
         self.tracker.touch("parsed_topics");
@@ -243,7 +252,13 @@ impl Capability for DailyBrief {
             .filter_map(|s| article_map.remove(&s.title).map(|articles| Section { title: s.title.clone(), articles }))
             .collect();
 
-        Ok(CapabilityOutput { capability_name: self.manifest.name.clone(), produced_at: chrono::Utc::now(), sections: output_sections })
+        Ok(CapabilityOutput {
+            capability_name: self.manifest.name.clone(),
+            produced_at: chrono::Utc::now(),
+            sections: output_sections,
+            content_type: Default::default(),
+            custom_content: None,
+        })
     }
 
     async fn in_progress(&self) -> ProgressStatus {

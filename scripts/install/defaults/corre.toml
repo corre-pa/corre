@@ -1,0 +1,23 @@
+[general]
+data_dir = "/data"
+log_level = "info"
+
+[llm]
+provider = "openai-compatible"
+base_url = "__BASE_URL__"
+model = "__MODEL__"
+api_key = "${VENICE_API_KEY}"
+temperature = 0.3
+max_concurrent = 10
+
+[news]
+bind = "0.0.0.0:5510"
+title = "Corre News"
+
+[[capabilities]]
+name = "daily-brief"
+description = "Researches topics and produces a daily news briefing"
+schedule = "0 0 5 * * *"
+mcp_servers = ["brave-search"]
+config_path = "config/topics.yml"
+enabled = true

@@ -1,3 +1,7 @@
+//! Input validators used by `dialoguer` prompts in the setup wizard.
+//!
+//! Simple checks for non-empty strings, valid port numbers, valid hours, and URL-like strings.
+
 /// Validates that input is non-empty after trimming.
 pub fn non_empty(input: &str) -> Result<(), String> {
     if input.trim().is_empty() { Err("Value cannot be empty".into()) } else { Ok(()) }

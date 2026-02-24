@@ -1,0 +1,110 @@
+{
+  "id": "daily-brief",
+  "name": "Daily Research Brief",
+  "description": "Web search + LLM scoring + newspaper output",
+  "version": "${VERSION}",
+  "protocol_version": "1.0",
+  "install": {
+    "method": "binary",
+    "download_url_template": "/capabilities/bin/daily-brief-{platform}-{arch}",
+    "binary_name": "daily-brief",
+    "sha256": "${SHA256:daily-brief}",
+    "command": "daily-brief",
+    "args": []
+  },
+  "manifest": {
+    "content_type": "newspaper",
+    "execution_mode": "oneshot",
+    "defaults": {
+      "schedule": "0 0 5 * * *",
+      "config_path": "config/topics.yml",
+      "config_schema": {
+        "root_key": "daily-briefing",
+        "format": "yaml",
+        "fields": [
+          {
+            "key": "sections",
+            "type": "list",
+            "label": "Sections",
+            "fields": [
+              {
+                "key": "title",
+                "type": "text",
+                "label": "Section title"
+              },
+              {
+                "key": "sources",
+                "type": "list",
+                "label": "Sources",
+                "fields": [
+                  {
+                    "key": "search",
+                    "type": "text",
+                    "label": "Search query"
+                  },
+                  {
+                    "key": "include",
+                    "type": "text-list",
+                    "label": "Include terms"
+                  },
+                  {
+                    "key": "exclude",
+                    "type": "text-list",
+                    "label": "Exclude terms"
+                  },
+                  {
+                    "key": "select-if",
+                    "type": "textarea",
+                    "label": "Selection criteria"
+                  },
+                  {
+                    "key": "freshness",
+                    "type": "select",
+                    "label": "Freshness",
+                    "options": ["1d", "1w", "1m"],
+                    "default": "1d"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "permissions": {
+      "mcp_servers": ["brave-search"],
+      "llm_access": true,
+      "max_concurrent_llm": 10,
+      "outputs": [
+        {
+          "output_type": "filesystem",
+          "target": "editions/{date}/edition.json",
+          "content_type": "application/json"
+        }
+      ],
+      "sandbox": {
+        "network": ["api.venice.ai:443"]
+      }
+    },
+    "mcp_dependencies": ["brave-search"],
+    "services": [
+      {
+        "name": "corre-news",
+        "description": "Newspaper web UI for browsing editions",
+        "image": "{docker_registry}/corre-news:latest",
+        "ports": ["5510:5510"],
+        "volumes": ["{data_dir}:/data:ro"],
+        "optional": true
+      }
+    ],
+    "links": [
+      {
+        "label": "Read CorreNews",
+        "url": "http://{service:corre-news}:5510",
+        "icon": "\uD83D\uDCF0"
+      }
+    ]
+  },
+  "tags": ["news", "search", "daily"],
+  "verified": true
+}

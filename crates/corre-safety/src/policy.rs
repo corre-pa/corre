@@ -1,3 +1,9 @@
+//! Stage 4 of the safety pipeline: rule-based policy evaluation.
+//!
+//! Defines built-in `PolicyRule` entries for shell injection, SQL injection, path
+//! traversal, XSS, and encoded exploits. User-supplied `custom_block_patterns` always
+//! escalate to `Block`.
+
 use regex::Regex;
 use std::sync::LazyLock;
 

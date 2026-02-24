@@ -1,4 +1,10 @@
+//! Axum HTTP server: route definitions, request handlers, and server startup.
+//!
+//! Builds the `Router` that serves the newspaper UI, edition API, full-text search,
+//! token-gated settings pages, and embedded/plugin static assets.
+
 use crate::cache::EditionCache;
+use crate::config::NewsConfig;
 use crate::render::{NewspaperTemplate, TopicsTemplate};
 use crate::search::SearchIndex;
 use askama::Template;
@@ -21,9 +27,19 @@ struct Assets;
 
 pub struct AppState {
     pub cache: Arc<EditionCache>,
-    pub search: SearchIndex,
+    pub search: Option<SearchIndex>,
     pub config_path: PathBuf,
     pub config: Arc<RwLock<CorreConfig>>,
+    /// Data directory for resolving plugin static assets.
+    pub data_dir: PathBuf,
+}
+
+impl AppState {
+    /// Parse the `[news]` section from the config into a `NewsConfig`.
+    async fn news_config(&self) -> NewsConfig {
+        let config = self.config.read().await;
+        NewsConfig::from_toml_table(Some(&config.news))
+    }
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -34,6 +50,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/search", get(search_handler))
         .route("/settings/topics", get(topics_page_handler))
         .route("/api/topics", get(get_topics_handler).put(put_topics_handler))
+        .route("/plugin/{name}/static/{*path}", get(plugin_static_handler))
         .route("/static/{*path}", get(static_handler))
         .with_state(state)
 }
@@ -53,6 +70,34 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
             ([(header::CONTENT_TYPE, mime)], file.data).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Serve a static asset from a plugin's `static/` directory.
+async fn plugin_static_handler(State(state): State<Arc<AppState>>, Path((name, path)): Path<(String, String)>) -> impl IntoResponse {
+    // Prevent path traversal
+    if name.contains("..") || path.contains("..") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let file_path = state.data_dir.join("plugins").join(&name).join("static").join(&path);
+    if !file_path.exists() || !file_path.is_file() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mime = match file_path.extension().and_then(|e| e.to_str()) {
+        Some("css") => "text/css",
+        Some("js") => "application/javascript",
+        Some("html") => "text/html",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        _ => "application/octet-stream",
+    };
+    match std::fs::read(&file_path) {
+        Ok(data) => ([(header::CONTENT_TYPE, mime)], data).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -138,35 +183,82 @@ struct TokenQuery {
 
 // --- Existing handlers ---
 
-async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let title = state.config.read().await.news.title.clone();
-    match state.cache.latest().await {
-        Some(edition) => {
-            let template = NewspaperTemplate { title: &title, edition: &edition, version: crate::render::VERSION };
-            match template.render() {
-                Ok(html) => Html(html).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
+/// Render an edition as HTML, handling both newspaper and custom content types.
+fn render_edition(title: &str, edition: &crate::edition::Edition) -> Response<Body> {
+    use crate::edition::ContentType;
+
+    match edition.content_type {
+        ContentType::Custom => {
+            if let Some(ref custom) = edition.custom_content {
+                let sanitized_html = crate::edition::sanitize_custom_html(&custom.html);
+                let css_block = custom.css.as_deref().map(|css| format!("<style>{css}</style>")).unwrap_or_default();
+                let page = format!(
+                    r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    {css_block}
+</head>
+<body>
+    <header class="masthead">
+        <div class="masthead-rule"></div>
+        <h1 class="masthead-title"><a href="/">{title}</a></h1>
+        <div class="masthead-meta">
+            <span>{date}</span>
+        </div>
+        <div class="masthead-rule"></div>
+    </header>
+    <main>
+        <div class="plugin-content">
+            {sanitized_html}
+        </div>
+    </main>
+    <footer class="newspaper-footer">
+        <p>{title} &mdash; v{version}</p>
+    </footer>
+</body>
+</html>"#,
+                    date = edition.date,
+                    version = crate::render::VERSION,
+                );
+                Html(page).into_response()
+            } else {
+                // Custom content type but no custom_content — fall back to newspaper
+                render_newspaper(title, edition)
             }
         }
-        None => Html(no_editions_page(&title)).into_response(),
+        ContentType::Newspaper => render_newspaper(title, edition),
+    }
+}
+
+fn render_newspaper(title: &str, edition: &crate::edition::Edition) -> Response<Body> {
+    let template = NewspaperTemplate { title, edition, version: crate::render::VERSION };
+    match template.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
+    }
+}
+
+async fn index_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let news = state.news_config().await;
+    match state.cache.latest().await {
+        Some(edition) => render_edition(&news.title, &edition),
+        None => Html(no_editions_page(&news.title)).into_response(),
     }
 }
 
 async fn edition_handler(State(state): State<Arc<AppState>>, Path(date_str): Path<String>) -> impl IntoResponse {
-    let title = state.config.read().await.news.title.clone();
+    let title = state.news_config().await.title;
     let date = match NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
         Ok(d) => d,
         Err(_) => return (StatusCode::BAD_REQUEST, "Invalid date format. Use YYYY-MM-DD".to_string()).into_response(),
     };
 
     match state.cache.load_date(date).await {
-        Some(edition) => {
-            let template = NewspaperTemplate { title: &title, edition: &edition, version: crate::render::VERSION };
-            match template.render() {
-                Ok(html) => Html(html).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
-            }
-        }
+        Some(edition) => render_edition(&title, &edition),
         None => (StatusCode::NOT_FOUND, format!("No edition for {date}")).into_response(),
     }
 }
@@ -189,7 +281,10 @@ fn default_limit() -> usize {
 }
 
 async fn search_handler(State(state): State<Arc<AppState>>, Query(params): Query<SearchQuery>) -> impl IntoResponse {
-    match state.search.search(&params.q, params.limit) {
+    let Some(ref search) = state.search else {
+        return axum::Json(Vec::<crate::search::SearchResult>::new()).into_response();
+    };
+    match search.search(&params.q, params.limit) {
         Ok(results) => axum::Json(results).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Search error: {e}")).into_response(),
     }
@@ -197,11 +292,21 @@ async fn search_handler(State(state): State<Arc<AppState>>, Query(params): Query
 
 // --- Topics handlers ---
 
-async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
+#[derive(serde::Deserialize, Default)]
+struct TopicsQuery {
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    cap: Option<String>,
+}
+
+async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TopicsQuery>) -> Response<Body> {
+    let token_query = TokenQuery { token: query.token.clone() };
+    let token_str = extract_token(&headers, &token_query);
     let config = state.config.read().await;
-    let title = config.news.title.clone();
-    if let Err(e) = check_auth(&config.news.editor_token, token_str.as_deref()) {
+    let news = NewsConfig::from_toml_table(Some(&config.news));
+    let title = news.title.clone();
+    if let Err(e) = check_auth(&news.editor_token, token_str.as_deref()) {
         return match e {
             AuthError::NotConfigured => login_page(
                 &title,
@@ -213,7 +318,7 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
         };
     }
     let token = token_str.unwrap_or_default();
-    let topics_path = resolve_topics_path(&config, &state.config_path);
+    let topics_path = resolve_topics_path(&config, query.cap.as_deref());
     let topics_yaml = std::fs::read_to_string(&topics_path).unwrap_or_default();
     let empty_default = || serde_json::json!({"daily-briefing": {"sections": []}});
     let topics_value: serde_json::Value =
@@ -226,18 +331,24 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
     }
 }
 
-async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
+async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TopicsQuery>) -> Response<Body> {
+    let token_query = TokenQuery { token: query.token.clone() };
+    let token_str = extract_token(&headers, &token_query);
     let config = state.config.read().await;
-    if let Err(e) = check_auth(&config.news.editor_token, token_str.as_deref()) {
+    let news = NewsConfig::from_toml_table(Some(&config.news));
+    if let Err(e) = check_auth(&news.editor_token, token_str.as_deref()) {
         return auth_error_response(e);
     }
-    let topics_path = resolve_topics_path(&config, &state.config_path);
+    let topics_path = resolve_topics_path(&config, query.cap.as_deref());
     tracing::info!("Reading topics from {}", topics_path.display());
     match std::fs::read_to_string(&topics_path) {
         Ok(content) => {
             tracing::info!("Successfully read topics ({} bytes)", content.len());
             (StatusCode::OK, content).into_response()
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("No topics file at {}, returning empty", topics_path.display());
+            (StatusCode::OK, String::new()).into_response()
         }
         Err(e) => {
             tracing::info!("Failed to read topics from {}: {e}", topics_path.display());
@@ -249,33 +360,66 @@ async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderM
 async fn put_topics_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
+    Query(query): Query<TopicsQuery>,
     body: String,
 ) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
+    let token_query = TokenQuery { token: query.token.clone() };
+    let token_str = extract_token(&headers, &token_query);
     let config = state.config.read().await;
-    if let Err(e) = check_auth(&config.news.editor_token, token_str.as_deref()) {
+    let news = NewsConfig::from_toml_table(Some(&config.news));
+    if let Err(e) = check_auth(&news.editor_token, token_str.as_deref()) {
         return auth_error_response(e);
     }
-    let topics_path = resolve_topics_path(&config, &state.config_path);
+    let topics_path = resolve_topics_write_path(&config, query.cap.as_deref());
+    if let Some(parent) = topics_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {e}")).into_response();
+        }
+    }
     if let Err(e) = std::fs::write(&topics_path, &body) {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write topics: {e}")).into_response();
     }
     (StatusCode::OK, "Topics saved.").into_response()
 }
 
-/// Resolve the topics file path from the first capability that has a config_path,
-/// relative to the directory containing corre.toml. Falls back to `{data_dir}/config/topics.yml`.
-fn resolve_topics_path(config: &CorreConfig, config_path: &std::path::Path) -> PathBuf {
-    let base_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
-    let default_path = || base_dir.join("config/topics.yml");
-    config
-        .capabilities
-        .iter()
-        .find_map(|c| c.config_path.as_ref())
-        .map(|p| base_dir.join(p))
-        .filter(|p| p.exists())
-        .unwrap_or_else(default_path)
+/// Resolve the topics file path for a capability under the plugin data directory.
+///
+/// If `cap_name` is given, looks up that capability; otherwise picks the first
+/// capability that declares a `config_path`. The primary path is
+/// `{data_dir}/{capability.name}/{config_path}`. If that doesn't exist yet,
+/// falls back to the legacy root location `{data_dir}/{config_path}` (from
+/// before the plugin architecture). Writes always target the primary path.
+fn resolve_topics_path(config: &CorreConfig, cap_name: Option<&str>) -> PathBuf {
+    let data_dir = config.data_dir();
+    let cap = match cap_name {
+        Some(name) => config.capabilities.iter().find(|c| c.name == name),
+        None => config.capabilities.iter().find(|c| c.config_path.is_some()),
+    };
+    match cap.and_then(|c| c.config_path.as_ref().map(|p| (c, p))) {
+        Some((c, p)) => {
+            let scoped = data_dir.join(&c.name).join(p);
+            if scoped.exists() {
+                return scoped;
+            }
+            // Fall back to legacy root location for reading
+            let legacy = data_dir.join(p);
+            if legacy.exists() { legacy } else { scoped }
+        }
+        None => data_dir.join("config/topics.yml"),
+    }
+}
+
+/// Resolve the topics path for writing — always uses the scoped location.
+fn resolve_topics_write_path(config: &CorreConfig, cap_name: Option<&str>) -> PathBuf {
+    let data_dir = config.data_dir();
+    let cap = match cap_name {
+        Some(name) => config.capabilities.iter().find(|c| c.name == name),
+        None => config.capabilities.iter().find(|c| c.config_path.is_some()),
+    };
+    match cap.and_then(|c| c.config_path.as_ref().map(|p| (c, p))) {
+        Some((c, p)) => data_dir.join(&c.name).join(p),
+        None => data_dir.join("config/topics.yml"),
+    }
 }
 
 /// Start the web server, binding to the given address.

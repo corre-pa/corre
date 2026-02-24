@@ -1,19 +1,16 @@
-use crate::publish::{Article, Section};
-use chrono::{DateTime, Utc};
-use std::path::PathBuf;
+//! Core traits and execution context for the Corre capability system.
+//!
+//! Defines `Capability`, `McpCaller`, `LlmProvider`, `CapabilityContext`, and `ProgressTracker`.
+//! These abstractions decouple capability implementations from the concrete MCP and LLM crates,
+//! allowing the safety layer to wrap both without changes to capability code.
 
-/// Metadata describing a capability's identity, schedule, and dependencies.
-#[derive(Debug, Clone)]
-pub struct CapabilityManifest {
-    pub name: String,
-    pub description: String,
-    /// Cron expression with seconds field (e.g. "0 0 5 * * *" for 05:00 daily).
-    pub schedule: String,
-    /// Names of MCP servers this capability requires (references `[mcp.servers.*]` in config).
-    pub mcp_servers: Vec<String>,
-    /// Optional path to a user-editable config file (relative to project root).
-    pub config_path: Option<String>,
-}
+// Re-export types from corre-sdk so downstream crates keep their imports.
+pub use corre_sdk::llm::{LlmMessage, LlmRequest, LlmResponse, LlmRole};
+pub use corre_sdk::types::{CapabilityManifest, CapabilityOutput, ContentType, CustomContent};
+
+use chrono::{DateTime, Utc};
+use corre_sdk::types::{Article, Section};
+use std::path::PathBuf;
 
 /// Error type for MCP tool calls, distinguishing tool-level errors from protocol failures.
 #[derive(Debug, thiserror::Error)]
@@ -40,45 +37,13 @@ pub trait LlmProvider: Send + Sync {
     async fn complete(&self, request: LlmRequest) -> anyhow::Result<LlmResponse>;
 }
 
-/// A simplified LLM request used by capabilities.
-#[derive(Debug, Clone)]
-pub struct LlmRequest {
-    pub messages: Vec<LlmMessage>,
-    pub temperature: Option<f32>,
-    pub max_completion_tokens: Option<u32>,
-    pub json_mode: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct LlmMessage {
-    pub role: LlmRole,
-    pub content: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum LlmRole {
-    System,
-    User,
-    Assistant,
-}
-
-impl LlmRequest {
-    pub fn simple(system: impl Into<String>, user: impl Into<String>) -> Self {
-        Self {
-            messages: vec![
-                LlmMessage { role: LlmRole::System, content: system.into() },
-                LlmMessage { role: LlmRole::User, content: user.into() },
-            ],
-            temperature: None,
-            max_completion_tokens: None,
-            json_mode: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct LlmResponse {
-    pub content: String,
+/// A progress or log event emitted by a capability during execution.
+///
+/// Sent through `CapabilityContext::progress_tx` so the orchestrator can
+/// forward real-time updates to the dashboard.
+pub enum ProgressEvent {
+    Progress { pct: Option<u8>, phase: String },
+    Log { level: String, message: String },
 }
 
 /// Runtime context provided to a capability during execution.
@@ -90,19 +55,13 @@ pub struct CapabilityContext {
     pub max_concurrent_llm: usize,
     /// Source URLs from all previously published editions, for cross-edition deduplication.
     pub seen_urls: std::collections::HashSet<String>,
-}
-
-/// The output produced by a capability after execution.
-#[derive(Debug, Clone)]
-pub struct CapabilityOutput {
-    pub capability_name: String,
-    pub produced_at: DateTime<Utc>,
-    pub sections: Vec<Section>,
+    /// Optional channel for forwarding progress/log events to the dashboard.
+    pub progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 }
 
 /// Result of polling a capability after its initial timeout elapses.
 pub enum ProgressStatus {
-    /// Still working. Optional hint: percentage complete (0–100).
+    /// Still working. Optional hint: percentage complete (0-100).
     StillBusy(Option<u8>),
     /// Finished (or has enough partial data). Contains the output to publish.
     Done(CapabilityOutput),
@@ -211,6 +170,8 @@ impl ProgressTracker {
                 capability_name: state.capability_name.clone(),
                 produced_at: Utc::now(),
                 sections,
+                content_type: ContentType::default(),
+                custom_content: None,
             });
         }
 

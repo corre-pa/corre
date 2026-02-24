@@ -1,0 +1,55 @@
+services:
+  corre-core:
+    image: ghcr.io/corre-pa/corre-core:latest
+    command: ["/app/corre", "-c", "/app/corre.toml", "run", "--dashboard-bind", "0.0.0.0:5500"]
+    ports:
+      - "5500:5500"
+    volumes:
+      - ${CORRE_DATA_DIR:-/var/corre}:/data
+    env_file: [.env]
+    environment:
+      CORRE_DATA_DIR: /data
+      CORRE_REGISTRY_URL: "http://corre-registry:5580"
+      TAILSCALE_ENABLED: "${TAILSCALE_ENABLED:-false}"
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    healthcheck:
+      test: [CMD, /app/corre, -c, /app/corre.toml, health]
+      interval: 30s
+      start_period: 10s
+    restart: unless-stopped
+    networks: [corre-internal]
+
+  corre-news:
+    image: ghcr.io/corre-pa/corre-news:latest
+    command: ["/app/corre-news", "-c", "/app/corre.toml"]
+    ports:
+      - "5510:5510"
+    volumes:
+      - ${CORRE_DATA_DIR:-/var/corre}:/data:ro
+    environment:
+      CORRE_DATA_DIR: /data
+      CORRE_NEWS_BIND: "0.0.0.0:5510"
+    depends_on:
+      corre-core:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, -f, "http://localhost:5510/"]
+      interval: 15s
+      start_period: 5s
+    restart: unless-stopped
+    networks: [corre-internal]
+
+  corre-registry:
+    image: ghcr.io/corre-pa/corre-registry:latest
+    ports:
+      - "5580:5580"
+    healthcheck:
+      test: [CMD, curl, -f, "http://localhost:5580/health"]
+      interval: 30s
+    restart: unless-stopped
+    networks: [corre-internal]
+
+networks:
+  corre-internal:
+    driver: bridge

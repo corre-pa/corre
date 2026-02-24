@@ -438,7 +438,7 @@
         setVal("llm_provider", config.llm.provider);
         setVal("llm_base_url", config.llm.base_url);
         setVal("llm_model", config.llm.model);
-        setVal("llm_api_key_env", config.llm.api_key_env);
+        setVal("llm_api_key", config.llm.api_key);
         setVal("llm_temperature", config.llm.temperature);
         setVal("llm_max_concurrent", config.llm.max_concurrent);
 
@@ -471,7 +471,7 @@
                 provider: getVal("llm_provider"),
                 base_url: getVal("llm_base_url"),
                 model: getVal("llm_model"),
-                api_key_env: getVal("llm_api_key_env"),
+                api_key: getVal("llm_api_key"),
                 temperature: parseFloat(getVal("llm_temperature")) || 0.3,
                 max_concurrent: parseInt(getVal("llm_max_concurrent"), 10) || 10,
             },
@@ -582,26 +582,286 @@
     loadSettingsForm(CONFIG);
 
     // =========================================================================
-    // Unified MCP Store (table layout)
+    // Schema-driven config editor (inline XP window)
+    // =========================================================================
+    var cfgEditorCapName = null;
+    var cfgEditorSchema = null;
+
+    function cfgEsc(str) {
+        var div = document.createElement("div");
+        div.textContent = str;
+        return div.innerHTML.replace(/"/g, "&quot;");
+    }
+
+    // --- Schema form builder ---------------------------------------------------
+
+    /** Build a form field element for a single ConfigField descriptor. */
+    function cfgBuildField(field, value) {
+        var wrapper = document.createElement("div");
+        wrapper.className = "xp-field";
+        wrapper.setAttribute("data-cfg-key", field.key);
+        var label = field.label || field.key;
+
+        if (field.type === "list") {
+            return cfgBuildListField(field, value);
+        }
+
+        var labelEl = document.createElement("label");
+        labelEl.textContent = label;
+        wrapper.appendChild(labelEl);
+
+        if (field.type === "text") {
+            var inp = document.createElement("input");
+            inp.type = "text";
+            inp.className = "xp-input xp-input-wide";
+            inp.value = value != null ? String(value) : (field.default || "");
+            wrapper.appendChild(inp);
+        } else if (field.type === "textarea") {
+            var ta = document.createElement("textarea");
+            ta.className = "xp-input xp-input-wide";
+            ta.rows = 2;
+            ta.value = value != null ? String(value) : (field.default || "");
+            wrapper.appendChild(ta);
+        } else if (field.type === "select") {
+            var sel = document.createElement("select");
+            sel.className = "xp-select";
+            (field.options || []).forEach(function(opt) {
+                var o = document.createElement("option");
+                o.value = opt;
+                o.textContent = opt;
+                if (String(value || field.default || "") === opt) o.selected = true;
+                sel.appendChild(o);
+            });
+            wrapper.appendChild(sel);
+        } else if (field.type === "text-list") {
+            var inp2 = document.createElement("input");
+            inp2.type = "text";
+            inp2.className = "xp-input xp-input-wide";
+            inp2.value = Array.isArray(value) ? value.join(", ") : (value != null ? String(value) : "");
+            wrapper.appendChild(inp2);
+        }
+
+        return wrapper;
+    }
+
+    /** Build a repeatable list field with Add/Remove buttons. */
+    function cfgBuildListField(field, items) {
+        items = Array.isArray(items) ? items : [];
+        var container = document.createElement("div");
+        container.className = "xp-fieldset cfg-list";
+        container.setAttribute("data-cfg-key", field.key);
+
+        var legend = document.createElement("div");
+        legend.className = "xp-fieldset-legend";
+        legend.textContent = field.label || field.key;
+        container.appendChild(legend);
+
+        var itemsContainer = document.createElement("div");
+        itemsContainer.className = "cfg-list-items";
+        container.appendChild(itemsContainer);
+
+        items.forEach(function(item) { cfgAddListItem(itemsContainer, field.fields || [], item); });
+
+        var actions = document.createElement("div");
+        actions.style.marginTop = "4px";
+        var addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "xp-button";
+        addBtn.textContent = "+ Add " + (field.label || field.key).replace(/s$/, "").toLowerCase();
+        addBtn.addEventListener("click", function() { cfgAddListItem(itemsContainer, field.fields || [], {}); });
+        actions.appendChild(addBtn);
+        container.appendChild(actions);
+
+        return container;
+    }
+
+    /** Add a single item row to a list field. */
+    function cfgAddListItem(container, subFields, data) {
+        data = data || {};
+        var row = document.createElement("div");
+        row.className = "xp-dynamic-row cfg-list-item";
+        row.style.marginBottom = "8px";
+        row.style.padding = "6px";
+        row.style.border = "1px solid #ACA899";
+
+        var grid = document.createElement("div");
+        grid.className = "xp-fields-grid";
+        subFields.forEach(function(sf) {
+            grid.appendChild(cfgBuildField(sf, data[sf.key]));
+        });
+        row.appendChild(grid);
+
+        var rmBtn = document.createElement("button");
+        rmBtn.type = "button";
+        rmBtn.className = "xp-button xp-button-remove";
+        rmBtn.style.marginTop = "4px";
+        rmBtn.textContent = "Remove";
+        rmBtn.addEventListener("click", function() { row.remove(); });
+        row.appendChild(rmBtn);
+
+        container.appendChild(row);
+    }
+
+    // --- Gather form values back into an object --------------------------------
+
+    /** Gather the value of a single field element. */
+    function cfgGatherField(el, field) {
+        if (field.type === "list") {
+            return cfgGatherList(el, field);
+        }
+        if (field.type === "text-list") {
+            var raw = (el.querySelector("input") || {}).value || "";
+            return raw ? raw.split(",").map(function(s) { return s.trim(); }).filter(Boolean) : [];
+        }
+        if (field.type === "select") {
+            return (el.querySelector("select") || {}).value || "";
+        }
+        if (field.type === "textarea") {
+            return (el.querySelector("textarea") || {}).value || "";
+        }
+        // text
+        return (el.querySelector("input") || {}).value || "";
+    }
+
+    /** Gather all items from a list field. */
+    function cfgGatherList(container, field) {
+        var items = [];
+        container.querySelectorAll(":scope > .cfg-list-items > .cfg-list-item").forEach(function(row) {
+            var obj = {};
+            (field.fields || []).forEach(function(sf) {
+                var child = row.querySelector('[data-cfg-key="' + sf.key + '"]');
+                if (child) obj[sf.key] = cfgGatherField(child, sf);
+            });
+            items.push(obj);
+        });
+        return items;
+    }
+
+    /** Gather the entire form into a data object, respecting root_key. */
+    function cfgGatherForm(schema) {
+        var container = document.getElementById("config-editor-fields");
+        var data = {};
+        (schema.fields || []).forEach(function(field) {
+            var el = container.querySelector(':scope > [data-cfg-key="' + field.key + '"]');
+            if (el) data[field.key] = cfgGatherField(el, field);
+        });
+        if (schema.root_key) {
+            var wrapped = {};
+            wrapped[schema.root_key] = data;
+            return wrapped;
+        }
+        return data;
+    }
+
+    // --- Load / save -----------------------------------------------------------
+
+    function cfgLoadForm(schema, data) {
+        var container = document.getElementById("config-editor-fields");
+        container.innerHTML = "";
+        var inner = data;
+        if (schema.root_key && data && typeof data === "object") {
+            inner = data[schema.root_key] || {};
+        }
+        (schema.fields || []).forEach(function(field) {
+            container.appendChild(cfgBuildField(field, inner[field.key]));
+        });
+    }
+
+    function cfgSave() {
+        if (!cfgEditorCapName || !cfgEditorSchema) return;
+        var data = cfgGatherForm(cfgEditorSchema);
+        var yaml = jsyaml.dump(data, { lineWidth: -1 });
+        var status = document.getElementById("config-editor-status");
+        status.textContent = "Saving...";
+        status.className = "save-status";
+        var xhr = new XMLHttpRequest();
+        xhr.open("PUT", "/api/config/" + encodeURIComponent(cfgEditorCapName) + "?token=" + encodeURIComponent(TOKEN));
+        xhr.setRequestHeader("Content-Type", "text/plain");
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                status.textContent = "Saved.";
+                status.className = "save-status save-ok";
+            } else {
+                status.textContent = "Error: " + xhr.responseText;
+                status.className = "save-status save-err";
+            }
+        };
+        xhr.onerror = function() {
+            status.textContent = "Network error.";
+            status.className = "save-status save-err";
+        };
+        xhr.send(yaml);
+    }
+
+    function cfgLoad(capName, schema) {
+        cfgEditorCapName = capName;
+        cfgEditorSchema = schema;
+        var titleEl = document.getElementById("config-editor-window-title");
+        titleEl.textContent = "Config Editor \u2014 " + capName;
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "/api/config/" + encodeURIComponent(capName) + "?token=" + encodeURIComponent(TOKEN));
+        xhr.onload = function() {
+            var data = {};
+            if (xhr.status === 200 && xhr.responseText.trim()) {
+                try { data = jsyaml.load(xhr.responseText); } catch (e) { data = {}; }
+            }
+            if (!data || typeof data !== "object") data = {};
+            cfgLoadForm(schema, data);
+        };
+        xhr.onerror = function() {
+            cfgLoadForm(schema, {});
+        };
+        xhr.send();
+    }
+
+    document.getElementById("config-editor-save").addEventListener("click", cfgSave);
+
+    window.__openConfigEditor = function(capName, schema) {
+        cfgLoad(capName, schema);
+        openWindow("config-editor-window");
+    };
+
+    // =========================================================================
+    // Unified Store (table layout) — MCP Servers + Capabilities tabs
     // =========================================================================
     var storeTbody = document.getElementById("store-tbody");
+    var capStoreTbody = document.getElementById("cap-store-tbody");
     var storeCatalog = null;        // cached RegistryManifest
     var installedMcps = [];         // array from /api/mcp/installed
+    var installedCaps = [];         // array from /api/capabilities/installed
     var storeSearchText = "";
     var mcpTestResults = {};        // name -> { ok, tools, error }
+    var activeStoreTab = "mcp";
+
+    // Tab switching
+    document.querySelectorAll(".store-tab").forEach(function (tab) {
+        tab.addEventListener("click", function () {
+            document.querySelectorAll(".store-tab").forEach(function (t) { t.classList.remove("active"); });
+            tab.classList.add("active");
+            activeStoreTab = tab.getAttribute("data-tab");
+            document.getElementById("store-tab-mcp").style.display = activeStoreTab === "mcp" ? "" : "none";
+            document.getElementById("store-tab-capabilities").style.display = activeStoreTab === "capabilities" ? "" : "none";
+        });
+    });
 
     function loadUnifiedStore() {
         storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading...</td></tr>';
+        capStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Loading...</td></tr>';
 
         Promise.all([
             apiFetch("/api/registry/catalog"),
             apiFetch("/api/mcp/installed"),
+            apiFetch("/api/capabilities/installed"),
         ]).then(function (results) {
             storeCatalog = results[0];
             installedMcps = results[1];
+            installedCaps = results[2];
             renderStoreTable();
+            renderCapStoreTable();
         }).catch(function (err) {
             storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Failed to load: ' +
+                escapeHtml(String(err)) + '</td></tr>';
+            capStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Failed to load: ' +
                 escapeHtml(String(err)) + '</td></tr>';
         });
     }
@@ -743,10 +1003,128 @@
             });
     }
 
+    // ── Capabilities Store Tab ──────────────────────────────────────────────
+
+    function renderCapStoreTable() {
+        if (!storeCatalog) return;
+        var caps = storeCatalog.capabilities || [];
+        var filtered = caps;
+
+        if (storeSearchText) {
+            var q = storeSearchText.toLowerCase();
+            filtered = caps.filter(function (c) {
+                return c.name.toLowerCase().indexOf(q) !== -1 ||
+                    c.description.toLowerCase().indexOf(q) !== -1 ||
+                    (c.tags || []).some(function (t) { return t.toLowerCase().indexOf(q) !== -1; });
+            });
+        }
+
+        if (filtered.length === 0) {
+            capStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">No capabilities found</td></tr>';
+            return;
+        }
+
+        // Build installed lookup
+        var installedNames = {};
+        installedCaps.forEach(function (c) { installedNames[c.name] = true; });
+
+        var html = "";
+        for (var i = 0; i < filtered.length; i++) {
+            var c = filtered[i];
+            var isInstalled = installedNames[c.id] || false;
+            var dotHtml = isInstalled
+                ? '<span class="mcp-installed-dot active"></span>'
+                : '<span class="mcp-installed-dot"></span>';
+            var verifiedHtml = c.verified ? '<span class="store-verified-badge" title="Verified">&#10003;</span>' : '';
+
+            var actionHtml;
+            if (isInstalled) {
+                actionHtml = '<button class="xp-button xp-button-remove cap-store-remove-btn" data-name="' +
+                    escapeAttr(c.id) + '">Remove</button>';
+            } else {
+                actionHtml = '<button class="xp-button xp-button-primary cap-store-install-btn" data-id="' +
+                    escapeAttr(c.id) + '">Install</button>';
+            }
+
+            html += '<tr>' +
+                '<td style="text-align:center;">' + dotHtml + '</td>' +
+                '<td><span class="cap-name">' + escapeHtml(c.name) + '</span></td>' +
+                '<td class="store-desc-cell" title="' + escapeAttr(c.description) + '">' + escapeHtml(c.description) + '</td>' +
+                '<td>v' + escapeHtml(c.version) + '</td>' +
+                '<td style="text-align:center;">' + verifiedHtml + '</td>' +
+                '<td>' + actionHtml + '</td>' +
+                '</tr>';
+        }
+        capStoreTbody.innerHTML = html;
+
+        // Bind install buttons
+        capStoreTbody.querySelectorAll(".cap-store-install-btn").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var id = btn.getAttribute("data-id");
+                onCapInstall(id, btn);
+            });
+        });
+
+        // Bind remove buttons
+        capStoreTbody.querySelectorAll(".cap-store-remove-btn").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var name = btn.getAttribute("data-name");
+                onCapRemove(name, btn);
+            });
+        });
+    }
+
+    function showRestartBanner() {
+        document.getElementById("store-restart-banner").style.display = "";
+    }
+
+    function triggerRestart() {
+        showRestartBanner();
+        apiFetch("/api/system/restart", { method: "POST" }).catch(function () {
+            // Connection will drop when the process exits — that's expected.
+        });
+        // Poll until the server is back, then reload the page.
+        setTimeout(function poll() {
+            fetch("/api/dashboard/status?token=" + encodeURIComponent(TOKEN))
+                .then(function (r) { if (r.ok) location.reload(); else setTimeout(poll, 1000); })
+                .catch(function () { setTimeout(poll, 1000); });
+        }, 2000);
+    }
+
+    function onCapInstall(id, btn) {
+        btn.disabled = true;
+        btn.textContent = "Installing...";
+        apiFetch("/api/capabilities/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: id }),
+        }).then(function (result) {
+            triggerRestart();
+        }).catch(function (err) {
+            alert("Install failed: " + err);
+            btn.disabled = false;
+            btn.textContent = "Install";
+        });
+    }
+
+    function onCapRemove(name, btn) {
+        if (!confirm('Remove capability "' + name + '"?')) return;
+        btn.disabled = true;
+        apiFetch("/api/capabilities/uninstall/" + encodeURIComponent(name), { method: "POST" })
+            .then(function () {
+                triggerRestart();
+            })
+            .catch(function (err) {
+                alert("Uninstall failed: " + err);
+                btn.disabled = false;
+            });
+    }
+
     // Store search
     document.getElementById("store-search").addEventListener("input", function (e) {
         storeSearchText = e.target.value;
         renderStoreTable();
+        renderCapStoreTable();
     });
 
     // Store refresh

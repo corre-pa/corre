@@ -1,3 +1,5 @@
+//! Local `LlmProvider` trait declaration (unused reference sketch).
+
 use crate::types::{ChatCompletionRequest, ChatCompletionResponse};
 
 #[async_trait::async_trait]

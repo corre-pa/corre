@@ -1,3 +1,9 @@
+//! Domain model types for the contact and outreach system.
+//!
+//! Contains `Contact`, `OutreachStrategy`, `OutreachLog`, `ProfileEntry`, and the
+//! supporting enums `Importance`, `ContactMethod`, `ProfileSource`, `ProfileCategory`,
+//! and `StrategyType`.
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

@@ -1,0 +1,24 @@
+[package]
+name = "daily-brief"
+version.workspace = true
+edition.workspace = true
+description = "Standalone daily research brief capability binary"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "daily-brief"
+path = "src/main.rs"
+
+[dependencies]
+corre-sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

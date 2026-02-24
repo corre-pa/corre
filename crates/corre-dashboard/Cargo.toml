@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+corre-sdk = { workspace = true }
 corre-core = { workspace = true }
 corre-registry = { workspace = true }
 corre-mcp = { workspace = true }
+toml = { workspace = true }
 axum = { workspace = true }
 askama = { workspace = true }
 tokio = { workspace = true }

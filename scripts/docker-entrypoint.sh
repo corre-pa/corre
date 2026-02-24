@@ -1,18 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Patch corre.toml for container environment:
-#   - data_dir → /data (backed by a Docker volume)
-#   - bind → 0.0.0.0:3200 (reachable from the host via port mapping)
-sed -i 's|data_dir = "~/.local/share/corre"|data_dir = "/data"|' /app/corre.toml
-sed -i 's|bind = "127.0.0.1:3200"|bind = "0.0.0.0:3200"|' /app/corre.toml
+# The entrypoint runs as root so it can chown the bind mount and start
+# Tailscale. The main process is exec'd as the unprivileged corre user.
 
-# Optional Tailscale integration
+# Ensure the bind-mounted data dir is owned by corre
+chown -R corre:corre /data
+
+# Seed default corre.toml into the data volume if it doesn't exist yet.
+# The bundled /app/corre.toml is a read-only template; the writable copy
+# lives on the persistent volume so the dashboard can save settings.
+if [ -f /app/corre.toml ] && [ ! -e /data/corre.toml ]; then
+    cp /app/corre.toml /data/corre.toml
+    chown corre:corre /data/corre.toml
+    echo "Seeded default corre.toml into /data"
+fi
+
+# Seed per-capability config files into the data volume.
+if [ -d /app/config ] && [ -d /data ]; then
+    mkdir -p /data/config
+    chown corre:corre /data/config
+    for f in /app/config/*; do
+        dest="/data/config/$(basename "$f")"
+        if [ ! -e "$dest" ]; then
+            cp "$f" "$dest"
+            chown corre:corre "$dest"
+            echo "Seeded default config: $(basename "$f")"
+        fi
+    done
+fi
+
+# Optional Tailscale integration (runs as root)
 if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
     echo "Starting Tailscale..."
+    mkdir -p /data/tailscale
     tailscaled --state=/data/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
 
-    # Wait for the daemon socket
+    # Wait for the daemon socket (up to 15 seconds)
     for i in $(seq 1 30); do
         [ -S /var/run/tailscale/tailscaled.sock ] && break
         sleep 0.5
@@ -25,6 +49,11 @@ if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
 
     tailscale up "${TS_ARGS[@]}"
     echo "Tailscale is up: $(tailscale ip -4)"
+
+    # Proxy newspaper and dashboard over the tailnet
+    tailscale serve 5510 http://corre-news:5510 2>/dev/null || true
+    tailscale serve 5500 http://localhost:5500 2>/dev/null || true
 fi
 
-exec "$@"
+# Drop to the corre user for the main process
+exec gosu corre "$@"

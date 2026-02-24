@@ -1,5 +1,10 @@
+//! Full-text search index over archived editions, backed by Tantivy.
+//!
+//! Articles are indexed with `title`, `summary`, and `body` as text fields, plus `date`
+//! and `section` as stored string fields. The index persists to `{data_dir}/search_index/`.
+
+use crate::edition::Edition;
 use anyhow::Context;
-use corre_core::publish::Edition;
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
@@ -25,22 +30,42 @@ pub struct SearchResult {
 }
 
 impl SearchIndex {
-    pub fn open_or_create(data_dir: &Path) -> anyhow::Result<Self> {
-        let index_dir = data_dir.join("search_index");
-        std::fs::create_dir_all(&index_dir)?;
-
+    fn build_schema() -> (Schema, Field, Field, Field, Field, Field) {
         let mut schema_builder = Schema::builder();
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let summary_field = schema_builder.add_text_field("summary", TEXT | STORED);
         let body_field = schema_builder.add_text_field("body", TEXT);
         let date_field = schema_builder.add_text_field("date", STRING | STORED);
         let section_field = schema_builder.add_text_field("section", STRING | STORED);
-        let schema = schema_builder.build();
+        (schema_builder.build(), title_field, summary_field, body_field, date_field, section_field)
+    }
+
+    pub fn open_or_create(data_dir: &Path) -> anyhow::Result<Self> {
+        let index_dir = data_dir.join("search_index");
+        std::fs::create_dir_all(&index_dir)?;
+
+        let (schema, title_field, summary_field, body_field, date_field, section_field) = Self::build_schema();
 
         let index = Index::open_or_create(tantivy::directory::MmapDirectory::open(&index_dir)?, schema)
             .context("Failed to open/create search index")?;
 
         Ok(Self { index, title_field, summary_field, body_field, date_field, section_field })
+    }
+
+    /// Open an existing search index in read-only mode. Returns `None` if the
+    /// index directory does not exist yet (no editions have been indexed).
+    pub fn open_readonly(data_dir: &Path) -> anyhow::Result<Option<Self>> {
+        let index_dir = data_dir.join("search_index");
+        if !index_dir.is_dir() {
+            return Ok(None);
+        }
+
+        let (schema, title_field, summary_field, body_field, date_field, section_field) = Self::build_schema();
+
+        let index = Index::open_or_create(tantivy::directory::MmapDirectory::open(&index_dir)?, schema)
+            .context("Failed to open search index read-only")?;
+
+        Ok(Some(Self { index, title_field, summary_field, body_field, date_field, section_field }))
     }
 
     /// Index all articles from an edition.

@@ -237,10 +237,10 @@ setup_tailscale() {
         ok "Tailscale connected. IP: ${TAILSCALE_IP}"
 
         echo ""
-        if confirm "Update corre.toml bind address from 127.0.0.1:3200 to 0.0.0.0:3200?"; then
-            if grep -q 'bind = "127.0.0.1:3200"' "${CORRE_CONFIG}"; then
-                sed -i 's/bind = "127.0.0.1:3200"/bind = "0.0.0.0:3200"/' "${CORRE_CONFIG}"
-                ok "Updated bind address to 0.0.0.0:3200"
+        if confirm "Update corre.toml bind address from 127.0.0.1:5510 to 0.0.0.0:5510?"; then
+            if grep -q 'bind = "127.0.0.1:5510"' "${CORRE_CONFIG}"; then
+                sed -i 's/bind = "127.0.0.1:5510"/bind = "0.0.0.0:5510"/' "${CORRE_CONFIG}"
+                ok "Updated bind address to 0.0.0.0:5510"
             else
                 warn "Could not find expected bind line in ${CORRE_CONFIG}. Edit manually if needed."
             fi
@@ -257,7 +257,7 @@ setup_tailscale() {
 setup_tor_placeholder() {
     echo ""
     info "Tor hidden service setup is not yet implemented."
-    info "Future plan: install tor, configure hidden service on port 3200, display .onion address."
+    info "Future plan: install tor, configure hidden service on port 5510, display .onion address."
     # TODO:
     # - sudo apt-get install tor
     # - Configure /etc/tor/torrc with HiddenServiceDir and HiddenServicePort
@@ -290,11 +290,11 @@ print_summary() {
 
     if [[ "${DID_TAILSCALE}" == true && -n "${TAILSCALE_IP}" ]]; then
         echo -e "  Tailscale IP:  ${TAILSCALE_IP}"
-        echo -e "  Remote URL:    http://${TAILSCALE_IP}:3200"
+        echo -e "  Remote URL:    http://${TAILSCALE_IP}:5510"
     fi
 
     echo ""
-    echo -e "  Local URL:     http://127.0.0.1:3200"
+    echo -e "  Local URL:     http://127.0.0.1:5510"
     echo ""
     echo -e "${BOLD}════════════════════════════════════════════════════════${NC}"
 }

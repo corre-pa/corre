@@ -1,3 +1,8 @@
+//! Serializable wizard state persisted between setup steps.
+//!
+//! `SetupState` records which step the user has completed so the wizard can resume
+//! after an interruption without re-asking questions.
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -7,7 +12,7 @@ pub struct CapabilityLlmState {
     pub provider: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
-    pub api_key_env: Option<String>,
+    pub api_key: Option<String>,
 }
 
 /// Tracks which step the user has reached so the wizard can resume after interruption.
@@ -17,7 +22,7 @@ pub struct SetupState {
     pub llm_provider: Option<String>,
     pub llm_base_url: Option<String>,
     pub llm_model: Option<String>,
-    pub llm_api_key_env: Option<String>,
+    pub llm_api_key: Option<String>,
     pub brave_api_key_env: Option<String>,
     pub enabled_capabilities: Vec<String>,
     /// Per-capability LLM overrides keyed by capability name.
@@ -39,7 +44,7 @@ impl Default for SetupState {
             llm_provider: None,
             llm_base_url: None,
             llm_model: None,
-            llm_api_key_env: None,
+            llm_api_key: None,
             brave_api_key_env: None,
             enabled_capabilities: Vec::new(),
             capability_llm_overrides: std::collections::HashMap::new(),

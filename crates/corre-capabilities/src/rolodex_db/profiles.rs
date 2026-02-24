@@ -1,5 +1,10 @@
-use crate::db::Database;
-use crate::models::{ProfileCategory, ProfileEntry, ProfileSource};
+//! Contact profile entry storage and the `new_profile_entry` constructor.
+//!
+//! Extends `Database` with methods to store and retrieve structured observations
+//! about a contact, filterable by category and bounded by a limit.
+
+use super::db::Database;
+use super::models::{ProfileCategory, ProfileEntry, ProfileSource};
 use anyhow::Context;
 use rusqlite::params;
 
@@ -60,11 +65,11 @@ pub fn new_profile_entry(contact_id: &str, source: ProfileSource, category: Prof
 
 #[cfg(test)]
 mod tests {
+    use super::super::contacts::new_contact;
+    use super::super::models::Importance;
     use super::*;
-    use crate::contacts::new_contact;
-    use crate::models::Importance;
 
-    fn test_db_with_contact() -> (Database, crate::models::Contact) {
+    fn test_db_with_contact() -> (Database, super::super::models::Contact) {
         let db = Database::open_in_memory().unwrap();
         let contact =
             new_contact("Alice".into(), "Smith".into(), Some("alice@test.com".into()), None, Some("1990-03-15".into()), Importance::High);

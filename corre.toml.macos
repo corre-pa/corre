@@ -5,13 +5,13 @@ log_level = "info"
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"
-model = "llama-3.3-70b"
-api_key_env = "VENICE_API_KEY"
+model = "zai-org-glm-4.7-flash"
+api_key = "${VENICE_API_KEY}"
 temperature = 0.3
 max_concurrent = 10
 
 [news]
-bind = "127.0.0.1:3200"
+bind = "127.0.0.1:5510"
 title = "Corre News"
 # editor_token = "change-me-to-a-secret"   # set to enable /settings and /settings/topics
 

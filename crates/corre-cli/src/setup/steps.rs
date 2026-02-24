@@ -1,3 +1,8 @@
+//! Individual step implementations for the `corre setup` wizard (steps 1-9).
+//!
+//! Each function renders a screen, collects user input via `dialoguer`, updates
+//! `SetupState`, and saves progress to disk.
+
 use console::Style;
 use dialoguer::{Confirm, Input, MultiSelect, Password, Select};
 
@@ -101,25 +106,26 @@ pub fn llm_provider(state: &mut SetupState, term: &console::Term) -> anyhow::Res
         Input::new().with_prompt("Model name").default(provider.default_model.into()).interact_text()?
     };
 
-    // API key env var name
-    let api_key_env: String =
-        Input::new().with_prompt("Environment variable for API key").default(provider.api_key_env.into()).interact_text()?;
+    // API key — either a ${VAR} reference or a literal value
+    let api_key: String = Input::new().with_prompt("API key (${ENV_VAR} or literal)").default(provider.api_key.into()).interact_text()?;
 
-    // Actual API key value (stored in state, written to .env later)
-    if provider.needs_api_key {
-        println!();
-        let key: String =
-            Password::new().with_prompt(format!("Paste your {api_key_env} value (hidden)")).allow_empty_password(false).interact()?;
-        state.api_keys.insert(api_key_env.clone(), key);
-    } else {
-        println!();
-        println!("No API key needed for this provider.");
+    // If it's an env-var reference, collect the actual key value for .env
+    if let Some(env_name) = api_key.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+        if provider.needs_api_key {
+            println!();
+            let key: String =
+                Password::new().with_prompt(format!("Paste your {env_name} value (hidden)")).allow_empty_password(false).interact()?;
+            state.api_keys.insert(env_name.to_string(), key);
+        } else {
+            println!();
+            println!("No API key needed for this provider.");
+        }
     }
 
     state.llm_provider = Some(provider.key.into());
     state.llm_base_url = Some(base_url);
     state.llm_model = Some(model);
-    state.llm_api_key_env = Some(api_key_env);
+    state.llm_api_key = Some(api_key);
     state.completed_step = 2;
     state.save()?;
 
@@ -247,16 +253,18 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
             Input::new().with_prompt("Model name").default(provider.default_model.into()).interact_text()?
         };
 
-        // API key env var name
-        let api_key_env: String =
-            Input::new().with_prompt("Environment variable for API key").default(provider.api_key_env.into()).interact_text()?;
+        // API key — either a ${VAR} reference or a literal value
+        let api_key: String =
+            Input::new().with_prompt("API key (${ENV_VAR} or literal)").default(provider.api_key.into()).interact_text()?;
 
-        // Collect the actual API key if this provider needs one and we don't already have it
-        if provider.needs_api_key && !state.api_keys.contains_key(&api_key_env) {
-            println!();
-            let key: String =
-                Password::new().with_prompt(format!("Paste your {api_key_env} value (hidden)")).allow_empty_password(false).interact()?;
-            state.api_keys.insert(api_key_env.clone(), key);
+        // If it's an env-var reference, collect the actual key value for .env
+        if let Some(env_name) = api_key.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+            if provider.needs_api_key && !state.api_keys.contains_key(env_name) {
+                println!();
+                let key: String =
+                    Password::new().with_prompt(format!("Paste your {env_name} value (hidden)")).allow_empty_password(false).interact()?;
+                state.api_keys.insert(env_name.to_string(), key);
+            }
         }
 
         state.capability_llm_overrides.insert(
@@ -265,7 +273,7 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
                 provider: Some(provider.key.into()),
                 base_url: Some(base_url),
                 model: Some(model),
-                api_key_env: Some(api_key_env),
+                api_key: Some(api_key),
             },
         );
 
@@ -351,10 +359,10 @@ pub fn preferences(state: &mut SetupState, term: &console::Term) -> anyhow::Resu
 
     let port: String = Input::new()
         .with_prompt("CorreNews web server port")
-        .default("3200".into())
+        .default("5510".into())
         .validate_with(|input: &String| validate::port_number(input))
         .interact_text()?;
-    state.news_port = Some(port.trim().parse().unwrap_or(3200));
+    state.news_port = Some(port.trim().parse().unwrap_or(5510));
 
     let title: String = Input::new().with_prompt("Newspaper title").default("Corre News".into()).interact_text()?;
     state.news_title = Some(title);
@@ -394,6 +402,9 @@ pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow:
     let config_file = data_dir.join("corre.toml");
     std::fs::write(&config_file, &config_toml)?;
     println!("  Wrote {}", config_file.display());
+
+    // Write per-MCP config files
+    super::templates::write_mcp_configs(state, &data_dir)?;
 
     // Write config/topics.yml
     if let Some(ref topics) = state.topics_yml {
@@ -507,7 +518,7 @@ fn print_summary(state: &SetupState) {
     let bold = Style::new().bold();
     let dim = Style::new().dim();
 
-    let port = state.news_port.unwrap_or(3200);
+    let port = state.news_port.unwrap_or(5510);
     let data_dir = super::templates::default_data_dir();
 
     println!();

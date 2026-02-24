@@ -1,3 +1,8 @@
+//! Database connection management and schema migrations.
+//!
+//! `Database` wraps a `rusqlite::Connection` and ensures the four core tables
+//! are present before any query is executed.
+
 use anyhow::Context;
 use rusqlite::Connection;
 use std::path::Path;

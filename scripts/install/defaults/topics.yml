@@ -1,0 +1,9 @@
+daily-briefing:
+  sections:
+    - title: Technology
+      queries:
+        - Rust programming language news
+        - AI and machine learning developments
+    - title: World News
+      queries:
+        - Geopolitics and international relations

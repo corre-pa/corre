@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }} — Dashboard</title>
     <link rel="stylesheet" href="/dashboard/static/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
 </head>
 <body class="xp-desktop">
 
@@ -133,8 +134,8 @@
                             <input type="text" id="llm_model" class="xp-input xp-input-wide">
                         </div>
                         <div class="xp-field">
-                            <label for="llm_api_key_env">API key env var</label>
-                            <input type="text" id="llm_api_key_env" class="xp-input xp-input-wide">
+                            <label for="llm_api_key">API key</label>
+                            <input type="text" id="llm_api_key" class="xp-input xp-input-wide" placeholder="${ENV_VAR} or literal key">
                         </div>
                         <div class="xp-field">
                             <label for="llm_temperature">Temperature</label>
@@ -209,11 +210,11 @@
         </div>
     </div>
 
-    <!-- Unified MCP Store Window -->
+    <!-- Unified Store Window -->
     <div class="xp-window" id="mcp-store-window" style="top:340px;left:20px;width:58%;min-height:300px;">
         <div class="xp-titlebar">
             <span class="xp-titlebar-icon">&#128722;</span>
-            <span class="xp-titlebar-text">MCP Store</span>
+            <span class="xp-titlebar-text">Store</span>
             <div class="xp-titlebar-buttons">
                 <button class="xp-btn-minimize" data-window="mcp-store-window">_</button>
                 <button class="xp-btn-maximize">&#9633;</button>
@@ -221,26 +222,54 @@
             </div>
         </div>
         <div class="xp-toolbar">
-            <input type="text" id="store-search" placeholder="Search MCP servers..." class="xp-input xp-input-wide">
+            <div class="store-tabs">
+                <button class="xp-button store-tab active" data-tab="mcp">MCP Servers</button>
+                <button class="xp-button store-tab" data-tab="capabilities">Capabilities</button>
+            </div>
+            <input type="text" id="store-search" placeholder="Search..." class="xp-input xp-input-wide">
             <button class="xp-button" id="store-refresh-btn" title="Refresh catalog">Refresh</button>
         </div>
+        <div id="store-restart-banner" class="store-restart-banner" style="display:none;">
+            Restarting, please wait...
+        </div>
         <div class="xp-window-body store-body">
-            <table class="xp-table" id="store-table">
-                <thead>
-                    <tr>
-                        <th style="width:24px;"></th>
-                        <th>Name</th>
-                        <th>Description</th>
-                        <th style="width:60px;">Version</th>
-                        <th style="width:24px;" title="Verified"></th>
-                        <th style="width:24px;" title="Configure"></th>
-                        <th style="width:100px;">Action</th>
-                    </tr>
-                </thead>
-                <tbody id="store-tbody">
-                    <tr><td colspan="7" class="loading-cell">Loading catalog...</td></tr>
-                </tbody>
-            </table>
+            <!-- MCP Servers tab -->
+            <div id="store-tab-mcp" class="store-tab-content">
+                <table class="xp-table" id="store-table">
+                    <thead>
+                        <tr>
+                            <th style="width:24px;"></th>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th style="width:60px;">Version</th>
+                            <th style="width:24px;" title="Verified"></th>
+                            <th style="width:24px;" title="Configure"></th>
+                            <th style="width:100px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="store-tbody">
+                        <tr><td colspan="7" class="loading-cell">Loading catalog...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <!-- Capabilities tab -->
+            <div id="store-tab-capabilities" class="store-tab-content" style="display:none;">
+                <table class="xp-table" id="cap-store-table">
+                    <thead>
+                        <tr>
+                            <th style="width:24px;"></th>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th style="width:60px;">Version</th>
+                            <th style="width:24px;" title="Verified"></th>
+                            <th style="width:100px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cap-store-tbody">
+                        <tr><td colspan="6" class="loading-cell">Loading catalog...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -298,6 +327,26 @@
                 </div>
             </div>
             <div class="xp-window-body action-modal-body" id="action-modal-body">
+            </div>
+        </div>
+    </div>
+
+    <!-- Config Editor Window (initially minimized, driven by schema) -->
+    <div class="xp-window minimized" id="config-editor-window" style="top:60px;left:20%;width:55%;min-height:400px;">
+        <div class="xp-titlebar">
+            <span class="xp-titlebar-icon">&#128209;</span>
+            <span class="xp-titlebar-text" id="config-editor-window-title">Config Editor</span>
+            <div class="xp-titlebar-buttons">
+                <button class="xp-btn-minimize" data-window="config-editor-window">_</button>
+                <button class="xp-btn-maximize">&#9633;</button>
+                <button class="xp-btn-close" data-window="config-editor-window">X</button>
+            </div>
+        </div>
+        <div class="xp-window-body settings-body">
+            <div id="config-editor-fields"></div>
+            <div class="settings-actions" style="margin-top:12px;">
+                <button type="button" class="xp-button xp-button-primary" id="config-editor-save">Save</button>
+                <span id="config-editor-status" class="save-status"></span>
             </div>
         </div>
     </div>
@@ -369,21 +418,59 @@
             <span class="start-menu-user">{{ title }}</span>
         </div>
         <div class="start-menu-body">
-            <a href="/" target="_blank" class="start-menu-item">&#128240; Newspaper</a>
+            <div id="start-menu-plugin-links"></div>
             <a href="#" class="start-menu-item" id="start-mcp-store">&#128722; MCP Store</a>
             <a href="#" class="start-menu-item" id="start-settings">&#9881; Settings</a>
-            <div class="start-menu-submenu-container">
-                <a href="#" class="start-menu-item start-menu-has-submenu">&#128196; Daily Brief &#9656;</a>
-                <div class="start-submenu">
-                    <a href="/settings/topics?token={{ token }}" target="_blank" class="start-menu-item">&#128209; Topics</a>
-                </div>
-            </div>
+            <div id="start-menu-config-editors"></div>
         </div>
     </div>
 
     <script>
         window.__DASHBOARD_TOKEN = "{{ token }}";
         window.__CONFIG = {{ config_json|safe }};
+        window.__PLUGIN_LINKS = {{ plugin_links_json|safe }};
+        window.__CONFIG_EDITORS = {{ config_editors_json|safe }};
+        // Render plugin links in start menu
+        (function() {
+            var container = document.getElementById('start-menu-plugin-links');
+            var links = window.__PLUGIN_LINKS || [];
+            links.forEach(function(link) {
+                var a = document.createElement('a');
+                a.href = link.url;
+                a.target = '_blank';
+                a.className = 'start-menu-item';
+                a.textContent = (link.icon || '') + ' ' + link.label;
+                container.appendChild(a);
+            });
+        })();
+        // Render config editor entries in start menu (open in-dashboard window)
+        (function() {
+            var container = document.getElementById('start-menu-config-editors');
+            var editors = window.__CONFIG_EDITORS || [];
+            editors.forEach(function(ed) {
+                var wrapper = document.createElement('div');
+                wrapper.className = 'start-menu-submenu-container';
+                var trigger = document.createElement('a');
+                trigger.href = '#';
+                trigger.className = 'start-menu-item start-menu-has-submenu';
+                trigger.innerHTML = '&#128196; ' + ed.name + ' &#9656;';
+                var submenu = document.createElement('div');
+                submenu.className = 'start-submenu';
+                var link = document.createElement('a');
+                link.href = '#';
+                link.className = 'start-menu-item';
+                link.innerHTML = '&#128209; Config';
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    document.getElementById('start-menu').style.display = 'none';
+                    if (window.__openConfigEditor) window.__openConfigEditor(ed.cap, ed.schema);
+                });
+                submenu.appendChild(link);
+                wrapper.appendChild(trigger);
+                wrapper.appendChild(submenu);
+                container.appendChild(wrapper);
+            });
+        })();
     </script>
     <script src="/dashboard/static/dashboard.js"></script>
 </body>

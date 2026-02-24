@@ -1,3 +1,7 @@
+//! Interactive first-run wizard for Corre (`corre setup`). Sequences nine setup steps --
+//! dependency checks, LLM provider configuration, Brave Search, capability selection,
+//! per-capability LLM overrides, topics, preferences, config file writing, and start options.
+
 pub(crate) mod deps;
 mod providers;
 mod state;

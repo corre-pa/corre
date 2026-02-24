@@ -1,3 +1,9 @@
+//! Stage 3 of the safety pipeline: detection and redaction of leaked credentials.
+//!
+//! Uses a two-phase approach -- Aho-Corasick prefix scanning followed by regex
+//! confirmation -- to redact API keys, cloud credentials, tokens, PEM headers,
+//! and high-entropy hex strings.
+
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use regex::Regex;
 use std::sync::LazyLock;

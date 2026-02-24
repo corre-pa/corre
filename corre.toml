@@ -5,13 +5,13 @@ log_level = "info"
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"
-model = "llama-3.3-70b"
-api_key_env = "VENICE_API_KEY"
+model = "zai-org-glm-4.7-flash"
+api_key = "${VENICE_API_KEY}"
 temperature = 0.3
 max_concurrent = 10        # parallel LLM requests; tune to your provider's rate limit
 
 [news]
-bind = "192.168.1.101:5555"
+bind = "192.168.1.101:5510"
 title = "Corre News"
 editor_token = "edit"   # set to enable /settings and /settings/topics
 
@@ -32,17 +32,9 @@ mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
 
-[[capabilities]]
-name = "rolodex"
-description = "Daily birthday reminders and contact news digest"
-schedule = "0 0 6 * * *"
-mcp_servers = ["brave-search", "smtp", "telegram", "whatsapp"]
-config_path = "config/rolodex.yml"
-enabled = true
-
 # [capabilities.llm]
 # model = "gpt-4o"              # override the global model for this capability
 # temperature = 0.7             # override temperature
 # base_url = "https://..."      # use a different provider entirely
-# api_key_env = "OTHER_API_KEY"
+# api_key = "${OTHER_API_KEY}"
 # max_concurrent = 5

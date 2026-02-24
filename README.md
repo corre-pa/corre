@@ -5,23 +5,20 @@ their output as a newspaper-style web interface called **CorreNews**.
 
 ## Goals
 
-- **Privacy-first**: All data stays local. Corre never phones home or shares data with third
-  parties unless you explicitly point it at an external API. Use whichever LLM provider you trust
-  (Venice.ai, Ollama, OpenAI, etc.).
-- **Modular capabilities**: Each task (daily news brief, stock portfolio review, fantasy sports
-  assistant, birthday reminders, ...) is a self-contained capability that can be installed,
-  configured, and removed independently.
+- **Privacy-centric**: All data stays local. Use whichever LLM provider you like, but Corre defaults to privacy-centric services that 
+  use open-source models and don't log your sessions (Venice.ai, Brave Search, Kagi etc.).
+- **Modular capabilities**: Each task (daily news brief, assistant, birthday reminders, ...) is a self-contained capability that can be 
+  installed, configured, and removed independently.
 - **MCP-native**: Capabilities interact with the outside world through
-  [Model Context Protocol](https://modelcontextprotocol.io/) servers. Existing MCP servers work
-  out of the box -- just add them to `corre.toml`.
-- **Deterministic orchestration**: Scheduling is done with cron expressions, not open-ended LLM
-  agent loops. LLM calls happen at well-defined steps (scoring, summarising) within a structured
-  pipeline.
-- **Newspaper output**: Results are compiled into dated editions and served on a local web server
-  with a classic newspaper layout. Editions are archived as JSON and indexed for full-text search.
-- **Accessible anywhere**: CorreNews binds to `127.0.0.1` by default and is designed to sit
-  behind a NAT-punching solution (Headscale, WireGuard, Tor hidden service) so you can read your
-  personal newspaper from any device without exposing it to the public internet.
+  [Model Context Protocol](https://modelcontextprotocol.io/) servers. We've curated a pool of MCP servers for web search, calendar 
+  access, email sending, and more, and you can add your own.
+- **Deterministic orchestration**: Scheduling is done with cron expressions, not open-ended LLM agent loops. We don't use LLMs to solve 
+  problems that Unix solved 60 years ago.
+- **Accessible anywhere**: CorreNews binds to `127.0.0.1` by default and is designed to sit behind a NAT-punching solution (Headscale, 
+  WireGuard, Tor hidden service) so you can read your personal newspaper from any device without exposing it to the public internet.
+- **Security-minded**: MCP servers and capabilities each run in their own sandbox. Capabilities have to provide a manifest of every MCP  
+  server they use, and you _can_ configure fine-grained permissions for file access, network access and more. However, the capability 
+  registry has pre-configured permissions to the absolute minimum so that you don't have to fiddle with manifests. 
 
 ### Included capability: Daily Research Brief
 
@@ -76,7 +73,7 @@ Edit `~/.local/share/corre/corre.toml` to point at your preferred LLM provider:
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"   # or http://localhost:11434/v1 for Ollama
-model = "llama-3.3-70b"
+model = "zai-org-glm-4.7-flash"
 api_key_env = "VENICE_API_KEY"               # name of the env var, not the key itself
 ```
 
@@ -100,22 +97,15 @@ corre run-now daily-brief
 
 The edition is written to `~/.local/share/corre/editions/YYYY-MM-DD/edition.json`.
 
-### 5. Start the web server
-
-```sh
-corre serve
-```
-
-Open <http://127.0.0.1:3200> to view CorreNews.
-
-### 6. Start the full daemon
+### 5. Start the full daemon
 
 ```sh
 corre run
 ```
 
-This starts both the cron scheduler and the web server. Capabilities fire on their configured
-schedules (the daily brief defaults to `0 0 5 * * *` -- 05:00 every day).
+This starts the cron scheduler and the operator dashboard. Capabilities fire on their configured
+schedules (the daily brief defaults to `0 0 5 * * *` -- 05:00 every day). The CorreNews web
+server runs as a separate service (see `corre-news`).
 
 ### CLI reference
 
@@ -123,9 +113,8 @@ schedules (the daily brief defaults to `0 0 5 * * *` -- 05:00 every day).
 corre [OPTIONS] <COMMAND>
 
 Commands:
-  run       Start the full daemon (scheduler + web server)
+  run       Start the full daemon (scheduler + dashboard)
   run-now   Run a single capability immediately and exit
-  serve     Start only the web server
 
 Options:
   -c, --config <CONFIG>  Path to config file [default: ~/.local/share/corre/corre.toml]
@@ -169,9 +158,14 @@ corre-cli
   |-- corre-core
   |-- corre-mcp        --> corre-core
   |-- corre-llm        --> corre-core
-  |-- corre-news       --> corre-core
   |-- corre-safety     --> corre-core
   |-- corre-capabilities --> corre-core, corre-mcp, corre-llm
+  |-- corre-dashboard  --> corre-core, corre-sdk, corre-registry
+
+corre-news (standalone)
+  |-- corre-core
+  |-- corre-sdk
+  |-- daily-brief      (Edition type)
 ```
 
 `corre-core` sits at the bottom with zero internal dependencies. It defines the trait
@@ -320,12 +314,12 @@ log_level = "info"                   # or RUST_LOG env var
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"
-model = "llama-3.3-70b"
+model = "zai-org-glm-4.7-flash"
 api_key_env = "VENICE_API_KEY"       # env var name, never the actual key
 temperature = 0.3
 
 [news]
-bind = "127.0.0.1:3200"
+bind = "127.0.0.1:5510"
 title = "CorreNews"
 
 [mcp.servers.brave-search]

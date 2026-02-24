@@ -1,3 +1,7 @@
+//! Crate-private wire-format types for the OpenAI chat completions HTTP API.
+//!
+//! These structs map directly to the JSON request and response bodies and are not re-exported.
+
 use serde::{Deserialize, Serialize};
 
 /// Wire format types for the OpenAI-compatible API.

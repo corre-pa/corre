@@ -1,3 +1,8 @@
+//! `McpPool`: a lazily-started, connection-caching pool of MCP server child processes.
+//!
+//! Each server is spawned on first use via `rmcp`'s `TokioChildProcess` transport and kept
+//! alive until `McpPool::shutdown` is called. Implements `McpCaller` from `corre-core`.
+
 use crate::server_def::McpServerDef;
 use anyhow::Context;
 use corre_core::capability::{McpCallError, McpCaller};
@@ -54,12 +59,27 @@ impl McpPool {
 
         let mut cmd = Command::new(&def.command);
         cmd.args(&def.args);
+
+        // Clear all host env vars so MCP servers only see their declared secrets.
+        cmd.env_clear();
+        // Re-add minimal required vars for child process operation
+        if let Ok(path) = std::env::var("PATH") {
+            cmd.env("PATH", path);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            cmd.env("HOME", home);
+        }
+        if let Ok(node_path) = std::env::var("NODE_PATH") {
+            cmd.env("NODE_PATH", node_path);
+        }
+        // Add only the declared env vars for this server
         for (key, value) in &def.env {
             cmd.env(key, value);
         }
 
-        let transport = TokioChildProcess::new(&mut cmd)?;
-        let client = ().serve(transport).await.with_context(|| format!("Failed to start MCP server `{server_name}`"))?;
+        let transport = TokioChildProcess::new(&mut cmd)
+            .with_context(|| format!("failed to spawn MCP server `{server_name}` (command: `{} {}`)", def.command, def.args.join(" ")))?;
+        let client = ().serve(transport).await.with_context(|| format!("failed to initialize MCP server `{server_name}`"))?;
 
         Ok(client)
     }

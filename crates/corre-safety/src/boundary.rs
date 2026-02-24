@@ -1,3 +1,8 @@
+//! XML boundary wrapping for sanitized MCP tool outputs.
+//!
+//! Wrapping outputs in `<tool_output>` tags establishes a clear delimiter between
+//! external data and the surrounding prompt.
+
 /// Wrap tool output in XML delimiters to establish clear boundaries for the LLM.
 ///
 /// This prevents the LLM from confusing tool output with system instructions.

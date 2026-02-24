@@ -1,3 +1,9 @@
+//! Real-time execution state tracking for the Corre dashboard.
+//!
+//! `ExecutionTracker` maintains a per-capability `CapabilityState` map and broadcasts
+//! `DashboardEvent` updates over a `tokio::broadcast` channel. `SystemMetrics` reports
+//! host-level and Corre process-tree CPU and memory usage.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -174,6 +180,32 @@ impl ExecutionTracker {
 
     pub async fn is_running(&self, name: &str) -> bool {
         self.states.read().await.get(name).is_some_and(|s| s.status == RunStatus::Running)
+    }
+
+    /// Insert a new capability into the tracked set (e.g. after install from the Store).
+    pub async fn add_capability(&self, config: &crate::config::CapabilityConfig) {
+        let state = CapabilityState {
+            name: config.name.clone(),
+            description: config.description.clone(),
+            schedule: config.schedule.clone(),
+            enabled: config.enabled,
+            status: RunStatus::Idle,
+            last_started: None,
+            last_completed: None,
+            last_error: None,
+            last_duration_secs: None,
+            articles_produced: None,
+            progress_pct: None,
+            phase: String::new(),
+            recent_logs: VecDeque::new(),
+        };
+        let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
+        self.states.write().await.insert(config.name.clone(), state);
+    }
+
+    /// Remove a capability from the tracked set (e.g. after uninstall from the Store).
+    pub async fn remove_capability(&self, name: &str) {
+        self.states.write().await.remove(name);
     }
 
     pub fn system_metrics(&self) -> SystemMetrics {

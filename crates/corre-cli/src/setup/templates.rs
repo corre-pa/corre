@@ -1,3 +1,8 @@
+//! Configuration file rendering and OS data-directory resolution for the setup wizard.
+//!
+//! Builds a `CorreConfig` from collected `SetupState`, serialises it to TOML, and provides
+//! the platform-appropriate default data directory paths.
+
 use corre_core::config::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,37 +38,15 @@ fn npx_command() -> &'static str {
 
 /// Build a `CorreConfig` from the wizard state, ready for TOML serialization.
 pub fn build_config(state: &SetupState) -> CorreConfig {
-    let mut mcp_servers = HashMap::new();
-
-    // Always include brave-search if daily-brief is enabled
-    if state.enabled_capabilities.iter().any(|c| c == "daily-brief") {
-        mcp_servers.insert(
-            "brave-search".into(),
-            McpServerConfig {
-                command: npx_command().into(),
-                args: vec!["-y".into(), "@brave/brave-search-mcp-server".into()],
-                env: {
-                    let mut env = HashMap::new();
-                    env.insert("BRAVE_API_KEY".into(), state.brave_api_key_env.clone().unwrap_or_else(|| "BRAVE_API_KEY".into()));
-                    env
-                },
-                registry_id: None,
-            },
-        );
-    }
-
     let hour = state.schedule_hour.unwrap_or(5);
-    let port = state.news_port.unwrap_or(3200);
+    let port = state.news_port.unwrap_or(5510);
 
     let capabilities: Vec<CapabilityConfig> = state
         .enabled_capabilities
         .iter()
         .map(|name| {
             let llm_override = state.capability_llm_overrides.get(name.as_str()).map(|ovr| CapabilityLlmConfig {
-                provider: ovr.provider.clone(),
-                base_url: ovr.base_url.clone(),
                 model: ovr.model.clone(),
-                api_key_env: ovr.api_key_env.clone(),
                 temperature: None,
                 max_completion_tokens: None,
                 max_concurrent: None,
@@ -78,6 +61,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                     config_path: Some("config/topics.yml".into()),
                     enabled: true,
                     llm: llm_override,
+                    plugin: None,
                 },
                 other => CapabilityConfig {
                     name: other.into(),
@@ -87,35 +71,53 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                     config_path: None,
                     enabled: true,
                     llm: llm_override,
+                    plugin: None,
                 },
             }
         })
         .collect();
 
     CorreConfig {
-        general: GeneralConfig {
-            data_dir: default_data_dir(),
-            log_level: "info".into(),
-            mcp_repository: corre_core::config::default_mcp_repository(),
-        },
+        general: GeneralConfig { data_dir: default_data_dir(), log_level: "info".into() },
         llm: LlmConfig {
             provider: "openai-compatible".into(),
             base_url: state.llm_base_url.clone().unwrap_or_else(|| "https://api.venice.ai/api/v1".into()),
             model: state.llm_model.clone().unwrap_or_else(|| "openai-gpt-oss-120b".into()),
-            api_key_env: state.llm_api_key_env.clone().unwrap_or_else(|| "VENICE_API_KEY".into()),
+            api_key: state.llm_api_key.clone().unwrap_or_else(|| "${VENICE_API_KEY}".into()),
             temperature: 0.3,
             max_concurrent: 10,
         },
-        news: NewsConfig {
-            bind: format!("127.0.0.1:{port}"),
-            title: state.news_title.clone().unwrap_or_else(|| "Corre News".into()),
-            editor_token: None,
+        news: {
+            let mut table = toml::map::Map::new();
+            table.insert("bind".into(), toml::Value::String(format!("127.0.0.1:{port}")));
+            table.insert("title".into(), toml::Value::String(state.news_title.clone().unwrap_or_else(|| "Corre News".into())));
+            toml::Value::Table(table)
         },
-        mcp: McpConfig { servers: mcp_servers },
         capabilities,
         safety: SafetyConfig::default(),
         registry: RegistryConfig::default(),
     }
+}
+
+/// Write per-MCP config files for MCP servers referenced by the setup state.
+pub fn write_mcp_configs(state: &SetupState, data_dir: &std::path::Path) -> anyhow::Result<()> {
+    // Always include brave-search if daily-brief is enabled
+    if state.enabled_capabilities.iter().any(|c| c == "daily-brief") {
+        let config = McpServerConfig {
+            command: npx_command().into(),
+            args: vec!["-y".into(), "@brave/brave-search-mcp-server".into()],
+            env: {
+                let mut env = HashMap::new();
+                env.insert("BRAVE_API_KEY".into(), state.brave_api_key_env.clone().unwrap_or_else(|| "BRAVE_API_KEY".into()));
+                env
+            },
+            registry_id: None,
+            installed: true,
+        };
+        let mcp_dir = data_dir.join("config").join("mcp");
+        save_mcp_config(&mcp_dir, "brave-search", &config)?;
+    }
+    Ok(())
 }
 
 /// Default topics.md content for new users.

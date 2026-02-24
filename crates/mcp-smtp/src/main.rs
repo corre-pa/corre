@@ -1,3 +1,8 @@
+//! MCP server binary that exposes SMTP email sending as MCP tools.
+//!
+//! Runs as a stdio child process. Implements `send_email` and `draft_email` tools
+//! and reads all SMTP connection details from environment variables at call time.
+
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, ServiceExt, tool};
 

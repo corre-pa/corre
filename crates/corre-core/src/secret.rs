@@ -1,3 +1,8 @@
+//! Environment variable interpolation for config files.
+//!
+//! `interpolate_env_vars` replaces `${VAR_NAME}` tokens with values from the host environment.
+//! Called by `CorreConfig::load` so that secrets never need to be written to disk.
+
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -21,6 +26,20 @@ pub fn interpolate_env_vars(input: &str) -> String {
         .into_owned()
 }
 
+/// Resolve a config value that may contain an env-var reference.
+///
+/// If `value` matches the pattern `${VAR_NAME}`, the env var is looked up and
+/// its value returned. Otherwise the string is returned as-is, allowing literal
+/// API keys or other values.
+pub fn resolve_value(value: &str) -> anyhow::Result<String> {
+    let trimmed = value.trim();
+    if let Some(inner) = trimmed.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+        std::env::var(inner).map_err(|_| anyhow::anyhow!("environment variable `{inner}` is not set (referenced as `{value}`)"))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,6 +56,23 @@ mod tests {
     fn interpolate_escaped_dollar_produces_literal() {
         let result = interpolate_env_vars(r"value = \${NOT_REPLACED}");
         assert_eq!(result, "value = ${NOT_REPLACED}");
+    }
+
+    #[test]
+    fn resolve_value_env_ref() {
+        unsafe { std::env::set_var("TEST_RESOLVE_A", "secret123") };
+        assert_eq!(resolve_value("${TEST_RESOLVE_A}").unwrap(), "secret123");
+        unsafe { std::env::remove_var("TEST_RESOLVE_A") };
+    }
+
+    #[test]
+    fn resolve_value_literal() {
+        assert_eq!(resolve_value("sk-literal-key").unwrap(), "sk-literal-key");
+    }
+
+    #[test]
+    fn resolve_value_missing_env() {
+        assert!(resolve_value("${DEFINITELY_NOT_SET_XYZ_999}").is_err());
     }
 
     #[test]

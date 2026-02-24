@@ -1,4 +1,9 @@
-use crate::manifest::{RegistryEntry, RegistryManifest};
+//! HTTP client for fetching and caching the remote registry manifest.
+//!
+//! [`RegistryClient`] fetches `{url}/mcp/registry.json`, caches the result in memory
+//! for a configurable TTL, and exposes search and single-entry lookup helpers.
+
+use crate::manifest::{CapabilityEntry, McpRegistryEntry, RegistryManifest};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -63,7 +68,7 @@ impl RegistryClient {
     }
 
     /// Search entries by matching query against name, description, and tags (case-insensitive).
-    pub async fn search(&self, query: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
+    pub async fn search(&self, query: &str) -> Result<Vec<McpRegistryEntry>, RegistryError> {
         let manifest = self.get_manifest().await?;
         let q = query.to_lowercase();
         let results = manifest
@@ -78,10 +83,40 @@ impl RegistryClient {
         Ok(results)
     }
 
-    /// Look up a single registry entry by ID.
-    pub async fn get_entry(&self, id: &str) -> Result<Option<RegistryEntry>, RegistryError> {
+    /// Look up a single MCP server entry by ID.
+    pub async fn get_entry(&self, id: &str) -> Result<Option<McpRegistryEntry>, RegistryError> {
         let manifest = self.get_manifest().await?;
         Ok(manifest.servers.into_iter().find(|e| e.id == id))
+    }
+
+    // ── Capability methods ──────────────────────────────────────────────
+
+    /// Fetch all capability entries from the registry.
+    pub async fn fetch_capabilities(&self) -> Result<Vec<CapabilityEntry>, RegistryError> {
+        let manifest = self.get_manifest().await?;
+        Ok(manifest.capabilities)
+    }
+
+    /// Look up a single capability entry by ID.
+    pub async fn lookup_capability(&self, id: &str) -> Result<Option<CapabilityEntry>, RegistryError> {
+        let manifest = self.get_manifest().await?;
+        Ok(manifest.capabilities.into_iter().find(|e| e.id == id))
+    }
+
+    /// Search capability entries by matching query against name, description, and tags.
+    pub async fn search_capabilities(&self, query: &str) -> Result<Vec<CapabilityEntry>, RegistryError> {
+        let manifest = self.get_manifest().await?;
+        let q = query.to_lowercase();
+        let results = manifest
+            .capabilities
+            .into_iter()
+            .filter(|entry| {
+                entry.name.to_lowercase().contains(&q)
+                    || entry.description.to_lowercase().contains(&q)
+                    || entry.tags.iter().any(|t| t.to_lowercase().contains(&q))
+            })
+            .collect();
+        Ok(results)
     }
 }
 

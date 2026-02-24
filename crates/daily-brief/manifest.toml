@@ -1,0 +1,89 @@
+[plugin]
+name = "daily-brief"
+version = "0.14.0"
+description = "Daily research brief from web searches"
+protocol_version = "1.0"
+binary_name = "daily-brief"
+content_type = "newspaper"
+
+[plugin.defaults]
+schedule = "0 0 5 * * *"
+config_path = "config/topics.yml"
+
+[plugin.defaults.config_schema]
+root_key = "daily-briefing"
+format = "yaml"
+
+[[plugin.defaults.config_schema.fields]]
+key = "sections"
+type = "list"
+label = "Sections"
+
+[[plugin.defaults.config_schema.fields.fields]]
+key = "title"
+type = "text"
+label = "Section title"
+
+[[plugin.defaults.config_schema.fields.fields]]
+key = "sources"
+type = "list"
+label = "Sources"
+
+[[plugin.defaults.config_schema.fields.fields.fields]]
+key = "search"
+type = "text"
+label = "Search query"
+
+[[plugin.defaults.config_schema.fields.fields.fields]]
+key = "include"
+type = "text-list"
+label = "Include terms"
+
+[[plugin.defaults.config_schema.fields.fields.fields]]
+key = "exclude"
+type = "text-list"
+label = "Exclude terms"
+
+[[plugin.defaults.config_schema.fields.fields.fields]]
+key = "select-if"
+type = "textarea"
+label = "Selection criteria"
+
+[[plugin.defaults.config_schema.fields.fields.fields]]
+key = "freshness"
+type = "select"
+label = "Freshness"
+options = ["1d", "1w", "1m"]
+default = "1d"
+
+[plugin.permissions]
+mcp_servers = ["brave-search"]
+llm_access = true
+max_concurrent_llm = 10
+
+[[plugin.permissions.outputs]]
+output_type = "filesystem"
+target = "editions/{date}/edition.json"
+content_type = "application/json"
+
+[plugin.permissions.sandbox]
+network = ["api.venice.ai:443"]
+# r/w to {data_dir}/daily-brief/ is automatic via the per-capability home grant
+
+[[plugin.services]]
+name = "corre-news"
+description = "Newspaper web UI for browsing editions"
+image = "{docker_registry}/corre-news:latest"
+ports = ["5510:5510"]
+volumes = ["{data_dir}:/data:ro"]
+optional = true
+
+[[plugin.links]]
+label = "Read CorreNews"
+url = "http://{service:corre-news}:5510"
+icon = "📰"
+
+[mcp_dependencies.brave-search]
+command = "npx"
+args = ["-y", "@brave/brave-search-mcp-server"]
+env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }

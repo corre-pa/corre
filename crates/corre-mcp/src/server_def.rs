@@ -1,3 +1,8 @@
+//! `McpServerDef`: runtime-ready MCP server description used to spawn child processes.
+//!
+//! Bridges the TOML-deserialized `McpServerConfig` from `corre-core::config` and the
+//! process-spawning logic in `crate::pool`.
+
 use corre_core::config::McpServerConfig;
 use std::collections::HashMap;
 

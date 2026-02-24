@@ -1,3 +1,8 @@
+//! `SafeLlmProvider`: a safety-wrapping decorator for `LlmProvider`.
+//!
+//! Scans LLM responses for leaked credentials after each completion, catching
+//! exfiltration attacks where the model echoes secrets from MCP tool outputs.
+
 use crate::config::SafetyConfig;
 use crate::leak_detector;
 use crate::report::SanitizationReport;

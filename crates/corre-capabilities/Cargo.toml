@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+corre-sdk = { workspace = true }
 corre-core = { workspace = true }
 corre-mcp = { workspace = true }
 corre-llm = { workspace = true }
-corre-db = { workspace = true }
+rusqlite = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,6 +20,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 csv = { workspace = true }
 uuid = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

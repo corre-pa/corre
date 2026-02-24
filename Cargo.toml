@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/corre-sdk",
     "crates/corre-core",
     "crates/corre-mcp",
     "crates/corre-llm",
@@ -8,11 +9,11 @@ members = [
     "crates/corre-capabilities",
     "crates/corre-safety",
     "crates/corre-dashboard",
-    "crates/corre-db",
     "crates/mcp-smtp",
     "crates/mcp-telegram",
     "crates/corre-registry",
     "crates/corre-cli",
+    "crates/daily-brief",
 ]
 
 [workspace.package]
@@ -22,6 +23,7 @@ license = "LicenseRef-Proprietary"
 
 [workspace.dependencies]
 # Internal crates
+corre-sdk = { path = "crates/corre-sdk" }
 corre-core = { path = "crates/corre-core" }
 corre-mcp = { path = "crates/corre-mcp" }
 corre-llm = { path = "crates/corre-llm" }
@@ -29,7 +31,6 @@ corre-news = { path = "crates/corre-news" }
 corre-capabilities = { path = "crates/corre-capabilities" }
 corre-safety = { path = "crates/corre-safety" }
 corre-dashboard = { path = "crates/corre-dashboard" }
-corre-db = { path = "crates/corre-db" }
 corre-registry = { path = "crates/corre-registry" }
 
 # Async runtime
@@ -94,3 +95,6 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 csv = "1"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
 sha2 = "0.10"
+dotenvy = "0.15.7"
+landlock = "0.4"
+libc = "0.2"

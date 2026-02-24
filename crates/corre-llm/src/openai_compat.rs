@@ -1,3 +1,8 @@
+//! OpenAI-compatible chat completions provider.
+//!
+//! Implements `corre_core::capability::LlmProvider` by POSTing to any `/chat/completions`
+//! endpoint that speaks the OpenAI wire format.
+
 use crate::types::*;
 use anyhow::Context;
 use corre_core::capability::{LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmRole};
@@ -25,8 +30,7 @@ impl OpenAiCompatProvider {
     }
 
     pub fn from_config(config: &corre_core::config::LlmConfig) -> anyhow::Result<Self> {
-        let api_key =
-            std::env::var(&config.api_key_env).with_context(|| format!("Missing env var `{}` for LLM API key", config.api_key_env))?;
+        let api_key = corre_core::secret::resolve_value(&config.api_key).context("resolving LLM API key")?;
         Ok(Self::new(config.base_url.clone(), api_key, config.model.clone(), config.temperature))
     }
 }

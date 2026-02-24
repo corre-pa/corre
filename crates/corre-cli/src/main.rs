@@ -1,6 +1,10 @@
+//! Binary entry point for Corre. Parses CLI arguments, wires every workspace crate together,
+//! and dispatches to the runtime modes: `run` (scheduler + dashboard), `run-now`
+//! (one-shot capability execution), and `setup` (interactive wizard).
+
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use corre_core::capability::{CapabilityContext, ProgressStatus};
+use corre_core::capability::{CapabilityContext, ProgressEvent, ProgressStatus};
 use corre_core::tracker::ExecutionTracker;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,61 +36,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the full daemon (scheduler + web server)
-    Run,
+    /// Start the full daemon (scheduler + dashboard)
+    Run {
+        /// Bind address for the dashboard [default: 0.0.0.0:5500]
+        #[arg(long, default_value = "0.0.0.0:5500")]
+        dashboard_bind: String,
+    },
     /// Run a single capability immediately and exit
     RunNow {
         /// Name of the capability to run
         capability: String,
     },
-    /// Start only the web server
-    Serve,
     /// Interactive setup wizard — configure LLM, API keys, topics, and systemd
     Setup,
     /// Check and install required external dependencies
     InstallDeps,
-    /// Manage the rolodex contact database
-    Rolodex {
-        #[command(subcommand)]
-        action: RolodexAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum RolodexAction {
-    /// Import contacts from an external source
-    Import {
-        /// Source format: csv, google, outlook, facebook, vcard
-        source: String,
-        /// Path to the import file
-        file: std::path::PathBuf,
-        /// How to handle duplicates: skip, merge, replace
-        #[arg(long, default_value = "skip")]
-        duplicates: String,
-    },
-    /// List all contacts
-    List {
-        /// Filter by minimum importance level
-        #[arg(long)]
-        importance: Option<String>,
-    },
-    /// Add a new contact interactively
-    Add,
-    /// Edit a contact by ID
-    Edit {
-        /// Contact ID
-        id: String,
-    },
-    /// Delete a contact by ID
-    Delete {
-        /// Contact ID
-        id: String,
-    },
-    /// Search contacts by name or email
-    Search {
-        /// Search query
-        query: String,
-    },
+    /// Health check: verify data dir and config are accessible (exit 0/1)
+    Health,
 }
 
 #[tokio::main]
@@ -115,15 +81,18 @@ async fn main() -> anyhow::Result<()> {
         setup::deps::check_dependencies(&console::Term::stderr())?;
         return Ok(());
     }
+    if matches!(command, Commands::Health) {
+        return cmd_health(&config_path);
+    }
 
     let config = corre_core::config::CorreConfig::load(&config_path)
         .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
 
     let data_dir = config.data_dir();
-    std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(&data_dir).with_context(|| format!("failed to create data directory {}", data_dir.display()))?;
 
     let log_dir = data_dir.join("capabilities_logs");
-    std::fs::create_dir_all(&log_dir)?;
+    std::fs::create_dir_all(&log_dir).with_context(|| format!("failed to create log directory {}", log_dir.display()))?;
 
     let file_appender = tracing_appender::rolling::daily(&log_dir, "capability.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
@@ -131,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
     let stderr_filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default());
     let file_filter = tracing_subscriber::EnvFilter::new(
-        "info,corre_core=debug,corre_mcp=debug,corre_llm=debug,corre_capabilities=debug,corre_safety=debug,corre_news=debug,corre_cli=debug",
+        "info,corre_core=debug,corre_mcp=debug,corre_llm=debug,corre_capabilities=debug,corre_safety=debug,corre_cli=debug",
     );
 
     tracing_subscriber::registry()
@@ -141,31 +110,57 @@ async fn main() -> anyhow::Result<()> {
 
     let config_path = std::fs::canonicalize(&config_path).unwrap_or(config_path);
 
+    // Discover plugins and merge auto-discovered ones into config
+    let mut config = config;
+    let plugins = corre_core::plugin::discover_plugins(&data_dir);
+    merge_discovered_plugins(&mut config, &plugins);
+
     match command {
-        Commands::Run => cmd_run(config, config_path).await,
-        Commands::RunNow { capability } => cmd_run_now(config, &capability).await,
-        Commands::Serve => cmd_serve(config, config_path).await,
-        Commands::Rolodex { action } => cmd_rolodex(config, action),
-        Commands::Setup | Commands::InstallDeps => unreachable!(),
+        Commands::Run { dashboard_bind } => cmd_run(config, config_path, plugins, dashboard_bind).await,
+        Commands::RunNow { capability } => cmd_run_now(config, &capability, plugins).await,
+        Commands::Setup | Commands::InstallDeps | Commands::Health => unreachable!(),
     }
 }
 
-async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) -> anyhow::Result<()> {
-    // Shared cache for both web server and scheduler
-    let data_dir = config.data_dir();
-    let archive = corre_news::archive::Archive::new(&data_dir);
-    let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
+/// Merge discovered plugins into the config: for each plugin not already in
+/// the config's capabilities list, add a default entry.
+fn merge_discovered_plugins(config: &mut corre_core::config::CorreConfig, plugins: &[corre_core::plugin::DiscoveredPlugin]) {
+    let existing_names: std::collections::HashSet<String> = config.capabilities.iter().map(|c| c.name.clone()).collect();
+    for plugin in plugins {
+        if existing_names.contains(&plugin.manifest.plugin.name) {
+            continue;
+        }
+        let cap_config = corre_core::plugin::plugin_to_capability_config(plugin);
+        tracing::info!("Auto-discovered plugin `{}` at {}", cap_config.name, plugin.dir.display());
+        config.capabilities.push(cap_config);
+    }
+}
 
-    // Create execution tracker for dashboard
+async fn cmd_run(
+    mut config: corre_core::config::CorreConfig,
+    config_path: PathBuf,
+    plugins: Vec<corre_core::plugin::DiscoveredPlugin>,
+    dashboard_bind: String,
+) -> anyhow::Result<()> {
+    let data_dir = config.data_dir();
+
+    // Build capability registry first, then filter config to only capabilities
+    // that have a backing implementation (built-in or installed plugin).
+    let registry = Arc::new(corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir));
+    config.capabilities.retain(|c| registry.get(&c.name).is_some());
+
+    // Create execution tracker for dashboard (only contains real capabilities)
     let tracker = ExecutionTracker::new(&config.capabilities);
 
     // Create run-now channel for dashboard triggers
     let (run_tx, mut run_rx) = tokio::sync::mpsc::channel::<String>(8);
 
     // Build registry client and installer
-    let registry_client =
-        Arc::new(corre_registry::RegistryClient::new(config.general.mcp_repository.clone(), config.registry.cache_ttl_secs));
-    let installer = Arc::new(corre_registry::McpInstaller::new(data_dir.clone(), config.general.mcp_repository.clone()));
+    let registry_client = Arc::new(corre_registry::RegistryClient::new(config.registry.url.clone(), config.registry.cache_ttl_secs));
+    let installer = Arc::new(corre_registry::McpInstaller::new(data_dir.clone(), config.registry.url.clone()));
+
+    // Shutdown channel: the restart endpoint sends `true` to trigger graceful exit
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Build dashboard state and router
     let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
@@ -175,29 +170,32 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
         run_trigger: run_tx,
         registry_client: registry_client.clone(),
         installer: installer.clone(),
+        service_manager: Arc::new(corre_core::service::ServiceManager::new()),
+        shutdown_signal: shutdown_tx,
+        plugins: Arc::new(plugins.clone()),
     });
     let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
 
     // Start metrics broadcaster
     corre_dashboard::server::spawn_metrics_broadcaster(tracker.clone());
 
-    // Start web server with dashboard routes merged in
-    let web_config = config.clone();
-    let web_cache = cache.clone();
-    let web_config_path = config_path.clone();
-    let web_handle =
-        tokio::spawn(async move { start_web_server_with_dashboard(&web_config, web_cache, &web_config_path, dashboard_router).await });
+    // Start dashboard server
+    let addr: std::net::SocketAddr = dashboard_bind.parse().context("Invalid --dashboard-bind address")?;
+    tracing::info!("Dashboard listening on http://{addr}");
+    let web_handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, dashboard_router).await?;
+        Ok::<(), anyhow::Error>(())
+    });
 
     // Start scheduler
     let mut scheduler = corre_core::scheduler::Scheduler::new().await?;
-    let registry = Arc::new(corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities));
 
     for cap_config in config.capabilities.iter().filter(|c| c.enabled) {
         let cap_name = cap_config.name.clone();
         let schedule = cap_config.schedule.clone();
         let config = config.clone();
         let registry = registry.clone();
-        let cache = cache.clone();
         let tracker = tracker.clone();
 
         tracing::info!("Scheduling capability `{cap_name}` with cron `{schedule}`");
@@ -207,10 +205,9 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
                 let cap_name = cap_name.clone();
                 let config = config.clone();
                 let registry = registry.clone();
-                let cache = cache.clone();
                 let tracker = tracker.clone();
                 Box::pin(async move {
-                    execute_capability_tracked(&config, &registry, &cap_name, &cache, &tracker).await;
+                    execute_capability_tracked(&config, &registry, &cap_name, tracker.clone()).await;
                 })
             });
 
@@ -220,16 +217,14 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
     // Spawn run-now receiver that processes dashboard triggers
     let run_config = config.clone();
     let run_registry = registry.clone();
-    let run_cache = cache.clone();
     let run_tracker = tracker.clone();
     tokio::spawn(async move {
         while let Some(cap_name) = run_rx.recv().await {
             let config = run_config.clone();
             let registry = run_registry.clone();
-            let cache = run_cache.clone();
             let tracker = run_tracker.clone();
             tokio::spawn(async move {
-                execute_capability_tracked(&config, &registry, &cap_name, &cache, &tracker).await;
+                execute_capability_tracked(&config, &registry, &cap_name, tracker).await;
             });
         }
     });
@@ -237,10 +232,16 @@ async fn cmd_run(config: corre_core::config::CorreConfig, config_path: PathBuf) 
     scheduler.start().await?;
     tracing::info!("Scheduler started. Press Ctrl+C to stop.");
 
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutting down...");
-    scheduler.shutdown().await?;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Ctrl+C received, shutting down...");
+        }
+        _ = shutdown_rx.changed() => {
+            tracing::info!("Restart requested via dashboard, shutting down...");
+        }
+    }
 
+    scheduler.shutdown().await?;
     web_handle.abort();
     Ok(())
 }
@@ -250,32 +251,14 @@ async fn execute_capability_tracked(
     config: &corre_core::config::CorreConfig,
     registry: &corre_capabilities::registry::CapabilityRegistry,
     cap_name: &str,
-    cache: &corre_news::cache::EditionCache,
-    tracker: &ExecutionTracker,
+    tracker: Arc<ExecutionTracker>,
 ) {
     tracker.mark_running(cap_name).await;
     tracker.push_log(cap_name, "INFO", "Capability execution started").await;
 
-    let seen_urls = cache.seen_urls().await;
-    match run_capability_pipeline(config, registry, cap_name, seen_urls, Some(tracker)).await {
-        Ok((edition, mcp_pool)) => {
-            let article_count = edition.article_count();
-            match cache.store(&edition).await {
-                Ok(path) => {
-                    tracing::info!("Edition stored at {}", path.display());
-                    tracker.push_log(cap_name, "INFO", &format!("Edition stored at {}", path.display())).await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to store edition: {e:#}");
-                    tracker.push_log(cap_name, "ERROR", &format!("Failed to store edition: {e:#}")).await;
-                }
-            }
-
-            let data_dir = config.data_dir();
-            if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
-                let _ = search.index_edition(&edition);
-            }
-
+    match run_capability_pipeline(config, registry, cap_name, Some(tracker.clone())).await {
+        Ok((output, mcp_pool)) => {
+            let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
             mcp_pool.shutdown().await;
             tracker.mark_completed(cap_name, article_count).await;
             tracker.push_log(cap_name, "INFO", &format!("Completed: {article_count} articles produced")).await;
@@ -289,77 +272,29 @@ async fn execute_capability_tracked(
     }
 }
 
-async fn cmd_run_now(config: corre_core::config::CorreConfig, capability_name: &str) -> anyhow::Result<()> {
-    let registry = corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities);
-    // Load cache to get seen_urls for cross-edition dedup, but store via archive directly
-    let data_dir = config.data_dir();
-    let archive = corre_news::archive::Archive::new(&data_dir);
-    let cache = corre_news::cache::EditionCache::load(archive);
-    let seen_urls = cache.seen_urls().await;
-    execute_capability(&config, &registry, capability_name, seen_urls).await
-}
-
-async fn cmd_serve(config: corre_core::config::CorreConfig, config_path: PathBuf) -> anyhow::Result<()> {
-    // In serve-only mode, show dashboard with all capabilities as Idle and run-now disabled
-    let tracker = ExecutionTracker::new(&config.capabilities);
-
-    // Create a dummy sender that will never be read (run-now disabled in serve mode)
-    let (run_tx, _run_rx) = tokio::sync::mpsc::channel::<String>(1);
-
-    let data_dir = config.data_dir();
-    let registry_client =
-        Arc::new(corre_registry::RegistryClient::new(config.general.mcp_repository.clone(), config.registry.cache_ttl_secs));
-    let installer = Arc::new(corre_registry::McpInstaller::new(data_dir.clone(), config.general.mcp_repository.clone()));
-
-    let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
-        tracker: tracker.clone(),
-        config: Arc::new(RwLock::new(config.clone())),
-        config_path: config_path.clone(),
-        run_trigger: run_tx,
-        registry_client,
-        installer,
-    });
-    let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
-
-    corre_dashboard::server::spawn_metrics_broadcaster(tracker);
-
-    let data_dir = config.data_dir();
-    let archive = corre_news::archive::Archive::new(&data_dir);
-    let cache = Arc::new(corre_news::cache::EditionCache::load(archive));
-    start_web_server_with_dashboard(&config, cache, &config_path, dashboard_router).await
-}
-
-/// Execute a capability in run-now mode (no long-lived cache, stores via archive directly).
-async fn execute_capability(
-    config: &corre_core::config::CorreConfig,
-    registry: &corre_capabilities::registry::CapabilityRegistry,
-    cap_name: &str,
-    seen_urls: std::collections::HashSet<String>,
+async fn cmd_run_now(
+    config: corre_core::config::CorreConfig,
+    capability_name: &str,
+    plugins: Vec<corre_core::plugin::DiscoveredPlugin>,
 ) -> anyhow::Result<()> {
-    let (edition, mcp_pool) = run_capability_pipeline(config, registry, cap_name, seen_urls, None).await?;
-
     let data_dir = config.data_dir();
-    let archive = corre_news::archive::Archive::new(&data_dir);
-    let path = archive.store(&edition)?;
-    tracing::info!("Edition stored at {}", path.display());
+    let registry = corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir);
 
-    if let Ok(search) = corre_news::search::SearchIndex::open_or_create(&data_dir) {
-        let _ = search.index_edition(&edition);
-    }
+    let (output, mcp_pool) = run_capability_pipeline(&config, &registry, capability_name, None).await?;
 
     mcp_pool.shutdown().await;
-    tracing::info!("Done. {} articles produced.", edition.article_count());
+    let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
+    tracing::info!("Done. {article_count} articles produced.");
     Ok(())
 }
 
-/// Shared pipeline: build MCP pool, run capability, generate tagline. Returns the edition and pool.
+/// Shared pipeline: build MCP pool, run capability. Returns the output and pool.
 async fn run_capability_pipeline(
     config: &corre_core::config::CorreConfig,
     registry: &corre_capabilities::registry::CapabilityRegistry,
     cap_name: &str,
-    seen_urls: std::collections::HashSet<String>,
-    tracker: Option<&ExecutionTracker>,
-) -> anyhow::Result<(corre_core::publish::Edition, corre_mcp::McpPool)> {
+    tracker: Option<Arc<ExecutionTracker>>,
+) -> anyhow::Result<(corre_core::capability::CapabilityOutput, corre_mcp::McpPool)> {
     let capability = registry.get(cap_name).with_context(|| format!("Unknown capability: `{cap_name}`"))?.clone();
 
     let mcp_servers = config.resolved_mcp_servers()?;
@@ -397,273 +332,90 @@ async fn run_capability_pipeline(
     let llm: Box<dyn corre_core::capability::LlmProvider> =
         if config.safety.enabled { Box::new(corre_safety::SafeLlmProvider::new(raw_llm, &config.safety)) } else { raw_llm };
 
-    let config_dir = config.data_dir();
-    let ctx = CapabilityContext { mcp, llm, config_dir, max_concurrent_llm: effective_llm.max_concurrent, seen_urls };
+    // Spawn a bridge task that forwards ProgressEvents to the ExecutionTracker.
+    // The task self-terminates when the sender (held by ctx) is dropped.
+    let progress_tx = tracker.as_ref().map(|t| {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProgressEvent>();
+        let t = t.clone();
+        let name = cap_name.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    ProgressEvent::Progress { pct, phase } => {
+                        t.update_progress(&name, pct.unwrap_or(0), &phase).await;
+                    }
+                    ProgressEvent::Log { level, message } => {
+                        t.push_log(&name, &level, &message).await;
+                    }
+                }
+            }
+        });
+        tx
+    });
+
+    let config_dir = config.data_dir().join(cap_name);
+    let ctx = CapabilityContext {
+        mcp,
+        llm,
+        config_dir,
+        max_concurrent_llm: effective_llm.max_concurrent,
+        seen_urls: std::collections::HashSet::new(),
+        progress_tx,
+    };
 
     tracing::info!("Running capability `{cap_name}`");
-    if let Some(t) = tracker {
+    if let Some(ref t) = tracker {
         t.push_log(cap_name, "INFO", "Building MCP pool and LLM provider").await;
     }
 
-    let timeout_dur = std::time::Duration::from_secs(600);
+    let poll_interval = std::time::Duration::from_secs(1);
     let poll_deadline = std::time::Duration::from_secs(5);
     let mut execute_fut = std::pin::pin!(capability.execute(&ctx));
-    let mut next_poll = timeout_dur;
 
     let output = loop {
-        match tokio::time::timeout(next_poll, &mut execute_fut).await {
+        match tokio::time::timeout(poll_interval, &mut execute_fut).await {
             Ok(result) => break result,
-            Err(_) => {
-                tracing::info!("Capability `{cap_name}` exceeded {next_poll:?}, polling in_progress");
-                if let Some(t) = tracker {
-                    t.push_log(cap_name, "INFO", &format!("Exceeded {next_poll:?}, polling progress")).await;
-                }
-                match tokio::time::timeout(poll_deadline, capability.in_progress()).await {
-                    Ok(ProgressStatus::StillBusy(hint)) => {
-                        next_poll = match hint {
-                            Some(pct) if pct > 0 && pct < 100 => {
-                                // Update tracker with progress percentage
-                                if let Some(t) = tracker {
-                                    t.update_progress(cap_name, pct, "processing").await;
-                                    t.push_log(cap_name, "INFO", &format!("{pct}% complete")).await;
-                                }
-                                let remaining_ratio = (100 - pct) as f64 / pct as f64;
-                                let secs = (remaining_ratio * timeout_dur.as_secs_f64()) as u64 + 30;
-                                tracing::info!("... {pct}% complete, polling again in {secs}s");
-                                std::time::Duration::from_secs(secs)
-                            }
-                            _ => {
-                                tracing::info!("... still busy (no hint), polling again in {timeout_dur:?}");
-                                timeout_dur
-                            }
-                        };
-                        continue;
-                    }
-                    Ok(ProgressStatus::Done(partial)) => {
-                        let n: usize = partial.sections.iter().map(|s| s.articles.len()).sum();
-                        tracing::warn!("Capability `{cap_name}` returning partial results ({n} articles)");
-                        if let Some(t) = tracker {
-                            t.push_log(cap_name, "WARN", &format!("Returning partial results ({n} articles)")).await;
+            Err(_) => match tokio::time::timeout(poll_deadline, capability.in_progress()).await {
+                Ok(ProgressStatus::StillBusy(hint)) => {
+                    if let Some(pct) = hint
+                        && pct > 0
+                        && pct < 100
+                    {
+                        if let Some(ref t) = tracker {
+                            t.update_progress(cap_name, pct, "processing").await;
                         }
-                        break Ok(partial);
                     }
-                    Ok(ProgressStatus::Stuck) => {
-                        break Err(anyhow::anyhow!("Capability `{cap_name}` is stuck"));
-                    }
-                    Err(_) => {
-                        break Err(anyhow::anyhow!("Capability `{cap_name}` in_progress poll unresponsive"));
-                    }
+                    continue;
                 }
-            }
+                Ok(ProgressStatus::Done(partial)) => {
+                    let n: usize = partial.sections.iter().map(|s| s.articles.len()).sum();
+                    tracing::warn!("Capability `{cap_name}` returning partial results ({n} articles)");
+                    if let Some(ref t) = tracker {
+                        t.push_log(cap_name, "WARN", &format!("Returning partial results ({n} articles)")).await;
+                    }
+                    break Ok(partial);
+                }
+                Ok(ProgressStatus::Stuck) => {
+                    break Err(anyhow::anyhow!("Capability `{cap_name}` is stuck"));
+                }
+                Err(_) => {
+                    break Err(anyhow::anyhow!("Capability `{cap_name}` in_progress poll unresponsive"));
+                }
+            },
         }
     }?;
 
-    if let Some(t) = tracker {
+    if let Some(ref t) = tracker {
         let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
-        t.push_log(cap_name, "INFO", &format!("Pipeline produced {article_count} articles, generating tagline")).await;
-        t.update_progress(cap_name, 90, "generating_tagline").await;
+        t.push_log(cap_name, "INFO", &format!("Pipeline produced {article_count} articles")).await;
     }
 
-    let mut edition = corre_core::publish::Edition::new(chrono::Utc::now().date_naive(), output.sections);
-
-    // Generate a dad joke tagline inspired by the headline
-    let tagline_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&effective_llm)?);
-    let tagline_request = corre_core::capability::LlmRequest {
-        messages: vec![
-            corre_core::capability::LlmMessage {
-                role: corre_core::capability::LlmRole::System,
-                content: "You are a newspaper sub-editor who writes witty taglines. Write a single short dad joke or pun \
-                          (max 15 words) inspired by the given headline. Just the joke, no quotes, no explanation."
-                    .into(),
-            },
-            corre_core::capability::LlmMessage { role: corre_core::capability::LlmRole::User, content: edition.headline.clone() },
-        ],
-        temperature: Some(0.9),
-        max_completion_tokens: Some(200),
-        json_mode: false,
-    };
-    match tagline_llm.complete(tagline_request).await {
-        Ok(resp) => {
-            let tagline = resp.content.trim().trim_matches('"').to_string();
-            if !tagline.is_empty() {
-                edition.tagline = tagline;
-            }
-        }
-        Err(e) => tracing::warn!("Failed to generate tagline, using default: {e}."),
-    }
-
-    Ok((edition, mcp_pool))
+    Ok((output, mcp_pool))
 }
 
-async fn start_web_server_with_dashboard(
-    config: &corre_core::config::CorreConfig,
-    cache: Arc<corre_news::cache::EditionCache>,
-    config_path: &std::path::Path,
-    dashboard_router: axum::Router,
-) -> anyhow::Result<()> {
+fn cmd_health(config_path: &std::path::Path) -> anyhow::Result<()> {
+    let config = corre_core::config::CorreConfig::load(config_path)?;
     let data_dir = config.data_dir();
-    let search = corre_news::search::SearchIndex::open_or_create(&data_dir)?;
-
-    let state = Arc::new(corre_news::server::AppState {
-        cache,
-        search,
-        config_path: config_path.to_path_buf(),
-        config: Arc::new(RwLock::new(config.clone())),
-    });
-
-    let addr: std::net::SocketAddr = config.news.bind.parse()?;
-    tracing::info!("CorreNews listening on http://{addr}");
-    tracing::info!("Dashboard available at http://{addr}/dashboard");
-    corre_news::server::serve_with_extra_routes(state, dashboard_router, addr).await
-}
-
-fn cmd_rolodex(config: corre_core::config::CorreConfig, action: RolodexAction) -> anyhow::Result<()> {
-    let db_path = config.data_dir().join("rolodex.db");
-    let db = corre_db::Database::open(&db_path)?;
-
-    match action {
-        RolodexAction::Import { source, file, duplicates } => {
-            use corre_capabilities::rolodex_import::{DuplicateAction, ImportResult};
-
-            let dup_action = match duplicates.as_str() {
-                "merge" => DuplicateAction::Merge,
-                "replace" => DuplicateAction::Replace,
-                _ => DuplicateAction::Skip,
-            };
-
-            let result: ImportResult = match source.as_str() {
-                "csv" => corre_capabilities::rolodex_import::import_csv(&db, &file, dup_action)?,
-                "google" => corre_capabilities::rolodex_import::import_google(&db, &file, dup_action)?,
-                "outlook" => corre_capabilities::rolodex_import::import_outlook(&db, &file, dup_action)?,
-                "facebook" => corre_capabilities::rolodex_import::import_facebook(&db, &file, dup_action)?,
-                "vcard" | "vcf" => corre_capabilities::rolodex_import::import_vcard(&db, &file, dup_action)?,
-                _ => anyhow::bail!("Unknown import source: {source}. Supported: csv, google, outlook, facebook, vcard"),
-            };
-
-            println!("Import complete: {} imported, {} skipped", result.imported, result.skipped);
-            if !result.errors.is_empty() {
-                println!("Errors ({}):", result.errors.len());
-                result.errors.iter().for_each(|e| println!("  - {e}"));
-            }
-        }
-        RolodexAction::List { importance } => {
-            let contacts = match importance.as_deref() {
-                Some(level) => {
-                    let min = corre_db::Importance::from_str_loose(level);
-                    db.contacts_by_importance(min)?
-                }
-                None => db.list_contacts()?,
-            };
-
-            if contacts.is_empty() {
-                println!("No contacts found.");
-            } else {
-                println!("{:<36}  {:<20}  {:<30}  {:<10}  {}", "ID", "Name", "Email", "Importance", "Birthday");
-                println!("{}", "-".repeat(110));
-                for c in &contacts {
-                    println!(
-                        "{:<36}  {:<20}  {:<30}  {:<10}  {}",
-                        c.id,
-                        c.full_name(),
-                        c.email.as_deref().unwrap_or("-"),
-                        c.importance,
-                        c.birthday.as_deref().unwrap_or("-")
-                    );
-                }
-                println!("\n{} contacts total", contacts.len());
-            }
-        }
-        RolodexAction::Add => {
-            let first_name = dialoguer::Input::<String>::new().with_prompt("First name").interact_text()?;
-            let last_name = dialoguer::Input::<String>::new().with_prompt("Last name").interact_text()?;
-            let email: String = dialoguer::Input::new().with_prompt("Email (optional)").default(String::new()).interact_text()?;
-            let phone: String = dialoguer::Input::new().with_prompt("Phone (optional)").default(String::new()).interact_text()?;
-            let birthday: String =
-                dialoguer::Input::new().with_prompt("Birthday YYYY-MM-DD (optional)").default(String::new()).interact_text()?;
-
-            let importance_options = ["low", "medium", "high", "veryhigh"];
-            let importance_idx = dialoguer::Select::new().with_prompt("Importance").items(&importance_options).default(1).interact()?;
-            let importance = corre_db::Importance::from_str_loose(importance_options[importance_idx]);
-
-            let contact = corre_db::contacts::new_contact(
-                first_name,
-                last_name,
-                if email.is_empty() { None } else { Some(email) },
-                if phone.is_empty() { None } else { Some(phone) },
-                if birthday.is_empty() { None } else { Some(birthday) },
-                importance,
-            );
-
-            db.insert_contact(&contact)?;
-            db.assign_default_strategies(&contact)?;
-            println!("Contact added: {} ({})", contact.full_name(), contact.id);
-        }
-        RolodexAction::Edit { id } => {
-            let Some(contact) = db.get_contact(&id)? else {
-                anyhow::bail!("Contact {id} not found");
-            };
-
-            let first_name =
-                dialoguer::Input::<String>::new().with_prompt("First name").default(contact.first_name.clone()).interact_text()?;
-            let last_name =
-                dialoguer::Input::<String>::new().with_prompt("Last name").default(contact.last_name.clone()).interact_text()?;
-            let email = dialoguer::Input::<String>::new()
-                .with_prompt("Email")
-                .default(contact.email.clone().unwrap_or_default())
-                .interact_text()?;
-            let phone = dialoguer::Input::<String>::new()
-                .with_prompt("Phone")
-                .default(contact.phone.clone().unwrap_or_default())
-                .interact_text()?;
-            let birthday = dialoguer::Input::<String>::new()
-                .with_prompt("Birthday YYYY-MM-DD")
-                .default(contact.birthday.clone().unwrap_or_default())
-                .interact_text()?;
-
-            let importance_options = ["low", "medium", "high", "veryhigh"];
-            let current_idx = importance_options.iter().position(|&s| s == contact.importance.as_str()).unwrap_or(1);
-            let importance_idx =
-                dialoguer::Select::new().with_prompt("Importance").items(&importance_options).default(current_idx).interact()?;
-            let importance = corre_db::Importance::from_str_loose(importance_options[importance_idx]);
-
-            let mut updated = contact;
-            updated.first_name = first_name;
-            updated.last_name = last_name;
-            updated.email = if email.is_empty() { None } else { Some(email) };
-            updated.phone = if phone.is_empty() { None } else { Some(phone) };
-            updated.birthday = if birthday.is_empty() { None } else { Some(birthday) };
-            updated.importance = importance;
-
-            db.update_contact(&updated)?;
-            println!("Contact updated: {}", updated.full_name());
-        }
-        RolodexAction::Delete { id } => {
-            let Some(contact) = db.get_contact(&id)? else {
-                anyhow::bail!("Contact {id} not found");
-            };
-            let confirmed =
-                dialoguer::Confirm::new().with_prompt(format!("Delete {} ({})?", contact.full_name(), id)).default(false).interact()?;
-            if confirmed {
-                db.delete_contact(&id)?;
-                println!("Contact deleted.");
-            } else {
-                println!("Cancelled.");
-            }
-        }
-        RolodexAction::Search { query } => {
-            let results = db.search_contacts(&query)?;
-            if results.is_empty() {
-                println!("No contacts matching \"{query}\".");
-            } else {
-                println!("{:<36}  {:<20}  {:<30}  {:<10}", "ID", "Name", "Email", "Importance");
-                println!("{}", "-".repeat(100));
-                for c in &results {
-                    println!("{:<36}  {:<20}  {:<30}  {:<10}", c.id, c.full_name(), c.email.as_deref().unwrap_or("-"), c.importance,);
-                }
-                println!("\n{} results", results.len());
-            }
-        }
-    }
-
+    anyhow::ensure!(data_dir.is_dir(), "data directory does not exist: {}", data_dir.display());
     Ok(())
 }

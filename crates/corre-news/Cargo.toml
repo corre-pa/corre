@@ -3,8 +3,14 @@ name = "corre-news"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "corre-news"
+path = "src/main.rs"
+
 [dependencies]
+corre-sdk = { workspace = true }
 corre-core = { workspace = true }
+daily-brief = { path = "../daily-brief" }
 axum = { workspace = true }
 askama = { workspace = true, features = ["serde_json"] }
 tantivy = { workspace = true }
@@ -18,6 +24,10 @@ tracing = { workspace = true }
 toml = { workspace = true }
 serde_yaml_ng = { workspace = true }
 rust-embed = { workspace = true }
+clap = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+dotenvy = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
