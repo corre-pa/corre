@@ -1,0 +1,21 @@
+{
+  "id": "brave-search",
+  "name": "Brave Search",
+  "description": "Web search via the Brave Search API",
+  "version": "1.1.2",
+  "install": {
+    "method": "npx",
+    "package": "@brave/brave-search-mcp-server",
+    "command": "npx",
+    "args": ["-y", "@brave/brave-search-mcp-server"]
+  },
+  "config": [
+    {
+      "name": "BRAVE_API_KEY",
+      "description": "Brave Search API key (https://brave.com/search/api/)",
+      "required": true
+    }
+  ],
+  "tags": ["search", "web"],
+  "verified": true
+}

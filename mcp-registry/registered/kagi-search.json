@@ -1,0 +1,26 @@
+{
+  "id": "kagi-search",
+  "name": "Kagi Search",
+  "description": "Search and summarization via the Kagi API",
+  "version": "0.1.3",
+  "install": {
+    "method": "pip",
+    "package": "kagimcp",
+    "command": "uvx",
+    "args": ["kagimcp"]
+  },
+  "config": [
+    {
+      "name": "KAGI_API_KEY",
+      "description": "Kagi API key (https://www.kagi.com/account/api)",
+      "required": true
+    },
+    {
+      "name": "KAGI_SUMMARIZER_ENGINE",
+      "description": "Choose which Kagi summarization engine to use: 'cecil' or 'gemini-1.5-pro'. Defaults to 'cecil' if not set.",
+      "required": false
+    }
+  ],
+  "tags": ["search", "web"],
+  "verified": false
+}

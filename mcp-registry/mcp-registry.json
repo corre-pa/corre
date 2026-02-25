@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-02-25T10:56:01Z",
+  "updated_at": "2026-02-25T12:03:32Z",
   "servers": [
     {
       "id": "brave-search",
@@ -11,7 +11,10 @@
         "method": "npx",
         "package": "@brave/brave-search-mcp-server",
         "command": "npx",
-        "args": ["-y", "@brave/brave-search-mcp-server"]
+        "args": [
+          "-y",
+          "@brave/brave-search-mcp-server"
+        ]
       },
       "config": [
         {
@@ -20,7 +23,10 @@
           "required": true
         }
       ],
-      "tags": ["search", "web"],
+      "tags": [
+        "search",
+        "web"
+      ],
       "verified": true
     },
     {
@@ -32,7 +38,9 @@
         "method": "pip",
         "package": "kagimcp",
         "command": "uvx",
-        "args": ["kagimcp"]
+        "args": [
+          "kagimcp"
+        ]
       },
       "config": [
         {
@@ -46,19 +54,27 @@
           "required": false
         }
       ],
-      "tags": ["search", "web"],
+      "tags": [
+        "search",
+        "web"
+      ],
       "verified": false
     },
     {
       "id": "smtp",
       "name": "SMTP Email",
       "description": "Send and draft emails via SMTP",
-      "version": "1.4.0",
+      "version": "0.14.0",
       "install": {
         "method": "binary",
         "download_url_template": "/mcp/bin/mcp-smtp-{platform}-{arch}",
         "binary_name": "mcp-smtp",
-        "sha256": {"linux-x86_64": "9164ae11f3a431d041dc91eb1e78f759b00fca9ced374e1824c79a5a55b7871d", "linux-aarch64": "3e4235757ddd619bc46fc9e6de82dd8d3b756a10ce77b488209ee32fe6b20a49", "linux-armv7": "69a7c3731052f2c29f9fb3827f81601d2cd970d6a161d3fc8b721fdfdaffb50a", "windows-x86_64": "4acf998e192101305b06ad7b378ff15ca812d9ba76868ef107166a4f8b5a9687"},
+        "sha256": {
+          "linux-x86_64": "41d0712a425de036bcc5e9d6a8ae8ebf7dc9693b8f2df4955513345893b1800c",
+          "linux-aarch64": "1841269b72ece9b08dd2dbec1c4a540374d391956f4295eb67ba4727b76dfa2e",
+          "linux-armv7": "33ef48e41c27fa2e390f69e10080dc4d230c1e35a3ab22c1e6489aaeb938f298",
+          "windows-x86_64": "60097731a4340ddd6d01fc716a83c03b41703cfcab53ea08280296b26aaf3fed"
+        },
         "command": "mcp-smtp",
         "args": []
       },
@@ -89,19 +105,27 @@
           "required": true
         }
       ],
-      "tags": ["email", "messaging"],
+      "tags": [
+        "email",
+        "messaging"
+      ],
       "verified": true
     },
     {
       "id": "telegram",
       "name": "Telegram",
       "description": "Send and draft messages via Telegram Bot API",
-      "version": "1.4.0",
+      "version": "0.14.0",
       "install": {
         "method": "binary",
         "download_url_template": "/mcp/bin/mcp-telegram-{platform}-{arch}",
         "binary_name": "mcp-telegram",
-        "sha256": {"linux-x86_64": "824a99b4c5e85b9e1f3eb9a4fac24b801e3ba280fb8fcdffd56caa47421d947a", "linux-aarch64": "f341dc0e838a8bafcca8c3bed3d3536025c730eb460cb52535fd845a8f2cddf9", "linux-armv7": "99b154d88448d3a375046cef7014099ca75eeab7ba8e34d06a0479c878fce344", "windows-x86_64": "e34cc24c53ab5cf966129771398c6a88a2e36df1a86b2e8ee4569103bd394ea6"},
+        "sha256": {
+          "linux-x86_64": "d2648f12494e641e212c358fea64ef89b973203bc6782793ae290b8d429aa4d2",
+          "linux-aarch64": "e1da9d7b5c8d1953b477ee102816554da6c16258c6117e64848b5b85342f6676",
+          "linux-armv7": "79ea6b24841046e679dcaf80aa637cc53825cb65646cd72ad6565197f9a46e54",
+          "windows-x86_64": "1486f4932afe33b811688b11b0a7cb105adecc329d4cce691409ff703b722e14"
+        },
         "command": "mcp-telegram",
         "args": []
       },
@@ -112,7 +136,10 @@
           "required": true
         }
       ],
-      "tags": ["messaging", "telegram"],
+      "tags": [
+        "messaging",
+        "telegram"
+      ],
       "verified": true
     }
   ]

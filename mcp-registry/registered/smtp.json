@@ -1,0 +1,43 @@
+{
+  "id": "smtp",
+  "name": "SMTP Email",
+  "description": "Send and draft emails via SMTP",
+  "version": "${VERSION}",
+  "install": {
+    "method": "binary",
+    "download_url_template": "/mcp/bin/mcp-smtp-{platform}-{arch}",
+    "binary_name": "mcp-smtp",
+    "sha256": "${SHA256:mcp-smtp}",
+    "command": "mcp-smtp",
+    "args": []
+  },
+  "config": [
+    {
+      "name": "SMTP_HOST",
+      "description": "SMTP server hostname",
+      "required": true
+    },
+    {
+      "name": "SMTP_PORT",
+      "description": "SMTP server port (default: 587)",
+      "required": false
+    },
+    {
+      "name": "SMTP_USER",
+      "description": "SMTP authentication username",
+      "required": true
+    },
+    {
+      "name": "SMTP_PASSWORD",
+      "description": "SMTP authentication password",
+      "required": true
+    },
+    {
+      "name": "SMTP_FROM",
+      "description": "Sender email address",
+      "required": true
+    }
+  ],
+  "tags": ["email", "messaging"],
+  "verified": true
+}
