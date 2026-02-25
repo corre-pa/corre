@@ -15,11 +15,23 @@ pub struct CapabilityManifest {
     pub config_path: Option<String>,
 }
 
+/// Error type for MCP tool calls, distinguishing tool-level errors from protocol failures.
+#[derive(Debug, thiserror::Error)]
+pub enum McpCallError {
+    /// The MCP tool reported an error via `is_error: true` in CallToolResult.
+    #[error("tool `{tool}` on `{server}` returned an error: {message}")]
+    ToolError { server: String, tool: String, message: String },
+
+    /// Protocol-level or transport failure (connection lost, JSON-RPC error, etc.)
+    #[error(transparent)]
+    Protocol(#[from] anyhow::Error),
+}
+
 /// Trait for calling tools on MCP servers, decoupling corre-core from corre-mcp.
 #[async_trait::async_trait]
 pub trait McpCaller: Send + Sync {
-    async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
-    async fn list_tools(&self, server_name: &str) -> anyhow::Result<Vec<String>>;
+    async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> Result<serde_json::Value, McpCallError>;
+    async fn list_tools(&self, server_name: &str) -> Result<Vec<String>, McpCallError>;
 }
 
 /// Trait for LLM completions, decoupling corre-core from corre-llm.

@@ -1,6 +1,6 @@
 use crate::server_def::McpServerDef;
 use anyhow::Context;
-use corre_core::capability::McpCaller;
+use corre_core::capability::{McpCallError, McpCaller};
 use rmcp::service::Peer;
 use rmcp::{RoleClient, ServiceExt, model::CallToolRequestParam, transport::child_process::TokioChildProcess};
 use std::collections::HashMap;
@@ -76,7 +76,7 @@ impl McpPool {
 
 #[async_trait::async_trait]
 impl McpCaller for McpPool {
-    async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> Result<serde_json::Value, McpCallError> {
         let peer = self.get_peer(server_name).await?;
 
         let result = peer
@@ -89,6 +89,12 @@ impl McpCaller for McpPool {
             })
             .await
             .with_context(|| format!("Failed to call tool `{tool_name}` on MCP server `{server_name}`"))?;
+
+        // Check if the tool itself reported an error
+        if result.is_error == Some(true) {
+            let message = result.content.iter().filter_map(|c| c.as_text().map(|t| t.text.as_str())).collect::<Vec<_>>().join("\n");
+            return Err(McpCallError::ToolError { server: server_name.to_string(), tool: tool_name.to_string(), message });
+        }
 
         // Each text content block may be an independent JSON object (e.g. brave-search
         // returns one JSON object per result). Collect all blocks that parse as JSON,
@@ -107,9 +113,9 @@ impl McpCaller for McpPool {
         }
     }
 
-    async fn list_tools(&self, server_name: &str) -> anyhow::Result<Vec<String>> {
+    async fn list_tools(&self, server_name: &str) -> Result<Vec<String>, McpCallError> {
         let peer = self.get_peer(server_name).await?;
-        let tools = peer.list_all_tools().await?;
+        let tools = peer.list_all_tools().await.with_context(|| format!("Failed to list tools on MCP server `{server_name}`"))?;
         Ok(tools.iter().map(|t| t.name.to_string()).collect())
     }
 }

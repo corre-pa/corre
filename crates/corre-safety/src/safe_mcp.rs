@@ -1,7 +1,7 @@
 use crate::config::{PolicyAction, SafetyConfig};
 use crate::report::SanitizationReport;
 use crate::{leak_detector, policy, sanitizer, validator};
-use corre_core::capability::McpCaller;
+use corre_core::capability::{McpCallError, McpCaller};
 
 /// A safety-wrapping `McpCaller` that validates, sanitizes, and scans all tool outputs.
 pub struct SafeMcpCaller {
@@ -17,11 +17,11 @@ impl SafeMcpCaller {
 
 #[async_trait::async_trait]
 impl McpCaller for SafeMcpCaller {
-    async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    async fn call_tool(&self, server_name: &str, tool_name: &str, args: serde_json::Value) -> Result<serde_json::Value, McpCallError> {
         let raw = self.inner.call_tool(server_name, tool_name, args).await?;
 
         // Serialize the raw value to a string for scanning
-        let raw_str = serde_json::to_string(&raw)?;
+        let raw_str = serde_json::to_string(&raw).map_err(|e| McpCallError::Protocol(anyhow::Error::from(e)))?;
 
         let mut report = SanitizationReport { original_len: raw_str.len(), ..Default::default() };
 
@@ -55,7 +55,7 @@ impl McpCaller for SafeMcpCaller {
         Ok(result)
     }
 
-    async fn list_tools(&self, server_name: &str) -> anyhow::Result<Vec<String>> {
+    async fn list_tools(&self, server_name: &str) -> Result<Vec<String>, McpCallError> {
         // Pass through unmodified — tool listings are not untrusted external content
         self.inner.list_tools(server_name).await
     }
@@ -72,10 +72,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl McpCaller for MockMcpCaller {
-        async fn call_tool(&self, _: &str, _: &str, _: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        async fn call_tool(&self, _: &str, _: &str, _: serde_json::Value) -> Result<serde_json::Value, McpCallError> {
             Ok(self.response.clone())
         }
-        async fn list_tools(&self, _: &str) -> anyhow::Result<Vec<String>> {
+        async fn list_tools(&self, _: &str) -> Result<Vec<String>, McpCallError> {
             Ok(vec!["test_tool".into()])
         }
     }
