@@ -308,6 +308,25 @@
     // =========================================================================
     // Window minimize/restore via taskbar
     // =========================================================================
+    var topZIndex = 10;
+
+    function bringToFront(win) {
+        if (!win || win.classList.contains("minimized")) return;
+        topZIndex++;
+        if (topZIndex >= 9000) {
+            // Reset all window z-indices to avoid colliding with taskbar (9999)
+            var allWins = document.querySelectorAll(".xp-window");
+            var ordered = Array.prototype.slice.call(allWins).sort(function (a, b) {
+                return (parseInt(a.style.zIndex) || 0) - (parseInt(b.style.zIndex) || 0);
+            });
+            for (var i = 0; i < ordered.length; i++) {
+                ordered[i].style.zIndex = 10 + i;
+            }
+            topZIndex = 10 + ordered.length;
+        }
+        win.style.zIndex = topZIndex;
+    }
+
     function syncTaskbarState() {
         var items = document.querySelectorAll(".taskbar-item[data-window]");
         for (var i = 0; i < items.length; i++) {
@@ -322,8 +341,21 @@
     function toggleWindow(winId) {
         var win = document.getElementById(winId);
         if (!win) return;
-        win.classList.toggle("minimized");
+        if (win.classList.contains("minimized")) {
+            win.classList.remove("minimized");
+            bringToFront(win);
+        } else {
+            win.classList.add("minimized");
+        }
         syncTaskbarState();
+    }
+
+    // Click anywhere on a window to bring it to front
+    var allWindows = document.querySelectorAll(".xp-window");
+    for (var wi = 0; wi < allWindows.length; wi++) {
+        allWindows[wi].addEventListener("mousedown", function (e) {
+            bringToFront(this);
+        });
     }
 
     // Taskbar buttons toggle minimize
@@ -381,10 +413,12 @@
 
     function openWindow(winId) {
         var win = document.getElementById(winId);
-        if (win && win.classList.contains("minimized")) {
+        if (!win) return;
+        if (win.classList.contains("minimized")) {
             win.classList.remove("minimized");
             syncTaskbarState();
         }
+        bringToFront(win);
     }
 
     document.addEventListener("click", function (e) {
