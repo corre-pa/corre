@@ -31,20 +31,27 @@ pub fn parse_search_results(value: &serde_json::Value) -> Vec<SearchResultItem> 
     }
 
     if let Some(text) = value.as_str() {
-        if let Ok(items) = serde_json::from_str::<Vec<SearchResultItem>>(text) {
-            return items.into_iter().filter(|i| !i.url.is_empty()).collect();
+        match serde_json::from_str::<Vec<SearchResultItem>>(text) {
+            Ok(items) => items.into_iter().filter(|i| !i.url.is_empty()).collect(),
+            Err(e) => {
+                tracing::debug!("Could not parse search results as JSON array: {e}");
+                let items: Vec<SearchResultItem> = text
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<SearchResultItem>(line).ok())
+                    .filter(|i| !i.url.is_empty())
+                    .collect();
+                if !items.is_empty() {
+                    items
+                } else {
+                    tracing::debug!("Could not parse search results from text ({} chars)", text.len());
+                    vec![]
+                }
+            }
         }
-        let items: Vec<SearchResultItem> =
-            text.lines().filter_map(|line| serde_json::from_str::<SearchResultItem>(line).ok()).filter(|i| !i.url.is_empty()).collect();
-        if !items.is_empty() {
-            return items;
-        }
-        tracing::debug!("Could not parse search results from text ({} chars)", text.len());
     } else {
         tracing::debug!("Unexpected search result shape: {value}");
+        vec![]
     }
-
-    vec![]
 }
 
 /// Extract a JSON substring from LLM output that may contain markdown fencing
