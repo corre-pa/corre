@@ -257,6 +257,11 @@ ok "Registry written to ${OUTPUT}"
 cp "${OUTPUT}" "${REGISTRY_DIR}/mcp-registry.json"
 ok "Copied to ${REGISTRY_DIR}/mcp-registry.json"
 
+# ── Build docker image ────────────────────────────────────────────────────────────
+
+info "Building Docker image for registry site..."
+docker build -t mcp-registry "${REGISTRY_DIR}"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

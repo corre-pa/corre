@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-02-25T12:03:32Z",
+  "updated_at": "2026-02-26T08:37:04Z",
   "servers": [
     {
       "id": "brave-search",
@@ -70,10 +70,10 @@
         "download_url_template": "/mcp/bin/mcp-smtp-{platform}-{arch}",
         "binary_name": "mcp-smtp",
         "sha256": {
-          "linux-x86_64": "41d0712a425de036bcc5e9d6a8ae8ebf7dc9693b8f2df4955513345893b1800c",
-          "linux-aarch64": "1841269b72ece9b08dd2dbec1c4a540374d391956f4295eb67ba4727b76dfa2e",
-          "linux-armv7": "33ef48e41c27fa2e390f69e10080dc4d230c1e35a3ab22c1e6489aaeb938f298",
-          "windows-x86_64": "60097731a4340ddd6d01fc716a83c03b41703cfcab53ea08280296b26aaf3fed"
+          "linux-x86_64": "3822c72dc6ccb8b835abeaedee8400bf1c6fb78819584d55b9b562dad9561754",
+          "linux-aarch64": "b0e731f95ed0cce15d923f87f0bb931a1bf0c79fa01ebb5af9b67eec53d63be7",
+          "linux-armv7": "a7210d7f70e81dbc75833e4afaaa968f2ebc233b3316544ddf0552049ef5c539",
+          "windows-x86_64": "69d1a644dac181f4fc8c7a814eaea0243a44136addaf258e19a7c2b9b4b40327"
         },
         "command": "mcp-smtp",
         "args": []
@@ -121,10 +121,10 @@
         "download_url_template": "/mcp/bin/mcp-telegram-{platform}-{arch}",
         "binary_name": "mcp-telegram",
         "sha256": {
-          "linux-x86_64": "d2648f12494e641e212c358fea64ef89b973203bc6782793ae290b8d429aa4d2",
-          "linux-aarch64": "e1da9d7b5c8d1953b477ee102816554da6c16258c6117e64848b5b85342f6676",
-          "linux-armv7": "79ea6b24841046e679dcaf80aa637cc53825cb65646cd72ad6565197f9a46e54",
-          "windows-x86_64": "1486f4932afe33b811688b11b0a7cb105adecc329d4cce691409ff703b722e14"
+          "linux-x86_64": "23e582b98b3bb0ad4cd2ecddf0f304f65263b5793e0aaafefab9b2f4de43ca4f",
+          "linux-aarch64": "f55eed1bf3c70aa66120d7ab144d011ef325f49f2f529d59508132b0b686c92a",
+          "linux-armv7": "15c90934718ce71988a74dfcb9bad5ffba82beb1a3a49716249ef546cfcbf64f",
+          "windows-x86_64": "c6cb672a3a70e17812644ef82100d6f1dd134e52ad9668e2048d207aafd08aa4"
         },
         "command": "mcp-telegram",
         "args": []
