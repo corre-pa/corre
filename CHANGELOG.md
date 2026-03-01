@@ -3,7 +3,28 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.4.0] - 2026-02-24
+## [0.15.0] - 2026-03-01
+
+### Added
+- **Capability plugin system** (CCPP v1) for loading capabilities as
+  external plugins.
+- **MCP registry** with per-MCP config files and unified MCP Store,
+  generated from individual JSON definitions.
+- **Rolodex capability** for contact management.
+- **Docker image build** triggered after registry generation.
+
+### Changed
+- Focused or restored dashboard windows are brought to front via
+  z-index management.
+- MCP tool-level errors are now surfaced into a dedicated
+  `McpCallError` enum.
+- Embedded assets removed from bundle in favour of external serving.
+- Reverted to beta versioning scheme.
+
+### Fixed
+- More detailed logs on search parse errors.
+
+## [0.4.0] - 2026-02-24
 
 ### Fixed
 - Removed irrelevant articles from daily brief output.
@@ -12,7 +33,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Environment variables are now loaded from `.env` file automatically.
 
-## [1.3.0] - 2026-02-23
+## [0.3.0] - 2026-02-23
 
 ### Added
 - **Dashboard for capability management** with a themed UI for monitoring
@@ -34,7 +55,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 - Reduced false positives in safety layer base64 detection.
 
-## [1.2.1] - 2026-02-22
+## [0.2.1] - 2026-02-22
 
 ### Fixed
 - **Brave web search was returning zero results.** The topics config used
@@ -65,7 +86,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 - Scoring `max_tokens` increased from 2048 to 16384 to accommodate
   scoring all results in a single response.
 
-## [1.2.0] - 2026-02-22
+## [0.2.0] - 2026-02-22
 
 ### Fixed
 - Static files (CSS, templates) are now embedded in the binary instead
@@ -74,7 +95,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
 - Removed post-search exclude filtering that was redundant with query-level
   exclusion operators, and increased the per-source result cap.
 
-## [1.1.0] - 2026-02-22
+## [0.1.0] - 2026-02-22
 
 ### Added
 - `corre install-deps` CLI command to install runtime dependencies
@@ -91,7 +112,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
   (`~/.local/share/corre/` on Linux, `~/Library/Application Support/corre/`
   on macOS).
 
-## [1.0.0] - 2026-02-22
+## [0.0.2] - 2026-02-22
 
 ### Added
 - Binary cross-compilation support for Linux and macOS (aarch64/x86_64).
@@ -99,7 +120,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/).
   directory, writes default config, and validates API keys.
 - OS-specific default configurations with platform-aware setup.
 
-## [0.1.0] - 2026-02-22
+## [0.0.1] - 2026-02-22
 
 Initial release.
 
