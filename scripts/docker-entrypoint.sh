@@ -43,16 +43,15 @@ if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
     done
 
     TS_ARGS=(--authkey="${TAILSCALE_AUTHKEY:?TAILSCALE_AUTHKEY must be set when TAILSCALE_ENABLED=true}")
-    if [ -n "${TAILSCALE_LOGIN_SERVER:-}" ]; then
-        TS_ARGS+=(--login-server="${TAILSCALE_LOGIN_SERVER}")
-    fi
+    [ -n "${TAILSCALE_LOGIN_SERVER:-}" ] && TS_ARGS+=(--login-server="${TAILSCALE_LOGIN_SERVER}")
+    [ -n "${TS_HOSTNAME:-}" ] && TS_ARGS+=(--hostname="${TS_HOSTNAME}")
 
     tailscale up "${TS_ARGS[@]}"
     echo "Tailscale is up: $(tailscale ip -4)"
 
-    # Proxy newspaper and dashboard over the tailnet
-    tailscale serve 5510 http://corre-news:5510 2>/dev/null || true
-    tailscale serve 5500 http://localhost:5500 2>/dev/null || true
+    # Dashboard on default HTTPS port, newspaper on 8443
+    tailscale serve --bg --https=443 http://localhost:5500
+    tailscale serve --bg --https=8443 http://corre-news:5510
 fi
 
 # Drop to the corre user for the main process

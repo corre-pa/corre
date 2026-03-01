@@ -121,6 +121,121 @@ Options:
   -h, --help             Print help
 ```
 
+## Remote access via Tailscale
+
+Corre binds to `127.0.0.1` by default, so it is only reachable from the host machine. To read
+CorreNews from your phone, laptop, or any other device without exposing it to the public
+internet, you can enable the built-in [Tailscale](https://tailscale.com/) integration. Tailscale
+creates an encrypted WireGuard mesh between your devices and gives each node a stable DNS name
+with automatic HTTPS certificates.
+
+### 1. Prepare your Tailscale account
+
+1. Sign up at [login.tailscale.com](https://login.tailscale.com/) (free for personal use).
+2. In the admin console, enable **MagicDNS** (Settings > DNS).
+3. Enable **HTTPS Certificates** (Settings > DNS > HTTPS Certificates).
+4. Generate an auth key (Settings > Keys > Generate auth key). Reusable keys are convenient
+   for containers that may restart. Copy the key -- it looks like `tskey-auth-...`.
+
+### 2. Configure the Corre host
+
+Add these variables to your `.env` file:
+
+```sh
+TAILSCALE_ENABLED=true
+TAILSCALE_AUTHKEY="tskey-auth-..."
+TS_HOSTNAME=corre                   # the MagicDNS name for this node
+```
+
+If you use a self-hosted [Headscale](https://github.com/juanfont/headscale) coordination
+server instead of Tailscale's hosted control plane, also set:
+
+```sh
+TAILSCALE_LOGIN_SERVER="https://headscale.example.com"
+```
+
+Start (or restart) the stack:
+
+```sh
+docker compose up -d
+```
+
+Check the logs for confirmation:
+
+```sh
+docker compose logs corre-core | grep "Tailscale is up"
+# Expected: Tailscale is up: 100.x.x.x
+```
+
+Once running, both services are available over the tailnet with automatic HTTPS:
+
+| Service | URL |
+|---------|-----|
+| Dashboard | `https://corre.<tailnet>.ts.net/` |
+| CorreNews | `https://corre.<tailnet>.ts.net:8443/` |
+
+Replace `corre` with whatever you set `TS_HOSTNAME` to, and `<tailnet>` with your tailnet name
+(visible in the admin console, e.g. `tail1234a.ts.net`).
+
+### 3. Install Tailscale on your devices
+
+Every device that needs to reach Corre must be on the same tailnet. Install Tailscale, sign in
+with the same account, and you're connected.
+
+**Linux**
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+**macOS**
+
+Install from the [Mac App Store](https://apps.apple.com/app/tailscale/id1475387142) or via
+Homebrew:
+
+```sh
+brew install --cask tailscale
+```
+
+Open Tailscale from the menu bar and sign in.
+
+**Windows**
+
+Download the installer from [tailscale.com/download/windows](https://tailscale.com/download/windows),
+run it, and sign in from the system tray icon.
+
+**iOS**
+
+Install [Tailscale](https://apps.apple.com/app/tailscale/id1470499037) from the App Store,
+open it, and sign in.
+
+**Android**
+
+Install [Tailscale](https://play.google.com/store/apps/details?id=com.tailscale.ipn) from
+Google Play, open it, and sign in.
+
+### 4. Access Corre from any device
+
+Once Tailscale is running on both the server and your device, open a browser and navigate to:
+
+- **Dashboard:** `https://corre.<tailnet>.ts.net/`
+- **CorreNews:** `https://corre.<tailnet>.ts.net:8443/`
+
+The HTTPS certificates are provisioned automatically by Tailscale via Let's Encrypt -- no
+manual certificate setup is needed. The connection is end-to-end encrypted over WireGuard and
+never traverses the public internet.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `Tailscale is up` never appears in logs | Check that `TAILSCALE_AUTHKEY` is valid and not expired. Generate a new key in the admin console if needed. |
+| Browser shows certificate error | Ensure HTTPS Certificates are enabled in the Tailscale admin DNS settings. |
+| Connection times out from a device | Verify the device is signed into the same Tailscale account and shows as "Connected" in the client. |
+| `corre-news` unreachable on 8443 | Confirm both containers are on the `corre-internal` Docker network (`docker network inspect corre-internal`). |
+| Dashboard loads but CorreNews doesn't | `corre-news` depends on `corre-core` being healthy. Check `docker compose ps` and `docker compose logs corre-news`. |
+
 ## Architecture
 
 ### Workspace layout
