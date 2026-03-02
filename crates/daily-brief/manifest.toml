@@ -80,7 +80,7 @@ optional = true
 
 [[plugin.links]]
 label = "Read CorreNews"
-url = "//{service:corre-news}:5510"
+url = "http://{service:corre-news}:5510"
 icon = "📰"
 
 [mcp_dependencies.brave-search]

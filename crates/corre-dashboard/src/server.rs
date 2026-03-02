@@ -104,7 +104,11 @@ fn news_config_from_toml(config: &CorreConfig) -> (Option<String>, String) {
 ///   resolve correctly whether the user reaches the dashboard via localhost,
 ///   a LAN IP, or a Tailscale DNS name). The port is taken from the service's
 ///   first port mapping.
-fn collect_plugin_links(plugins: &[DiscoveredPlugin], request_host: &str) -> Vec<serde_json::Value> {
+///
+/// When the dashboard is served over HTTPS (detected via `X-Forwarded-Proto`
+/// or a `.ts.net` host), `http://` links are upgraded to `https://` so the
+/// browser doesn't reject them as mixed content.
+fn collect_plugin_links(plugins: &[DiscoveredPlugin], request_host: &str, is_https: bool) -> Vec<serde_json::Value> {
     // Strip the port from the request host to get the bare hostname/IP.
     let host_without_port = request_host.rsplit_once(':').map_or(request_host, |(h, _)| h);
     plugins
@@ -112,7 +116,10 @@ fn collect_plugin_links(plugins: &[DiscoveredPlugin], request_host: &str) -> Vec
         .flat_map(|p| {
             let services = &p.manifest.plugin.services;
             p.manifest.plugin.links.iter().map(move |link| {
-                let url = expand_link_url(&link.url, services, host_without_port);
+                let mut url = expand_link_url(&link.url, services, host_without_port);
+                if is_https {
+                    url = url.replacen("http://", "https://", 1);
+                }
                 serde_json::json!({
                     "label": link.label,
                     "url": url,
@@ -214,7 +221,9 @@ async fn dashboard_page_handler(
     };
 
     let request_host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
-    let plugin_links = collect_plugin_links(&state.plugins, request_host);
+    let is_https = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("https"))
+        || request_host.ends_with(".ts.net");
+    let plugin_links = collect_plugin_links(&state.plugins, request_host, is_https);
     let plugin_links_json = serde_json::to_string(&plugin_links).unwrap_or_else(|_| "[]".into());
 
     let config_editors = collect_config_editors(&config, &state.plugins);
