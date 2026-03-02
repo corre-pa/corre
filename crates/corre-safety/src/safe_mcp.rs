@@ -5,7 +5,7 @@
 
 use crate::config::{PolicyAction, SafetyConfig};
 use crate::report::SanitizationReport;
-use crate::{leak_detector, policy, sanitizer, validator};
+use crate::{boundary, leak_detector, policy, sanitizer, validator};
 use corre_core::capability::{McpCallError, McpCaller};
 
 /// A safety-wrapping `McpCaller` that validates, sanitizes, and scans all tool outputs.
@@ -49,6 +49,12 @@ impl McpCaller for SafeMcpCaller {
         // Step 5: Apply policy action
         if policy_result.action >= PolicyAction::Block {
             content = policy::apply_action(PolicyAction::Block, &content, &mut report);
+        }
+
+        // Step 6: Boundary wrapping
+        if self.config.boundary_wrap {
+            let sanitized = !report.injections_found.is_empty() || report.secrets_redacted > 0 || report.blocked;
+            content = boundary::wrap_tool_output(server_name, tool_name, &content, sanitized);
         }
 
         report.final_len = content.len();
@@ -127,6 +133,19 @@ mod tests {
 
         let tools = safe.list_tools("test").await.unwrap();
         assert_eq!(tools, vec!["test_tool"]);
+    }
+
+    #[tokio::test]
+    async fn wraps_output_in_boundary_tags() {
+        let mock = MockMcpCaller { response: json!({"title": "Clean data"}) };
+        let mut config = SafetyConfig::default_enabled();
+        config.boundary_wrap = true;
+        let safe = SafeMcpCaller::new(Box::new(mock), &config);
+
+        let result = safe.call_tool("brave-search", "web_search", json!({})).await.unwrap();
+        let result_str = result.to_string();
+        assert!(result_str.contains("<tool_output"), "boundary wrapping should produce <tool_output> tags");
+        assert!(result_str.contains("server=\\\"brave-search\\\""), "should contain server attribute");
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ use crate::report::SanitizationReport;
 
 /// Severity of a policy violation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)] // Low and Critical reserved for user-defined and future built-in rules
 pub enum Severity {
     Low,
     Medium,
