@@ -1,5 +1,5 @@
 # ── Stage 1: Build daily-brief binary ──────────────────────────────────────────
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.91-trixie AS builder
 
 WORKDIR /build
 

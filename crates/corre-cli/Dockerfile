@@ -1,5 +1,5 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.91-trixie AS builder
 
 WORKDIR /build
 
@@ -38,7 +38,7 @@ COPY . .
 RUN touch crates/*/src/*.rs && cargo build --release -p corre-cli
 
 # ── Stage 2: Core runtime (scheduler + capabilities + dashboard) ─────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -49,9 +49,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Tailscale (dormant unless TAILSCALE_ENABLED=true)
-RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg \
+RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg \
         -o /usr/share/keyrings/tailscale-archive-keyring.gpg && \
-    curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list \
+    curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list \
         -o /etc/apt/sources.list.d/tailscale.list && \
     apt-get update && apt-get install -y --no-install-recommends tailscale && \
     rm -rf /var/lib/apt/lists/*

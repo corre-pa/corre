@@ -1,5 +1,5 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.91-trixie AS builder
 
 WORKDIR /build
 
@@ -38,7 +38,7 @@ COPY . .
 RUN touch crates/*/src/*.rs && cargo build --release -p corre-news
 
 # ── Stage 2: News runtime (newspaper web server only, minimal) ───────────────
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
