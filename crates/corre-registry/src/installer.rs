@@ -6,6 +6,8 @@
 
 use crate::manifest::{CapabilityEntry, InstallMethod, McpRegistryEntry};
 use corre_core::config::McpServerConfig;
+use corre_sdk::manifest::{PluginDefaults, PluginManifest, PluginMeta, PluginPermissions};
+use corre_sdk::types::ContentType;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -227,137 +229,47 @@ impl McpInstaller {
     }
 
     /// Generate a `manifest.toml` string from a capability's inline manifest.
+    ///
+    /// Builds a [`PluginManifest`] and serializes it with `toml::to_string_pretty`
+    /// so that all field values (descriptions, paths, URLs) are properly escaped.
     fn generate_capability_manifest(&self, entry: &CapabilityEntry) -> String {
         let m = &entry.manifest;
         let binary_name = match &entry.install {
             InstallMethod::Binary { binary_name, .. } => binary_name.clone(),
             _ => entry.id.clone(),
         };
-        let mut lines = vec![
-            "[plugin]".into(),
-            format!("name = \"{}\"", entry.id),
-            format!("version = \"{}\"", entry.version),
-            format!("description = \"{}\"", entry.description),
-            format!("protocol_version = \"{}\"", entry.protocol_version),
-            format!("binary_name = \"{binary_name}\""),
-            format!("content_type = \"{}\"", m.content_type),
-        ];
 
-        if m.execution_mode != corre_sdk::manifest::ExecutionMode::Oneshot {
-            lines.push("execution_mode = \"daemon\"".into());
-        }
+        let content_type = serde_json::from_value::<ContentType>(serde_json::Value::String(m.content_type.clone())).unwrap_or_default();
 
-        if m.defaults.schedule.is_some() || m.defaults.config_path.is_some() || m.defaults.config_schema.is_some() {
-            lines.push(String::new());
-            lines.push("[plugin.defaults]".into());
-            if let Some(ref sched) = m.defaults.schedule {
-                lines.push(format!("schedule = \"{sched}\""));
-            }
-            if let Some(ref path) = m.defaults.config_path {
-                lines.push(format!("config_path = \"{path}\""));
-            }
-        }
+        let manifest = PluginManifest {
+            plugin: PluginMeta {
+                name: entry.id.clone(),
+                version: entry.version.clone(),
+                description: entry.description.clone(),
+                min_host_version: None,
+                protocol_version: entry.protocol_version.clone(),
+                binary_name: Some(binary_name),
+                content_type,
+                execution_mode: m.execution_mode.clone(),
+                defaults: PluginDefaults {
+                    schedule: m.defaults.schedule.clone(),
+                    config_path: m.defaults.config_path.clone(),
+                    config_schema: m.defaults.config_schema.clone(),
+                },
+                permissions: PluginPermissions {
+                    mcp_servers: m.permissions.mcp_servers.clone(),
+                    llm_access: m.permissions.llm_access,
+                    max_concurrent_llm: m.permissions.max_concurrent_llm,
+                    outputs: m.permissions.outputs.clone(),
+                    sandbox: m.permissions.sandbox.clone(),
+                },
+                services: m.services.clone(),
+                links: m.links.clone(),
+            },
+            mcp_dependencies: HashMap::new(),
+        };
 
-        // config_schema is a nested structure — serialize it via toml to avoid
-        // hand-building deeply nested TOML arrays-of-tables.
-        if let Some(ref schema) = m.defaults.config_schema {
-            #[derive(serde::Serialize)]
-            struct Wrapper<'a> {
-                plugin: WrapperPlugin<'a>,
-            }
-            #[derive(serde::Serialize)]
-            struct WrapperPlugin<'a> {
-                defaults: WrapperDefaults<'a>,
-            }
-            #[derive(serde::Serialize)]
-            struct WrapperDefaults<'a> {
-                config_schema: &'a corre_sdk::manifest::ConfigSchema,
-            }
-            let wrapper = Wrapper { plugin: WrapperPlugin { defaults: WrapperDefaults { config_schema: schema } } };
-            if let Ok(fragment) = toml::to_string(&wrapper) {
-                // toml::to_string produces keys under [plugin.defaults.config_schema]
-                // which merges cleanly with the [plugin.defaults] block above.
-                lines.push(String::new());
-                lines.push(fragment.trim_end().to_string());
-            }
-        }
-
-        lines.push(String::new());
-        lines.push("[plugin.permissions]".into());
-        if !m.permissions.mcp_servers.is_empty() {
-            let servers: Vec<String> = m.permissions.mcp_servers.iter().map(|s| format!("\"{s}\"")).collect();
-            lines.push(format!("mcp_servers = [{}]", servers.join(", ")));
-        }
-        lines.push(format!("llm_access = {}", m.permissions.llm_access));
-        lines.push(format!("max_concurrent_llm = {}", m.permissions.max_concurrent_llm));
-
-        for output in &m.permissions.outputs {
-            lines.push(String::new());
-            lines.push("[[plugin.permissions.outputs]]".into());
-            lines.push(format!("output_type = \"{}\"", serde_json::to_value(&output.output_type).unwrap().as_str().unwrap()));
-            lines.push(format!("target = \"{}\"", output.target));
-            if let Some(ref ct) = output.content_type {
-                lines.push(format!("content_type = \"{ct}\""));
-            }
-        }
-
-        if let Some(ref sandbox) = m.permissions.sandbox {
-            lines.push(String::new());
-            lines.push("[plugin.permissions.sandbox]".into());
-            if !sandbox.network.is_empty() {
-                let vals: Vec<String> = sandbox.network.iter().map(|s| format!("\"{s}\"")).collect();
-                lines.push(format!("network = [{}]", vals.join(", ")));
-            }
-            if !sandbox.filesystem_read.is_empty() {
-                let vals: Vec<String> = sandbox.filesystem_read.iter().map(|s| format!("\"{s}\"")).collect();
-                lines.push(format!("filesystem_read = [{}]", vals.join(", ")));
-            }
-            if !sandbox.filesystem_write.is_empty() {
-                let vals: Vec<String> = sandbox.filesystem_write.iter().map(|s| format!("\"{s}\"")).collect();
-                lines.push(format!("filesystem_write = [{}]", vals.join(", ")));
-            }
-            if let Some(dns) = sandbox.dns {
-                lines.push(format!("dns = {dns}"));
-            }
-            if let Some(mem) = sandbox.max_memory_mb {
-                lines.push(format!("max_memory_mb = {mem}"));
-            }
-            if let Some(cpu) = sandbox.max_cpu_secs {
-                lines.push(format!("max_cpu_secs = {cpu}"));
-            }
-        }
-
-        for link in &m.links {
-            lines.push(String::new());
-            lines.push("[[plugin.links]]".into());
-            lines.push(format!("label = \"{}\"", link.label));
-            lines.push(format!("url = \"{}\"", link.url));
-            if let Some(ref icon) = link.icon {
-                lines.push(format!("icon = \"{icon}\""));
-            }
-        }
-
-        for svc in &m.services {
-            lines.push(String::new());
-            lines.push("[[plugin.services]]".into());
-            lines.push(format!("name = \"{}\"", svc.name));
-            lines.push(format!("description = \"{}\"", svc.description));
-            lines.push(format!("image = \"{}\"", svc.image));
-            if !svc.ports.is_empty() {
-                let ports: Vec<String> = svc.ports.iter().map(|p| format!("\"{p}\"")).collect();
-                lines.push(format!("ports = [{}]", ports.join(", ")));
-            }
-            if !svc.volumes.is_empty() {
-                let vols: Vec<String> = svc.volumes.iter().map(|v| format!("\"{v}\"")).collect();
-                lines.push(format!("volumes = [{}]", vols.join(", ")));
-            }
-            if svc.optional {
-                lines.push("optional = true".into());
-            }
-        }
-
-        lines.push(String::new());
-        lines.join("\n")
+        toml::to_string_pretty(&manifest).expect("PluginManifest serialization should not fail")
     }
 
     /// Read MCP dependency IDs from a capability's manifest.toml (best-effort).
@@ -409,7 +321,9 @@ impl From<std::io::Error> for InstallError {
 mod tests {
     use super::*;
     use crate::manifest::{CapabilityDefaults, CapabilityManifestInline, CapabilityPermissions};
-    use corre_sdk::manifest::{ConfigField, ConfigFieldType, ConfigSchema};
+    use corre_sdk::manifest::{
+        ConfigField, ConfigFieldType, ConfigSchema, OutputDeclaration, OutputType, PluginLink, SandboxPermissions, ServiceDeclaration,
+    };
 
     /// Helper: build a minimal `CapabilityEntry` with an optional config_schema.
     fn entry_with_schema(schema: Option<ConfigSchema>) -> CapabilityEntry {
@@ -512,5 +426,76 @@ mod tests {
         let parsed: corre_sdk::manifest::PluginManifest =
             toml::from_str(&manifest_toml).unwrap_or_else(|e| panic!("generated manifest is invalid TOML:\n{manifest_toml}\nerror: {e}"));
         assert!(parsed.plugin.defaults.config_schema.is_none());
+    }
+
+    #[test]
+    fn manifest_handles_special_characters() {
+        let data_dir = std::path::Path::new("/tmp/test-installer");
+        let installer = McpInstaller::new(data_dir.to_path_buf(), "https://example.com".into());
+        let mut entry = entry_with_schema(None);
+        entry.description = "A \"quoted\" description with \\ backslashes\nand newlines".into();
+
+        let manifest_toml = installer.generate_capability_manifest(&entry);
+        let parsed: corre_sdk::manifest::PluginManifest =
+            toml::from_str(&manifest_toml).unwrap_or_else(|e| panic!("generated manifest is invalid TOML:\n{manifest_toml}\nerror: {e}"));
+        assert_eq!(parsed.plugin.description, "A \"quoted\" description with \\ backslashes\nand newlines");
+    }
+
+    #[test]
+    fn manifest_round_trips_outputs_sandbox_links_services() {
+        let data_dir = std::path::Path::new("/tmp/test-installer");
+        let installer = McpInstaller::new(data_dir.to_path_buf(), "https://example.com".into());
+        let mut entry = entry_with_schema(None);
+        entry.manifest.permissions = CapabilityPermissions {
+            mcp_servers: vec!["brave-search".into()],
+            llm_access: true,
+            max_concurrent_llm: 5,
+            outputs: vec![OutputDeclaration {
+                output_type: OutputType::Filesystem,
+                target: "{data_dir}/editions/{date}/edition.json".into(),
+                content_type: Some("application/json".into()),
+            }],
+            sandbox: Some(SandboxPermissions {
+                network: vec!["api.example.com:443".into()],
+                filesystem_read: vec!["{config_dir}".into()],
+                filesystem_write: vec!["{data_dir}/editions".into()],
+                dns: Some(true),
+                max_memory_mb: Some(512),
+                max_cpu_secs: Some(60),
+            }),
+        };
+        entry.manifest.links = vec![PluginLink { label: "Homepage".into(), url: "https://example.com".into(), icon: Some("home".into()) }];
+        entry.manifest.services = vec![ServiceDeclaration {
+            name: "web-ui".into(),
+            description: "A service with \"quotes\" in its description".into(),
+            image: "ghcr.io/example/web:latest".into(),
+            ports: vec!["8080:80".into()],
+            volumes: vec!["{data_dir}/editions:/data:ro".into()],
+            env: HashMap::new(),
+            optional: true,
+            health_check: None,
+        }];
+
+        let manifest_toml = installer.generate_capability_manifest(&entry);
+        let parsed: corre_sdk::manifest::PluginManifest =
+            toml::from_str(&manifest_toml).unwrap_or_else(|e| panic!("generated manifest is invalid TOML:\n{manifest_toml}\nerror: {e}"));
+
+        assert_eq!(parsed.plugin.permissions.mcp_servers, vec!["brave-search"]);
+        assert_eq!(parsed.plugin.permissions.max_concurrent_llm, 5);
+        assert_eq!(parsed.plugin.permissions.outputs.len(), 1);
+        assert_eq!(parsed.plugin.permissions.outputs[0].output_type, OutputType::Filesystem);
+        assert_eq!(parsed.plugin.permissions.outputs[0].content_type.as_deref(), Some("application/json"));
+
+        let sandbox = parsed.plugin.permissions.sandbox.as_ref().expect("sandbox should be present");
+        assert_eq!(sandbox.network, vec!["api.example.com:443"]);
+        assert_eq!(sandbox.dns, Some(true));
+        assert_eq!(sandbox.max_memory_mb, Some(512));
+
+        assert_eq!(parsed.plugin.links.len(), 1);
+        assert_eq!(parsed.plugin.links[0].icon.as_deref(), Some("home"));
+
+        assert_eq!(parsed.plugin.services.len(), 1);
+        assert_eq!(parsed.plugin.services[0].description, "A service with \"quotes\" in its description");
+        assert!(parsed.plugin.services[0].optional);
     }
 }
