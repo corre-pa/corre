@@ -305,7 +305,7 @@ impl Capability for SubprocessCapability {
     async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput> {
         // Reset progress state
         {
-            let mut progress = self.progress.lock().unwrap();
+            let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
             progress.phase = "init".into();
             progress.percent = None;
             progress.output = None;
@@ -420,7 +420,7 @@ impl Capability for SubprocessCapability {
                         if let Some(params) = notif.params
                             && let Ok(result) = serde_json::from_value::<CapabilityResultParams>(params)
                         {
-                            let mut progress = self.progress.lock().unwrap();
+                            let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
                             progress.output = Some(result.output);
                             progress.phase = "done".into();
                         }
@@ -431,7 +431,7 @@ impl Capability for SubprocessCapability {
                         if let Some(params) = notif.params
                             && let Ok(err_params) = serde_json::from_value::<CapabilityErrorParams>(params)
                         {
-                            let mut progress = self.progress.lock().unwrap();
+                            let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
                             progress.error = Some(err_params.message.clone());
                             if let Some(partial) = err_params.partial_output {
                                 progress.output = Some(partial);
@@ -454,7 +454,7 @@ impl Capability for SubprocessCapability {
                             if let Some(ref tx) = ctx.progress_tx {
                                 let _ = tx.send(ProgressEvent::Progress { pct: p.percent, phase: p.phase.clone() });
                             }
-                            let mut progress = self.progress.lock().unwrap();
+                            let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
                             progress.phase = p.phase;
                             progress.percent = p.percent;
                             if let Some(msg) = p.message {
@@ -488,7 +488,7 @@ impl Capability for SubprocessCapability {
         }
 
         // Extract result
-        let progress = self.progress.lock().unwrap();
+        let progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref error) = progress.error {
             if let Some(ref partial) = progress.output {
                 tracing::warn!("[plugin:{}] error with partial output: {error}", self.manifest.name);
@@ -501,7 +501,7 @@ impl Capability for SubprocessCapability {
     }
 
     async fn in_progress(&self) -> ProgressStatus {
-        let progress = self.progress.lock().unwrap();
+        let progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref output) = progress.output {
             return ProgressStatus::Done(output.clone());
         }

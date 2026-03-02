@@ -243,7 +243,17 @@ async fn run() -> anyhow::Result<()> {
         }
     }
 
-    let batches: Vec<Vec<(String, Article)>> = futures::future::join_all(handles).await.into_iter().filter_map(|r| r.ok()).collect();
+    let batches: Vec<Vec<(String, Article)>> = futures::future::join_all(handles)
+        .await
+        .into_iter()
+        .filter_map(|r| match r {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::error!("score+summarize task failed: {e}");
+                None
+            }
+        })
+        .collect();
 
     // ── Step 7: Group into sections ──────────────────────────────────────
     let mut article_map: HashMap<String, Vec<Article>> = HashMap::new();

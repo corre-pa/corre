@@ -280,7 +280,8 @@ async fn search_handler(State(state): State<Arc<AppState>>, Query(params): Query
     let Some(ref search) = state.search else {
         return axum::Json(Vec::<crate::search::SearchResult>::new()).into_response();
     };
-    match search.search(&params.q, params.limit) {
+    let limit = params.limit.min(100);
+    match search.search(&params.q, limit) {
         Ok(results) => axum::Json(results).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Search error: {e}")).into_response(),
     }

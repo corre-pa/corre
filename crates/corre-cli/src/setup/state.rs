@@ -59,20 +59,20 @@ impl Default for SetupState {
 
 impl SetupState {
     /// Path to the persisted state file.
-    pub fn state_path() -> PathBuf {
-        super::templates::resolved_data_dir().join(".setup-state.json")
+    pub fn state_path() -> anyhow::Result<PathBuf> {
+        Ok(super::templates::resolved_data_dir()?.join(".setup-state.json"))
     }
 
     /// Load from disk, or return None if no state file exists.
     pub fn load() -> Option<Self> {
-        let path = Self::state_path();
+        let path = Self::state_path().ok()?;
         let content = std::fs::read_to_string(&path).ok()?;
         serde_json::from_str(&content).ok()
     }
 
     /// Persist current state to disk.
     pub fn save(&self) -> anyhow::Result<()> {
-        let path = Self::state_path();
+        let path = Self::state_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -83,6 +83,8 @@ impl SetupState {
 
     /// Remove the state file (called on successful completion).
     pub fn cleanup() {
-        let _ = std::fs::remove_file(Self::state_path());
+        if let Ok(path) = Self::state_path() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

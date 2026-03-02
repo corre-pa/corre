@@ -101,7 +101,7 @@ impl ProgressTracker {
 
     /// Reset all state (call at the start of each execution).
     pub fn reset(&self) {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.last_activity = Utc::now();
         state.phase = "init";
         state.completed_articles.clear();
@@ -110,21 +110,21 @@ impl ProgressTracker {
 
     /// Record activity in the given phase.
     pub fn touch(&self, phase: &'static str) {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.last_activity = Utc::now();
         state.phase = phase;
     }
 
     /// Set the total number of articles expected (after scoring).
     pub fn set_expected(&self, n: usize) {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.total_expected = n;
         state.last_activity = Utc::now();
     }
 
     /// Record a completed article.
     pub fn add_article(&self, section: String, article: Article) {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         state.completed_articles.push((section, article));
         state.last_activity = Utc::now();
     }
@@ -135,7 +135,7 @@ impl ProgressTracker {
     /// - If stale but has articles → [`ProgressStatus::Done`] with partial output
     /// - If stale with no articles → [`ProgressStatus::Stuck`]
     pub fn evaluate(&self, staleness_threshold: std::time::Duration) -> ProgressStatus {
-        let state = self.inner.lock().unwrap();
+        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let elapsed = Utc::now().signed_duration_since(state.last_activity);
         let is_stale = elapsed > chrono::Duration::from_std(staleness_threshold).unwrap_or(chrono::Duration::MAX);
 

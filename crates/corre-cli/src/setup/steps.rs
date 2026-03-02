@@ -226,7 +226,7 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
     println!();
 
     for cap_name in state.enabled_capabilities.clone() {
-        let customize = Confirm::new().with_prompt(format!("Use a different LLM for \"{cap_name}\"?")).default(false).interact()?;
+        let customize = Confirm::new().with_prompt(format!("Use a different model for \"{cap_name}\"?")).default(false).interact()?;
 
         if !customize {
             state.capability_llm_overrides.remove(&cap_name);
@@ -234,48 +234,17 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
         }
 
         println!();
-        let labels: Vec<&str> = PROVIDERS.iter().map(|p| p.label).collect();
-        let selection = Select::new().with_prompt(format!("LLM provider for \"{cap_name}\"")).items(&labels).default(0).interact()?;
+        // Only the model name can be overridden per-capability (provider/base_url/api_key
+        // come from the global [llm] section). Asking for those fields here would be
+        // misleading because CapabilityLlmConfig only supports model/temperature/tokens.
+        let model: String = Input::new()
+            .with_prompt(format!("Model name for \"{cap_name}\""))
+            .validate_with(|input: &String| validate::non_empty(input))
+            .interact_text()?;
 
-        let provider = &PROVIDERS[selection];
-
-        // Base URL
-        let base_url: String = if provider.key == "custom" {
-            Input::new().with_prompt("Base URL").validate_with(|input: &String| validate::url_like(input)).interact_text()?
-        } else {
-            Input::new().with_prompt("Base URL").default(provider.base_url.into()).interact_text()?
-        };
-
-        // Model
-        let model: String = if provider.default_model.is_empty() {
-            Input::new().with_prompt("Model name").validate_with(|input: &String| validate::non_empty(input)).interact_text()?
-        } else {
-            Input::new().with_prompt("Model name").default(provider.default_model.into()).interact_text()?
-        };
-
-        // API key — either a ${VAR} reference or a literal value
-        let api_key: String =
-            Input::new().with_prompt("API key (${ENV_VAR} or literal)").default(provider.api_key.into()).interact_text()?;
-
-        // If it's an env-var reference, collect the actual key value for .env
-        if let Some(env_name) = api_key.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
-            if provider.needs_api_key && !state.api_keys.contains_key(env_name) {
-                println!();
-                let key: String =
-                    Password::new().with_prompt(format!("Paste your {env_name} value (hidden)")).allow_empty_password(false).interact()?;
-                state.api_keys.insert(env_name.to_string(), key);
-            }
-        }
-
-        state.capability_llm_overrides.insert(
-            cap_name,
-            super::state::CapabilityLlmState {
-                provider: Some(provider.key.into()),
-                base_url: Some(base_url),
-                model: Some(model),
-                api_key: Some(api_key),
-            },
-        );
+        state
+            .capability_llm_overrides
+            .insert(cap_name, super::state::CapabilityLlmState { provider: None, base_url: None, model: Some(model), api_key: None });
 
         println!();
     }
@@ -396,7 +365,7 @@ pub fn review_and_write(state: &mut SetupState, term: &console::Term) -> anyhow:
     }
 
     // Write corre.toml and config files into the data directory
-    let data_dir = super::templates::resolved_data_dir();
+    let data_dir = super::templates::resolved_data_dir()?;
     std::fs::create_dir_all(&data_dir)?;
 
     let config_file = data_dir.join("corre.toml");
@@ -477,7 +446,7 @@ pub fn start(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()>
         "Set up systemd service (run on boot)" => {
             let exe = std::env::current_exe()?;
             let working_dir = std::env::current_dir()?;
-            let env_file = super::templates::resolved_data_dir().join(".env");
+            let env_file = super::templates::resolved_data_dir()?.join(".env");
 
             let unit = super::systemd::generate_unit_file(&exe, &working_dir, &env_file);
             println!();

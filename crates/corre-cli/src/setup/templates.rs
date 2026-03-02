@@ -3,6 +3,7 @@
 //! Builds a `CorreConfig` from collected `SetupState`, serialises it to TOML, and provides
 //! the platform-appropriate default data directory paths.
 
+use anyhow::Context as _;
 use corre_core::config::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,13 +22,18 @@ pub fn default_data_dir() -> String {
 }
 
 /// Returns the OS-appropriate resolved data directory path.
-pub fn resolved_data_dir() -> PathBuf {
+///
+/// Returns an error if `$HOME` is not set rather than silently falling back to
+/// the current working directory (which could write secrets to unexpected locations).
+pub fn resolved_data_dir() -> anyhow::Result<PathBuf> {
     if cfg!(target_os = "macos") {
-        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join("Library/Application Support/corre")
+        Ok(dirs::home_dir().context("$HOME is not set; cannot determine data directory")?.join("Library/Application Support/corre"))
     } else if cfg!(target_os = "windows") {
-        dirs::data_local_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join("AppData/Local")).join("corre")
+        let base =
+            dirs::data_local_dir().or_else(dirs::home_dir).context("$HOME / LOCALAPPDATA is not set; cannot determine data directory")?;
+        Ok(base.join("AppData/Local/corre"))
     } else {
-        dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".local/share/corre")
+        Ok(dirs::home_dir().context("$HOME is not set; cannot determine data directory")?.join(".local/share/corre"))
     }
 }
 

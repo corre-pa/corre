@@ -15,12 +15,12 @@ mod setup;
 
 /// Returns the platform-appropriate default config path: `~/.local/share/corre/corre.toml` (Linux),
 /// `~/Library/Application Support/corre/corre.toml` (macOS), etc.
-fn default_config_path() -> PathBuf {
-    setup::templates::resolved_data_dir().join("corre.toml")
+fn default_config_path() -> anyhow::Result<PathBuf> {
+    Ok(setup::templates::resolved_data_dir()?.join("corre.toml"))
 }
 
-fn default_env_path() -> PathBuf {
-    setup::templates::resolved_data_dir().join(".env")
+fn default_env_path() -> anyhow::Result<PathBuf> {
+    Ok(setup::templates::resolved_data_dir()?.join(".env"))
 }
 
 #[derive(Parser)]
@@ -57,9 +57,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = dotenvy::from_filename_override(default_env_path()).ok();
+    let _ = dotenvy::from_filename_override(default_env_path()?).ok();
     let cli = Cli::parse();
-    let config_path = cli.config.unwrap_or_else(default_config_path);
+    let config_path = match cli.config {
+        Some(p) => p,
+        None => default_config_path()?,
+    };
 
     // No subcommand: run setup if config is missing, otherwise show help
     let command = match cli.command {
@@ -176,8 +179,8 @@ async fn cmd_run(
     });
     let dashboard_router = corre_dashboard::server::build_router(dashboard_state);
 
-    // Start metrics broadcaster
-    corre_dashboard::server::spawn_metrics_broadcaster(tracker.clone());
+    // Start metrics broadcaster (stops when shutdown_rx fires)
+    corre_dashboard::server::spawn_metrics_broadcaster(tracker.clone(), shutdown_rx.clone());
 
     // Start dashboard server
     let addr: std::net::SocketAddr = dashboard_bind.parse().context("Invalid --dashboard-bind address")?;

@@ -229,7 +229,7 @@ fn install_seccomp_net_filter() -> Result<(), String> {
     // Block: return EPERM
     filter.push(SockFilter { code: BPF_RET | BPF_K, jt: 0, jf: 0, k: SECCOMP_RET_ERRNO | (libc::EPERM as u32) });
 
-    let prog = SockFprog { len: filter.len() as u16, filter: filter.as_ptr() };
+    let prog = SockFprog { len: u16::try_from(filter.len()).expect("BPF program too large for u16"), filter: filter.as_ptr() };
 
     let ret = unsafe { libc::syscall(libc::SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0u64, &prog as *const SockFprog) };
 

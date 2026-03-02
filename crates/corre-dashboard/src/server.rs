@@ -1061,15 +1061,21 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
 }
 
 /// Spawn a background task that broadcasts SystemMetrics every second while there are SSE subscribers.
-pub fn spawn_metrics_broadcaster(tracker: Arc<ExecutionTracker>) {
+///
+/// Accepts a `watch::Receiver<bool>` so the loop exits when the shutdown signal fires.
+pub fn spawn_metrics_broadcaster(tracker: Arc<ExecutionTracker>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
-            interval.tick().await;
-            let metrics = tracker.system_metrics();
-            let event = DashboardEvent::SystemMetrics(metrics);
-            // If nobody is subscribed, send returns Err — that's fine, just skip.
-            let _ = tracker.event_sender().send(event);
+            tokio::select! {
+                _ = shutdown.changed() => break,
+                _ = interval.tick() => {
+                    let metrics = tracker.system_metrics();
+                    let event = DashboardEvent::SystemMetrics(metrics);
+                    // If nobody is subscribed, send returns Err — that's fine, just skip.
+                    let _ = tracker.event_sender().send(event);
+                }
+            }
         }
     });
 }
