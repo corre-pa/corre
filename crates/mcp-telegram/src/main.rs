@@ -79,7 +79,7 @@ impl ServerHandler for TelegramServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+    tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().with_target(false).init();
     tracing::info!("Starting mcp-telegram server");
 
     let server = TelegramServer;

@@ -334,17 +334,46 @@ impl Capability for SubprocessCapability {
 
         let mut reader = BufReader::new(stdout);
 
-        // Capture stderr in background
+        // Capture stderr in background, parsing child tracing output to preserve
+        // log levels and coalesce multi-line messages into single entries.
         let cap_name = self.manifest.name.clone();
         tokio::spawn(async move {
             let mut stderr_reader = BufReader::new(stderr);
             let mut line = String::new();
+            let mut pending_level = tracing::Level::DEBUG;
+            let mut pending_msg = String::new();
+
             while let Ok(n) = stderr_reader.read_line(&mut line).await {
                 if n == 0 {
                     break;
                 }
-                tracing::debug!("[plugin:{cap_name}:stderr] {}", line.trim_end());
+                let clean = strip_ansi(&line);
+                let trimmed = clean.trim_end();
+                if trimmed.is_empty() {
+                    line.clear();
+                    continue;
+                }
+
+                if let Some((level, msg)) = parse_plugin_level(trimmed) {
+                    // New log entry — flush the previous one
+                    if !pending_msg.is_empty() {
+                        log_plugin_msg(&cap_name, pending_level, &pending_msg);
+                    }
+                    pending_level = level;
+                    pending_msg = msg.to_string();
+                } else {
+                    // Continuation line (multi-line message)
+                    if !pending_msg.is_empty() {
+                        pending_msg.push('\n');
+                    }
+                    pending_msg.push_str(trimmed);
+                }
+
                 line.clear();
+            }
+
+            if !pending_msg.is_empty() {
+                log_plugin_msg(&cap_name, pending_level, &pending_msg);
             }
         });
 
@@ -480,6 +509,49 @@ impl Capability for SubprocessCapability {
     }
 }
 
+/// Strip ANSI escape sequences (e.g. `\x1b[32m`) from a string.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else if c == '\x1b' {
+            in_escape = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parse a tracing-subscriber level prefix from a line (e.g. " INFO message" -> Some((INFO, "message"))).
+/// Returns `None` for lines without a recognised prefix (continuation lines, raw output).
+fn parse_plugin_level(line: &str) -> Option<(tracing::Level, &str)> {
+    let trimmed = line.trim_start();
+    let levels = [
+        ("ERROR ", tracing::Level::ERROR),
+        ("WARN ", tracing::Level::WARN),
+        ("INFO ", tracing::Level::INFO),
+        ("DEBUG ", tracing::Level::DEBUG),
+        ("TRACE ", tracing::Level::TRACE),
+    ];
+    levels.into_iter().find_map(|(prefix, level)| trimmed.strip_prefix(prefix).map(|rest| (level, rest)))
+}
+
+/// Log a plugin message at the given tracing level.
+fn log_plugin_msg(cap_name: &str, level: tracing::Level, msg: &str) {
+    match level {
+        l if l == tracing::Level::ERROR => tracing::error!("[plugin:{cap_name}] {msg}"),
+        l if l == tracing::Level::WARN => tracing::warn!("[plugin:{cap_name}] {msg}"),
+        l if l == tracing::Level::INFO => tracing::info!("[plugin:{cap_name}] {msg}"),
+        l if l == tracing::Level::TRACE => tracing::trace!("[plugin:{cap_name}] {msg}"),
+        _ => tracing::debug!("[plugin:{cap_name}] {msg}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,5 +582,26 @@ mod tests {
     #[test]
     fn no_declarations_denies_all() {
         assert!(!is_output_permitted("anything", OutputType::Filesystem, &[]));
+    }
+
+    #[test]
+    fn strip_ansi_removes_escape_sequences() {
+        assert_eq!(strip_ansi("\x1b[2m2026-03-02T08:48:03\x1b[0m \x1b[32m INFO\x1b[0m hello"), "2026-03-02T08:48:03  INFO hello");
+        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn parse_plugin_level_extracts_level_and_message() {
+        let (level, msg) = parse_plugin_level(" INFO Got 5 results").unwrap();
+        assert_eq!(level, tracing::Level::INFO);
+        assert_eq!(msg, "Got 5 results");
+
+        let (level, msg) = parse_plugin_level("ERROR something broke").unwrap();
+        assert_eq!(level, tracing::Level::ERROR);
+        assert_eq!(msg, "something broke");
+
+        assert!(parse_plugin_level("just a plain line").is_none());
+        assert!(parse_plugin_level("INFORMATION not a level").is_none());
     }
 }

@@ -114,7 +114,7 @@ fn load_seen_urls(editions_dir: &Path) -> HashSet<String> {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+    tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().with_target(false).init();
 
     if let Err(e) = run().await {
         tracing::error!("daily-brief failed: {e:#}");

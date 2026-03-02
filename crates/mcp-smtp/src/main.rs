@@ -95,7 +95,7 @@ impl ServerHandler for SmtpServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+    tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().with_target(false).init();
     tracing::info!("Starting mcp-smtp server");
 
     let server = SmtpServer;
