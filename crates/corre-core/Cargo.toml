@@ -16,8 +16,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 dirs = { workspace = true }
-url = { workspace = true }
-ammonia = { workspace = true }
 sysinfo = { workspace = true }
 regex = { workspace = true }
 landlock = { workspace = true }
