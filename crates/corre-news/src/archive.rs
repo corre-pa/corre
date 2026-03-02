@@ -78,9 +78,7 @@ impl Archive {
             }
         }
 
-        let mut sorted: Vec<NaiveDate> = dates.into_iter().collect();
-        sorted.sort_unstable_by(|a, b| b.cmp(a));
-        Ok(sorted)
+        Ok(dates.into_iter().rev().collect())
     }
 
     /// Store an edition as JSON under `{data_dir}/_default/editions/`.

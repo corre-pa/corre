@@ -159,15 +159,15 @@ fn merge_editions(existing: &Edition, incoming: &Edition) -> Edition {
 
 /// Extract all source URLs from an edition into the given set.
 fn collect_urls(edition: &Edition, seen_urls: &mut HashSet<String>) {
-    for section in &edition.sections {
-        for article in &section.articles {
-            for source in &article.sources {
-                if !source.url.is_empty() {
-                    seen_urls.insert(source.url.clone());
-                }
-            }
-        }
-    }
+    seen_urls.extend(
+        edition
+            .sections
+            .iter()
+            .flat_map(|s| &s.articles)
+            .flat_map(|a| &a.sources)
+            .filter(|s| !s.url.is_empty())
+            .map(|s| s.url.clone()),
+    );
 }
 
 #[cfg(test)]

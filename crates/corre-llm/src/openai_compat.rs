@@ -5,7 +5,7 @@
 
 use crate::types::*;
 use anyhow::Context;
-use corre_core::capability::{LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmRole};
+use corre_core::capability::{LlmProvider, LlmRequest, LlmResponse};
 
 /// An LLM provider that speaks the OpenAI-compatible chat completions API.
 /// Works with Venice.ai, OpenAI, Ollama, LM Studio, and others.
@@ -35,24 +35,12 @@ impl OpenAiCompatProvider {
     }
 }
 
-fn role_to_string(role: &LlmRole) -> String {
-    match role {
-        LlmRole::System => "system".into(),
-        LlmRole::User => "user".into(),
-        LlmRole::Assistant => "assistant".into(),
-    }
-}
-
-fn convert_messages(messages: &[LlmMessage]) -> Vec<ChatMessage> {
-    messages.iter().map(|m| ChatMessage { role: role_to_string(&m.role), content: m.content.clone() }).collect()
-}
-
 #[async_trait::async_trait]
 impl LlmProvider for OpenAiCompatProvider {
     async fn complete(&self, request: LlmRequest) -> anyhow::Result<LlmResponse> {
         let api_request = ApiRequest {
             model: self.default_model.clone(),
-            messages: convert_messages(&request.messages),
+            messages: request.messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: m.content.clone() }).collect(),
             temperature: Some(request.temperature.unwrap_or(self.default_temperature)),
             max_completion_tokens: request.max_completion_tokens,
         };

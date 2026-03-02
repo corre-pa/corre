@@ -145,7 +145,7 @@ impl Capability for DailyBrief {
                         let args = serde_json::json!({ "query": q, "freshness": f });
                         match ctx.mcp.call_tool("brave-search", tool, args).await {
                             Ok(results) => {
-                                let items = parse_search_results(&results);
+                                let items = parse_search_results(results);
                                 tracing::info!("Got {} {label} results for: {q}", items.len());
                                 (sec, src_idx, items)
                             }
@@ -216,7 +216,7 @@ impl Capability for DailyBrief {
                 let sem = semaphore.clone();
                 handles.push(async move {
                     let _permit = sem.acquire().await.unwrap();
-                    let articles = score_and_summarize_source(&ctx.llm, &section_name, &select_if, &results).await;
+                    let articles = score_and_summarize_source(ctx.llm.as_ref(), &section_name, &select_if, &results).await;
                     for (sec, article) in &articles {
                         tracker.add_article(sec.clone(), article.clone());
                     }
@@ -262,7 +262,7 @@ impl Capability for DailyBrief {
 /// Score and summarise a source's search results in a single LLM call.
 /// Returns the top 10 results as fully-built Articles.
 async fn score_and_summarize_source(
-    llm: &Box<dyn corre_core::capability::LlmProvider>,
+    llm: &dyn corre_core::capability::LlmProvider,
     section_name: &str,
     select_if: &str,
     results: &[SearchResultItem],

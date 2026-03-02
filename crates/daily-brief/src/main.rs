@@ -78,34 +78,22 @@ fn build_query(source: &TopicSource) -> String {
 
 /// Collect all article URLs from recent editions in the editions directory.
 fn load_seen_urls(editions_dir: &Path) -> HashSet<String> {
-    let mut urls = HashSet::new();
-    let entries = match std::fs::read_dir(editions_dir) {
-        Ok(e) => e,
-        Err(_) => return urls,
+    let Ok(entries) = std::fs::read_dir(editions_dir) else {
+        return HashSet::new();
     };
 
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path().join("edition.json");
-        if !path.is_file() {
-            continue;
-        }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let edition: Result<Edition, _> = serde_json::from_str(&content);
-        if let Ok(ed) = edition {
-            for section in &ed.sections {
-                for article in &section.articles {
-                    for source in &article.sources {
-                        urls.insert(source.url.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    urls
+    entries
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path().join("edition.json");
+            std::fs::read_to_string(&path).ok()
+        })
+        .filter_map(|content| serde_json::from_str::<Edition>(&content).ok())
+        .flat_map(|ed| ed.sections)
+        .flat_map(|section| section.articles)
+        .flat_map(|article| article.sources)
+        .map(|source| source.url)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +158,7 @@ async fn run() -> anyhow::Result<()> {
                     let args = serde_json::json!({ "query": q, "freshness": f });
                     match client.call_tool("brave-search", tool, args).await {
                         Ok(results) => {
-                            let items = parse_search_results(&results);
+                            let items = parse_search_results(results);
                             tracing::info!("Got {} {label} results for: {q}", items.len());
                             (sec, src_idx, items)
                         }

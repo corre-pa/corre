@@ -170,15 +170,15 @@ struct TokenQuery {
     token: Option<String>,
 }
 
-fn extract_token(headers: &HeaderMap, query: &TokenQuery) -> Option<String> {
+fn extract_token<'a>(headers: &'a HeaderMap, query: &'a TokenQuery) -> Option<&'a str> {
     if let Some(ref t) = query.token {
-        return Some(t.clone());
+        return Some(t);
     }
-    headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(|s| s.to_string())
+    headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "))
 }
 
-fn check_auth(editor_token: &Option<String>, provided: Option<&str>) -> Result<(), StatusCode> {
-    let expected = editor_token.as_deref().ok_or(StatusCode::FORBIDDEN)?;
+fn check_auth(editor_token: Option<&str>, provided: Option<&str>) -> Result<(), StatusCode> {
+    let expected = editor_token.ok_or(StatusCode::FORBIDDEN)?;
     match provided {
         Some(t) if t == expected => Ok(()),
         _ => Err(StatusCode::FORBIDDEN),
@@ -190,8 +190,8 @@ async fn require_auth(state: &DashboardState, headers: &HeaderMap, query: &Token
     let token_str = extract_token(headers, query);
     let config = state.config.read().await;
     let (et, _) = news_config_from_toml(&config);
-    check_auth(&et, token_str.as_deref()).map_err(|s| s.into_response())?;
-    Ok(token_str.unwrap_or_default())
+    check_auth(et.as_deref(), token_str).map_err(|s| s.into_response())?;
+    Ok(token_str.unwrap_or_default().to_string())
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ async fn dashboard_page_handler(
     let token_str = extract_token(&headers, &query);
     let config = state.config.read().await;
     let (et, title) = news_config_from_toml(&config);
-    if check_auth(&et, token_str.as_deref()).is_err() {
+    if check_auth(et.as_deref(), token_str).is_err() {
         return (StatusCode::FORBIDDEN, "Invalid or missing editor token. Add ?token=YOUR_TOKEN to the URL.").into_response();
     }
     let token = token_str.unwrap_or_default();
@@ -222,7 +222,7 @@ async fn dashboard_page_handler(
 
     let template = DashboardTemplate {
         title: &title,
-        token: &token,
+        token,
         config_json: &config_json,
         plugin_links_json: &plugin_links_json,
         config_editors_json: &config_editors_json,
@@ -887,23 +887,6 @@ async fn services_list_handler(
     axum::Json(body).into_response()
 }
 
-#[derive(serde::Deserialize)]
-struct ServiceStartRequest {
-    name: String,
-    description: String,
-    image: String,
-    #[serde(default)]
-    ports: Vec<String>,
-    #[serde(default)]
-    volumes: Vec<String>,
-    #[serde(default)]
-    env: std::collections::HashMap<String, String>,
-    #[serde(default)]
-    optional: bool,
-    #[serde(default)]
-    health_check: Option<String>,
-}
-
 /// POST /api/services/start — start a service from a declaration.
 async fn service_start_handler(
     State(state): State<Arc<DashboardState>>,
@@ -915,20 +898,9 @@ async fn service_start_handler(
         return resp;
     }
 
-    let req: ServiceStartRequest = match serde_json::from_str(&body) {
+    let decl: corre_sdk::ServiceDeclaration = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid request: {e}")).into_response(),
-    };
-
-    let decl = corre_sdk::ServiceDeclaration {
-        name: req.name,
-        description: req.description,
-        image: req.image,
-        ports: req.ports,
-        volumes: req.volumes,
-        env: req.env,
-        optional: req.optional,
-        health_check: req.health_check,
     };
 
     let config = state.config.read().await;

@@ -14,8 +14,14 @@ use rmcp::{ServerHandler, ServiceExt, tool};
 /// - `SMTP_USER`: SMTP username
 /// - `SMTP_PASSWORD`: SMTP password
 /// - `SMTP_FROM`: Sender email address
-#[derive(Debug, Clone, Default)]
-struct SmtpServer;
+#[derive(Debug, Clone)]
+struct SmtpServer {
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    from: String,
+}
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct EmailParams {
@@ -35,24 +41,18 @@ impl SmtpServer {
         use lettre::transport::smtp::authentication::Credentials;
         use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-        let host = std::env::var("SMTP_HOST").map_err(|_| "SMTP_HOST not set")?;
-        let port: u16 = std::env::var("SMTP_PORT").unwrap_or_else(|_| "587".into()).parse().map_err(|_| "Invalid SMTP_PORT")?;
-        let user = std::env::var("SMTP_USER").map_err(|_| "SMTP_USER not set")?;
-        let password = std::env::var("SMTP_PASSWORD").map_err(|_| "SMTP_PASSWORD not set")?;
-        let from = std::env::var("SMTP_FROM").map_err(|_| "SMTP_FROM not set")?;
-
         let email = Message::builder()
-            .from(from.parse().map_err(|e| format!("Invalid from address: {e}"))?)
+            .from(self.from.parse().map_err(|e| format!("Invalid from address: {e}"))?)
             .to(params.to.parse().map_err(|e| format!("Invalid to address: {e}"))?)
             .subject(&params.subject)
             .header(ContentType::TEXT_PLAIN)
             .body(params.body)
             .map_err(|e| format!("Failed to build email: {e}"))?;
 
-        let creds = Credentials::new(user, password);
-        let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&host)
+        let creds = Credentials::new(self.user.clone(), self.password.clone());
+        let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay(&self.host)
             .map_err(|e| format!("Failed to create SMTP transport: {e}"))?
-            .port(port)
+            .port(self.port)
             .credentials(creds)
             .build();
 
@@ -88,7 +88,12 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().with_target(false).init();
     tracing::info!("Starting mcp-smtp server");
 
-    let server = SmtpServer;
+    let host = std::env::var("SMTP_HOST").expect("SMTP_HOST not set");
+    let port: u16 = std::env::var("SMTP_PORT").unwrap_or_else(|_| "587".into()).parse().expect("Invalid SMTP_PORT");
+    let user = std::env::var("SMTP_USER").expect("SMTP_USER not set");
+    let password = std::env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD not set");
+    let from = std::env::var("SMTP_FROM").expect("SMTP_FROM not set");
+    let server = SmtpServer { host, port, user, password, from };
     let transport = rmcp::transport::io::stdio();
     let service = server.serve(transport).await?;
     service.waiting().await?;

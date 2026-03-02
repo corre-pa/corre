@@ -2,13 +2,14 @@
 //!
 //! These structs map directly to the JSON request and response bodies and are not re-exported.
 
+use corre_core::capability::LlmRole;
 use serde::{Deserialize, Serialize};
 
 /// Wire format types for the OpenAI-compatible API.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChatMessage {
-    pub role: String,
+    pub role: LlmRole,
     pub content: String,
 }
 

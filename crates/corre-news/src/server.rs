@@ -98,11 +98,11 @@ async fn plugin_static_handler(State(state): State<Arc<AppState>>, Path((name, p
 }
 
 /// Extract a bearer token from either `?token=` query param or `Authorization: Bearer` header.
-fn extract_token(headers: &HeaderMap, query: &TokenQuery) -> Option<String> {
+fn extract_token<'a>(headers: &'a HeaderMap, query: &'a TokenQuery) -> Option<&'a str> {
     if let Some(ref t) = query.token {
-        return Some(t.clone());
+        return Some(t);
     }
-    headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(|s| s.to_string())
+    headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "))
 }
 
 enum AuthError {
@@ -113,8 +113,8 @@ enum AuthError {
 }
 
 /// Check that the provided token matches the configured editor_token.
-fn check_auth(editor_token: &Option<String>, provided: Option<&str>) -> Result<(), AuthError> {
-    let expected = editor_token.as_deref().ok_or(AuthError::NotConfigured)?;
+fn check_auth(editor_token: Option<&str>, provided: Option<&str>) -> Result<(), AuthError> {
+    let expected = editor_token.ok_or(AuthError::NotConfigured)?;
     match provided {
         Some(t) if t == expected => Ok(()),
         _ => Err(AuthError::InvalidToken),
@@ -305,7 +305,7 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
         let news = NewsConfig::from_toml_table(Some(&config.news));
         (news.title.clone(), news.editor_token.clone(), resolve_topics_path(&config, query.cap.as_deref()))
     };
-    if let Err(e) = check_auth(&editor_token, token_str.as_deref()) {
+    if let Err(e) = check_auth(editor_token.as_deref(), token_str) {
         return match e {
             AuthError::NotConfigured => login_page(
                 &title,
@@ -322,7 +322,7 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
     let topics_value: serde_json::Value =
         serde_yaml_ng::from_str(&topics_yaml).ok().filter(|v: &serde_json::Value| !v.is_null()).unwrap_or_else(empty_default);
     let topics_json = serde_json::to_string(&topics_value).unwrap_or_else(|_| r#"{"daily-briefing":{"sections":[]}}"#.to_string());
-    let template = TopicsTemplate { title: &title, topics_json: &topics_json, token: &token };
+    let template = TopicsTemplate { title: &title, topics_json: &topics_json, token };
     match template.render() {
         Ok(html) => Html(html).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {e}")).into_response(),
@@ -337,7 +337,7 @@ async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderM
         let news = NewsConfig::from_toml_table(Some(&config.news));
         (news.editor_token.clone(), resolve_topics_path(&config, query.cap.as_deref()))
     };
-    if let Err(e) = check_auth(&editor_token, token_str.as_deref()) {
+    if let Err(e) = check_auth(editor_token.as_deref(), token_str) {
         return auth_error_response(e);
     }
     tracing::info!("Reading topics from {}", topics_path.display());
@@ -370,7 +370,7 @@ async fn put_topics_handler(
         let news = NewsConfig::from_toml_table(Some(&config.news));
         (news.editor_token.clone(), resolve_topics_write_path(&config, query.cap.as_deref()))
     };
-    if let Err(e) = check_auth(&editor_token, token_str.as_deref()) {
+    if let Err(e) = check_auth(editor_token.as_deref(), token_str) {
         return auth_error_response(e);
     }
     if let Some(parent) = topics_path.parent() {

@@ -10,8 +10,10 @@ use rmcp::{ServerHandler, ServiceExt, tool};
 ///
 /// Sends messages via Telegram Bot API. Configured through environment variables:
 /// - `TELEGRAM_BOT_TOKEN`: Telegram bot token from @BotFather
-#[derive(Debug, Clone, Default)]
-struct TelegramServer;
+#[derive(Debug, Clone)]
+struct TelegramServer {
+    client: reqwest::Client,
+}
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 struct MessageParams {
@@ -28,8 +30,8 @@ impl TelegramServer {
         let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
         let url = format!("https://api.telegram.org/bot{token}/sendMessage");
 
-        let client = reqwest::Client::new();
-        let response = client
+        let response = self
+            .client
             .post(&url)
             .json(&serde_json::json!({
                 "chat_id": params.chat_id,
@@ -74,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().with_target(false).init();
     tracing::info!("Starting mcp-telegram server");
 
-    let server = TelegramServer;
+    let server = TelegramServer { client: reqwest::Client::new() };
     let transport = rmcp::transport::io::stdio();
     let service = server.serve(transport).await?;
     service.waiting().await?;

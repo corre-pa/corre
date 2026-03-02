@@ -19,20 +19,7 @@ pub struct SearchResultItem {
 
 /// Parse MCP tool results into search result items. Handles JSON arrays,
 /// single objects, and newline-delimited JSON text.
-pub fn parse_search_results(value: &serde_json::Value) -> Vec<SearchResultItem> {
-    if let Ok(items) = serde_json::from_value::<Vec<SearchResultItem>>(value.clone()) {
-        let items: Vec<_> = items.into_iter().filter(|i| !i.url.is_empty()).collect();
-        if !items.is_empty() {
-            return items;
-        }
-    }
-
-    if let Ok(item) = serde_json::from_value::<SearchResultItem>(value.clone()) {
-        if !item.url.is_empty() {
-            return vec![item];
-        }
-    }
-
+pub fn parse_search_results(value: serde_json::Value) -> Vec<SearchResultItem> {
     if let Some(text) = value.as_str() {
         if let Ok(items) = serde_json::from_str::<Vec<SearchResultItem>>(text) {
             return items.into_iter().filter(|i| !i.url.is_empty()).collect();
@@ -43,8 +30,20 @@ pub fn parse_search_results(value: &serde_json::Value) -> Vec<SearchResultItem> 
             return items;
         }
         tracing::debug!("Could not parse search results from text ({} chars)", text.len());
-    } else {
-        tracing::debug!("Unexpected search result shape: {value}");
+        return vec![];
+    }
+
+    if let Ok(items) = serde_json::from_value::<Vec<SearchResultItem>>(value.clone()) {
+        let items: Vec<_> = items.into_iter().filter(|i| !i.url.is_empty()).collect();
+        if !items.is_empty() {
+            return items;
+        }
+    }
+
+    if let Ok(item) = serde_json::from_value::<SearchResultItem>(value) {
+        if !item.url.is_empty() {
+            return vec![item];
+        }
     }
 
     vec![]

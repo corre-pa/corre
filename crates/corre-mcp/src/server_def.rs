@@ -16,7 +16,7 @@ pub struct McpServerDef {
 }
 
 impl McpServerDef {
-    pub fn from_config(name: &str, config: &McpServerConfig) -> Self {
-        Self { name: name.to_string(), command: config.command.clone(), args: config.args.clone(), env: config.env.clone() }
+    pub fn from_config(name: impl Into<String>, config: &McpServerConfig) -> Self {
+        Self { name: name.into(), command: config.command.clone(), args: config.args.clone(), env: config.env.clone() }
     }
 }

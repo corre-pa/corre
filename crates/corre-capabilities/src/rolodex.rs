@@ -128,7 +128,7 @@ impl Capability for Rolodex {
                     let profile_context =
                         db.get_profile_entries(&contact.id, 8).map(|entries| format_profile_context(&entries)).unwrap_or_default();
 
-                    let llm = &ctx.llm;
+                    let llm = ctx.llm.as_ref();
                     async move {
                         let _permit = sem.acquire().await.unwrap();
                         generate_birthday_card(llm, &name, &birthday, &notes, importance, &style, &profile_context).await
@@ -175,8 +175,8 @@ impl Capability for Rolodex {
                     let sem = semaphore.clone();
                     let freshness = normalize_freshness(&config.news_search_freshness).to_string();
                     let max_results = config.max_news_per_contact;
-                    let mcp = &ctx.mcp;
-                    let llm = &ctx.llm;
+                    let mcp = ctx.mcp.as_ref();
+                    let llm = ctx.llm.as_ref();
                     async move {
                         let _permit = sem.acquire().await.unwrap();
                         let result = search_contact_news(mcp, llm, &contact, &freshness, max_results).await;
@@ -234,7 +234,7 @@ impl Capability for Rolodex {
                     let style = config.checkin_message_style.clone();
                     let profile_context =
                         db.get_profile_entries(&contact.id, 8).map(|entries| format_profile_context(&entries)).unwrap_or_default();
-                    let llm = &ctx.llm;
+                    let llm = ctx.llm.as_ref();
                     async move {
                         let _permit = sem.acquire().await.unwrap();
                         let result = generate_checkin_reminder(llm, &contact, &style, &profile_context).await;
@@ -276,8 +276,8 @@ impl Capability for Rolodex {
                     let sem = semaphore.clone();
                     let freshness = normalize_freshness(&config.news_search_freshness).to_string();
                     let max_results = config.max_news_per_contact;
-                    let mcp = &ctx.mcp;
-                    let llm = &ctx.llm;
+                    let mcp = ctx.mcp.as_ref();
+                    let llm = ctx.llm.as_ref();
                     async move {
                         let _permit = sem.acquire().await.unwrap();
                         let result = scrape_contact_profiles(mcp, llm, &contact, &freshness, max_results).await;
@@ -324,7 +324,7 @@ impl Capability for Rolodex {
 
 /// Generate a personalized birthday article via LLM.
 async fn generate_birthday_card(
-    llm: &Box<dyn corre_core::capability::LlmProvider>,
+    llm: &dyn corre_core::capability::LlmProvider,
     name: &str,
     birthday: &str,
     notes: &str,
@@ -359,8 +359,8 @@ async fn generate_birthday_card(
 
 /// Search for news about a contact and summarize results.
 async fn search_contact_news(
-    mcp: &Box<dyn corre_core::capability::McpCaller>,
-    llm: &Box<dyn corre_core::capability::LlmProvider>,
+    mcp: &dyn corre_core::capability::McpCaller,
+    llm: &dyn corre_core::capability::LlmProvider,
     contact: &Contact,
     freshness: &str,
     max_results: usize,
@@ -371,7 +371,7 @@ async fn search_contact_news(
     let args = serde_json::json!({ "query": query, "freshness": freshness });
     let results = mcp.call_tool("brave-search", "brave_web_search", args).await?;
 
-    let items = parse_search_results(&results);
+    let items = parse_search_results(results);
     if items.is_empty() {
         tracing::info!("No news found for {}", contact.full_name());
         return Ok(vec![]);
@@ -428,7 +428,7 @@ async fn search_contact_news(
 
 /// Generate a check-in reminder article for a contact.
 async fn generate_checkin_reminder(
-    llm: &Box<dyn corre_core::capability::LlmProvider>,
+    llm: &dyn corre_core::capability::LlmProvider,
     contact: &Contact,
     style: &str,
     profile_context: &str,
@@ -472,8 +472,8 @@ fn format_profile_context(entries: &[ProfileEntry]) -> String {
 
 /// Search for profile facts about a contact and extract structured entries.
 async fn scrape_contact_profiles(
-    mcp: &Box<dyn corre_core::capability::McpCaller>,
-    llm: &Box<dyn corre_core::capability::LlmProvider>,
+    mcp: &dyn corre_core::capability::McpCaller,
+    llm: &dyn corre_core::capability::LlmProvider,
     contact: &Contact,
     freshness: &str,
     max_results: usize,
@@ -484,7 +484,7 @@ async fn scrape_contact_profiles(
     let args = serde_json::json!({ "query": query, "freshness": freshness });
     let results = mcp.call_tool("brave-search", "brave_web_search", args).await?;
 
-    let items = parse_search_results(&results);
+    let items = parse_search_results(results);
     if items.is_empty() {
         tracing::info!("No profile results found for {}", contact.full_name());
         return Ok(vec![]);
