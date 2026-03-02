@@ -56,6 +56,26 @@ static SECRET_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// High-entropy hex string detector (40+ hex chars, like SHA tokens).
 static HEX_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[0-9a-fA-F]{40,}\b").unwrap());
 
+/// Check whether the byte position `pos` falls inside a URL by scanning backwards
+/// for a protocol scheme (`://`) without hitting whitespace first.
+fn appears_inside_url(text: &str, pos: usize) -> bool {
+    let lookback = &text[pos.saturating_sub(256)..pos];
+    // Walk backwards: if we hit `://` before any whitespace, the hex token is part of a URL.
+    let mut chars = lookback.chars().rev().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_whitespace() || c == '"' || c == '\'' {
+            return false;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            if chars.peek() == Some(&':') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Detect and redact leaked secrets/credentials in text.
 pub fn detect_and_redact(input: &str, report: &mut SanitizationReport) -> String {
     let mut output = input.to_string();
@@ -109,9 +129,13 @@ pub fn detect_and_redact(input: &str, report: &mut SanitizationReport) -> String
         }
     }
 
-    // Phase 2: High-entropy hex tokens
+    // Phase 2: High-entropy hex tokens (skip those embedded in URLs, which are
+    // common in search results and not actual secrets)
     let hex_matches: Vec<_> = HEX_TOKEN_RE.find_iter(&output).map(|m| (m.start(), m.end())).collect();
     for (start, end) in hex_matches.iter().rev() {
+        if appears_inside_url(&output, *start) {
+            continue;
+        }
         let matched = &output[*start..*end];
         let redacted_preview = format!("{}...{}", &matched[..4], &matched[matched.len() - 4..]);
         report.details.push(crate::report::FindingDetail {
@@ -198,5 +222,25 @@ mod tests {
         let input = "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig";
         let result = detect_and_redact(input, &mut report);
         assert!(result.contains("[REDACTED:bearer_token]"));
+    }
+
+    #[test]
+    fn skips_hex_in_url() {
+        let mut report = SanitizationReport::default();
+        let hex = "a1b2c3d4e5f6".repeat(4); // 48 hex chars
+        let input = format!("found https://example.com/page/{hex}?q=1 in results");
+        let result = detect_and_redact(&input, &mut report);
+        assert!(result.contains(&hex), "hex token inside a URL should not be redacted");
+        assert_eq!(report.secrets_redacted, 0);
+    }
+
+    #[test]
+    fn redacts_standalone_hex_not_in_url() {
+        let mut report = SanitizationReport::default();
+        let hex = "a".repeat(40);
+        let input = format!("the secret is {hex} here");
+        let result = detect_and_redact(&input, &mut report);
+        assert!(result.contains("[REDACTED:hex_token]"));
+        assert_eq!(report.secrets_redacted, 1);
     }
 }

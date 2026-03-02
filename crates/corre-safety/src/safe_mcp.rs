@@ -5,7 +5,7 @@
 
 use crate::config::{PolicyAction, SafetyConfig};
 use crate::report::SanitizationReport;
-use crate::{boundary, leak_detector, policy, sanitizer, validator};
+use crate::{leak_detector, policy, sanitizer, validator};
 use corre_core::capability::{McpCallError, McpCaller};
 
 /// A safety-wrapping `McpCaller` that validates, sanitizes, and scans all tool outputs.
@@ -51,11 +51,10 @@ impl McpCaller for SafeMcpCaller {
             content = policy::apply_action(PolicyAction::Block, &content, &mut report);
         }
 
-        // Step 6: Boundary wrapping
-        if self.config.boundary_wrap {
-            let sanitized = !report.injections_found.is_empty() || report.secrets_redacted > 0 || report.blocked;
-            content = boundary::wrap_tool_output(server_name, tool_name, &content, sanitized);
-        }
+        // NOTE: Boundary wrapping (`<tool_output>` XML tags) is intentionally NOT
+        // applied here.  MCP results must remain valid JSON so that downstream
+        // plugins can parse them.  Boundary wrapping is an LLM-prompt concern and
+        // belongs in `SafeLlmProvider`, not in the MCP output path.
 
         report.final_len = content.len();
         report.log(server_name, tool_name);
@@ -136,16 +135,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wraps_output_in_boundary_tags() {
+    async fn preserves_json_structure_without_boundary_wrapping() {
         let mock = MockMcpCaller { response: json!({"title": "Clean data"}) };
-        let mut config = SafetyConfig::default();
-        config.boundary_wrap = true;
+        let config = SafetyConfig::default();
         let safe = SafeMcpCaller::new(Box::new(mock), &config);
 
         let result = safe.call_tool("brave-search", "web_search", json!({})).await.unwrap();
-        let result_str = result.to_string();
-        assert!(result_str.contains("<tool_output"), "boundary wrapping should produce <tool_output> tags");
-        assert!(result_str.contains("server=\\\"brave-search\\\""), "should contain server attribute");
+        // MCP results must remain valid JSON objects — no XML boundary wrapping
+        assert!(result.is_object(), "clean JSON should remain an object, not be wrapped in XML");
+        assert_eq!(result["title"], "Clean data");
     }
 
     #[tokio::test]
