@@ -13,6 +13,7 @@ services:
     environment:
       CORRE_DATA_DIR: /data
       CORRE_REGISTRY_URL: "http://corre-registry:5580"
+      RUST_LOG: "${RUST_LOG:-info}"
       TAILSCALE_ENABLED: "${TAILSCALE_ENABLED:-false}"
       TS_HOSTNAME: "${TS_HOSTNAME:-corre}"
     cap_add: [NET_ADMIN]

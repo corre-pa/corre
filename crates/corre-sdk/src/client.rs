@@ -193,6 +193,7 @@ impl<W: AsyncWrite + Unpin + Send> CapabilityClient<W> {
 
         // Write the request — writer lock is held only for the duration of the write
         self.writer.lock().await.write_request(&req).await?;
+        tracing::info!("Sent {method} (id={id}), awaiting response");
 
         // Wait for the reader task to deliver our response — no locks held
         rx.await.map_err(|_| anyhow::anyhow!("reader task shut down while waiting for response to {method} (id={id})"))
@@ -220,30 +221,44 @@ async fn reader_loop<R: AsyncRead + Unpin>(
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
     incoming_tx: mpsc::UnboundedSender<Message>,
 ) {
+    tracing::info!("reader_loop started");
     loop {
         match reader.read_message().await {
             Ok(Some(Message::Response(resp))) => {
-                if let Some(sender) = pending.lock().await.remove(&resp.id) {
+                let id = resp.id;
+                let is_err = resp.error.is_some();
+                if let Some(sender) = pending.lock().await.remove(&id) {
                     let _ = sender.send(resp);
+                    tracing::info!("Delivered response id={id}{}", if is_err { " [error]" } else { "" });
                 } else {
-                    tracing::warn!("received response for unknown request id {}", resp.id);
+                    tracing::warn!("received response for unknown request id {id}");
                 }
             }
             Ok(Some(msg)) => {
+                let desc = match &msg {
+                    Message::Request(r) => format!("request {}", r.method),
+                    Message::Notification(n) => format!("notification {}", n.method),
+                    Message::Response(r) => format!("response id={}", r.id),
+                };
+                tracing::info!("reader_loop forwarding {desc}");
                 if incoming_tx.send(msg).is_err() {
+                    tracing::warn!("reader_loop: incoming channel closed, exiting");
                     break;
                 }
             }
             Ok(None) => {
-                // EOF — drop all pending senders so waiters get RecvError
+                let remaining = pending.lock().await.len();
+                tracing::warn!("reader_loop: EOF with {remaining} pending requests, draining");
                 pending.lock().await.drain();
                 break;
             }
             Err(e) => {
-                tracing::error!("codec read error: {e}");
+                let remaining = pending.lock().await.len();
+                tracing::error!("reader_loop: codec error with {remaining} pending: {e}");
                 pending.lock().await.drain();
                 break;
             }
         }
     }
+    tracing::info!("reader_loop exited");
 }

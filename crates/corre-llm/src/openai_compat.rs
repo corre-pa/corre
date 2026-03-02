@@ -19,7 +19,11 @@ pub struct OpenAiCompatProvider {
 
 impl OpenAiCompatProvider {
     pub fn new(base_url: String, api_key: String, model: String, temperature: f32) -> Self {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .expect("failed to build reqwest client");
         Self {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -46,7 +50,10 @@ impl LlmProvider for OpenAiCompatProvider {
         };
 
         let url = format!("{}/chat/completions", self.base_url);
+        let n_messages = api_request.messages.len();
+        tracing::info!("LLM request to {} ({n_messages} messages)", self.default_model);
 
+        let start = std::time::Instant::now();
         let response = self
             .client
             .post(&url)
@@ -57,6 +64,7 @@ impl LlmProvider for OpenAiCompatProvider {
             .context("Failed to send request to LLM API")?;
 
         let status = response.status();
+        tracing::info!("LLM response: {status} in {:.1?}", start.elapsed());
         if !status.is_success() {
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(|v| v.to_string());

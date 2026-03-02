@@ -21,25 +21,27 @@ impl<R: AsyncRead + Unpin> CodecReader<R> {
     }
 
     /// Read the next JSON-RPC message from the stream.
-    /// Returns `None` on EOF.
+    /// Skips blank lines; returns `None` only on true EOF (zero bytes read).
     pub async fn read_message(&mut self) -> anyhow::Result<Option<Message>> {
-        let mut line = String::new();
-        let n = self.reader.read_line(&mut line).await?;
-        if n == 0 {
-            return Ok(None);
-        }
+        loop {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+            if n == 0 {
+                return Ok(None);
+            }
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
 
-        if trimmed.len() > MAX_MESSAGE_BYTES {
-            anyhow::bail!("message exceeds {MAX_MESSAGE_BYTES} byte limit ({} bytes)", trimmed.len());
-        }
+            if trimmed.len() > MAX_MESSAGE_BYTES {
+                anyhow::bail!("message exceeds {MAX_MESSAGE_BYTES} byte limit ({} bytes)", trimmed.len());
+            }
 
-        let msg: Message = serde_json::from_str(trimmed)?;
-        Ok(Some(msg))
+            let msg: Message = serde_json::from_str(trimmed)?;
+            return Ok(Some(msg));
+        }
     }
 }
 

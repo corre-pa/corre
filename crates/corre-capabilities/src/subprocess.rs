@@ -13,7 +13,7 @@ use corre_sdk::protocol::{
     Request, Response,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -36,6 +36,16 @@ struct SubprocessProgress {
     percent: Option<u8>,
     output: Option<CapabilityOutput>,
     error: Option<String>,
+}
+
+/// Send a newline-terminated JSON message to a child's stdin.
+async fn write_msg(stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>, value: &serde_json::Value) -> anyhow::Result<()> {
+    let mut json = serde_json::to_string(value)?;
+    json.push('\n');
+    let mut guard = stdin.lock().await;
+    guard.write_all(json.as_bytes()).await?;
+    guard.flush().await?;
+    Ok(())
 }
 
 impl SubprocessCapability {
@@ -69,40 +79,34 @@ impl SubprocessCapability {
         self
     }
 
-    /// Send a newline-terminated JSON message to the child's stdin.
-    async fn write_msg(stdin: &mut tokio::process::ChildStdin, value: &serde_json::Value) -> anyhow::Result<()> {
-        let mut json = serde_json::to_string(value)?;
-        json.push('\n');
-        stdin.write_all(json.as_bytes()).await?;
-        stdin.flush().await?;
-        Ok(())
-    }
-
     /// Read one newline-terminated JSON message from the child's stdout.
+    /// Skips blank lines; returns `None` only on true EOF (zero bytes read).
     async fn read_msg(reader: &mut BufReader<tokio::process::ChildStdout>) -> anyhow::Result<Option<serde_json::Value>> {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
-            return Ok(None);
+        loop {
+            let mut line = String::new();
+            let n = reader.read_line(&mut line).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.len() > protocol::MAX_MESSAGE_BYTES {
+                anyhow::bail!("message exceeds {} byte limit", protocol::MAX_MESSAGE_BYTES);
+            }
+            return Ok(Some(serde_json::from_str(trimmed)?));
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        if trimmed.len() > protocol::MAX_MESSAGE_BYTES {
-            anyhow::bail!("message exceeds {} byte limit", protocol::MAX_MESSAGE_BYTES);
-        }
-        Ok(Some(serde_json::from_str(trimmed)?))
     }
 
     /// Send `initialize` and wait for the response.
     async fn initialize(
-        stdin: &mut tokio::process::ChildStdin,
+        stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>,
         reader: &mut BufReader<tokio::process::ChildStdout>,
         params: &InitializeParams,
     ) -> anyhow::Result<()> {
         let req = Request::new(1, "initialize", Some(serde_json::to_value(params)?));
-        Self::write_msg(stdin, &serde_json::to_value(&req)?).await?;
+        write_msg(stdin, &serde_json::to_value(&req)?).await?;
 
         let resp_val = Self::read_msg(reader).await?.ok_or_else(|| anyhow::anyhow!("plugin closed before initialize response"))?;
 
@@ -115,9 +119,9 @@ impl SubprocessCapability {
     }
 
     /// Send `shutdown` notification and wait for the process to exit.
-    async fn shutdown(stdin: &mut tokio::process::ChildStdin, child: &mut Child) {
+    async fn shutdown(stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>, child: &mut Child) {
         let notif = Notification::new("shutdown", None);
-        let _ = Self::write_msg(stdin, &serde_json::to_value(&notif).unwrap()).await;
+        let _ = write_msg(stdin, &serde_json::to_value(&notif).unwrap()).await;
 
         // 5s grace period
         match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
@@ -328,10 +332,11 @@ impl Capability for SubprocessCapability {
                 anyhow::anyhow!("failed to spawn plugin {} (workdir: {}): {e}", self.binary.display(), self.plugin_dir.display())
             })?;
 
-        let mut stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let raw_stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
 
+        let stdin = Arc::new(tokio::sync::Mutex::new(raw_stdin));
         let mut reader = BufReader::new(stdout);
 
         // Capture stderr in background, parsing child tracing output to preserve
@@ -389,14 +394,26 @@ impl Capability for SubprocessCapability {
             timeout_secs: 600,
         };
 
-        Self::initialize(&mut stdin, &mut reader, &init_params).await?;
+        Self::initialize(&stdin, &mut reader, &init_params).await?;
+
+        // SAFETY: all spawned request tasks are joined before this function returns,
+        // so the references remain valid for the duration of every task.
+        let ctx: &'static CapabilityContext = unsafe { std::mem::transmute(ctx) };
+        let output_declarations: &'static [OutputDeclaration] = unsafe { std::mem::transmute(self.output_declarations.as_slice()) };
+        let scoped_data_dir: &'static Path = unsafe { std::mem::transmute(scoped_data_dir.as_path()) };
+
+        let mut request_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
         // Main message loop: read from plugin, dispatch, respond
         loop {
             let msg_val = match Self::read_msg(&mut reader).await? {
                 Some(v) => v,
                 None => {
-                    // EOF — plugin exited
+                    // EOF — plugin exited; join outstanding tasks before returning
+                    tracing::debug!("Plugin stdout EOF, joining {} outstanding request handles", request_handles.len());
+                    for handle in &mut request_handles {
+                        let _ = handle.await;
+                    }
                     break;
                 }
             };
@@ -408,12 +425,30 @@ impl Capability for SubprocessCapability {
                     // Validate method is in the allowlist
                     if !protocol::ALLOWED_METHODS.contains(&req.method.as_str()) {
                         let resp = Response::err(req.id, ErrorCode::METHOD_NOT_FOUND, format!("method not allowed: {}", req.method));
-                        Self::write_msg(&mut stdin, &serde_json::to_value(&resp)?).await?;
+                        write_msg(&stdin, &serde_json::to_value(&resp)?).await?;
                         continue;
                     }
 
-                    let resp = Self::dispatch_request(ctx, &req, &self.output_declarations, &scoped_data_dir).await;
-                    Self::write_msg(&mut stdin, &serde_json::to_value(&resp)?).await?;
+                    // Spawn a task to dispatch concurrently so the read loop is not blocked.
+                    let stdin = Arc::clone(&stdin);
+
+                    let in_flight = request_handles.iter().filter(|h| !h.is_finished()).count() + 1;
+                    tracing::info!("Dispatching {} (id={}, in_flight={in_flight})", req.method, req.id);
+
+                    request_handles.push(tokio::spawn(async move {
+                        let start = std::time::Instant::now();
+                        let resp = Self::dispatch_request(ctx, &req, output_declarations, scoped_data_dir).await;
+                        let elapsed = start.elapsed();
+                        let is_err = resp.error.is_some();
+                        tracing::info!("Completed {} (id={}) in {elapsed:.1?}{}", req.method, req.id, if is_err { " [error]" } else { "" });
+
+                        let resp_val = serde_json::to_value(&resp).unwrap();
+                        let resp_bytes = serde_json::to_string(&resp_val).map(|s| s.len()).unwrap_or(0);
+                        match write_msg(&stdin, &resp_val).await {
+                            Ok(()) => tracing::info!("Wrote response for {} (id={}, {resp_bytes} bytes)", req.method, req.id),
+                            Err(e) => tracing::error!("Failed to write response for {} (id={}): {e}", req.method, req.id),
+                        }
+                    }));
                 }
                 Message::Notification(notif) => match notif.method.as_str() {
                     "capability/result" => {
@@ -424,7 +459,11 @@ impl Capability for SubprocessCapability {
                             progress.output = Some(result.output);
                             progress.phase = "done".into();
                         }
-                        Self::shutdown(&mut stdin, &mut child).await;
+                        // Wait for any outstanding request tasks before shutting down.
+                        for handle in &mut request_handles {
+                            let _ = handle.await;
+                        }
+                        Self::shutdown(&stdin, &mut child).await;
                         break;
                     }
                     "capability/error" => {
@@ -437,7 +476,10 @@ impl Capability for SubprocessCapability {
                                 progress.output = Some(partial);
                             }
                         }
-                        Self::shutdown(&mut stdin, &mut child).await;
+                        for handle in &mut request_handles {
+                            let _ = handle.await;
+                        }
+                        Self::shutdown(&stdin, &mut child).await;
                         break;
                     }
                     "output/stream" => {
@@ -455,11 +497,12 @@ impl Capability for SubprocessCapability {
                                 let _ = tx.send(ProgressEvent::Progress { pct: p.percent, phase: p.phase.clone() });
                             }
                             let mut progress = self.progress.lock().unwrap_or_else(|e| e.into_inner());
+                            match p.message {
+                                Some(ref msg) => tracing::info!("[plugin:{}] progress: {} — {msg}", self.manifest.name, p.phase),
+                                None => tracing::info!("[plugin:{}] progress: {}", self.manifest.name, p.phase),
+                            }
                             progress.phase = p.phase;
                             progress.percent = p.percent;
-                            if let Some(msg) = p.message {
-                                tracing::info!("[plugin:{}] progress: {msg}", self.manifest.name);
-                            }
                         }
                     }
                     "log" => {

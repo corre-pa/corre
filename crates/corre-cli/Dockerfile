@@ -69,6 +69,6 @@ COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 5500
-
+ENV RUST_LOG=${RUST_LOG:-info}
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["/app/corre", "-c", "/data/corre.toml", "run", "--dashboard-bind", "0.0.0.0:5500"]
