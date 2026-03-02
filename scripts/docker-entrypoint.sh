@@ -51,7 +51,7 @@ if [ "${TAILSCALE_ENABLED:-false}" = "true" ]; then
 
     # Dashboard on default HTTPS port, newspaper on 8443
     tailscale serve --bg --https=443 http://localhost:5500
-    tailscale serve --bg --https=8443 http://corre-news:5510
+    tailscale serve --bg --https=5510 http://corre-news:5510
 fi
 
 # Drop to the corre user for the main process
