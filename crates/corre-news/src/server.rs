@@ -42,6 +42,21 @@ impl AppState {
     }
 }
 
+fn mime_for_extension(ext: &str) -> &'static str {
+    match ext {
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "html" => "text/html",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "ico" => "image/x-icon",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        _ => "application/octet-stream",
+    }
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index_handler))
@@ -58,15 +73,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
     match Assets::get(&path) {
         Some(file) => {
-            let mime = match path.rsplit_once('.').map(|(_, ext)| ext) {
-                Some("css") => "text/css",
-                Some("js") => "application/javascript",
-                Some("html") => "text/html",
-                Some("svg") => "image/svg+xml",
-                Some("png") => "image/png",
-                Some("ico") => "image/x-icon",
-                _ => "application/octet-stream",
-            };
+            let mime = path.rsplit_once('.').map_or("application/octet-stream", |(_, ext)| mime_for_extension(ext));
             ([(header::CONTENT_TYPE, mime)], file.data).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
@@ -83,18 +90,7 @@ async fn plugin_static_handler(State(state): State<Arc<AppState>>, Path((name, p
     if !file_path.exists() || !file_path.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let mime = match file_path.extension().and_then(|e| e.to_str()) {
-        Some("css") => "text/css",
-        Some("js") => "application/javascript",
-        Some("html") => "text/html",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("ico") => "image/x-icon",
-        Some("woff2") => "font/woff2",
-        Some("woff") => "font/woff",
-        _ => "application/octet-stream",
-    };
+    let mime = file_path.extension().and_then(|e| e.to_str()).map_or("application/octet-stream", mime_for_extension);
     match std::fs::read(&file_path) {
         Ok(data) => ([(header::CONTENT_TYPE, mime)], data).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),

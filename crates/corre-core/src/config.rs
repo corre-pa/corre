@@ -70,7 +70,7 @@ fn default_max_output_bytes() -> usize {
     100_000
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -86,13 +86,6 @@ impl Default for SafetyConfig {
             custom_block_patterns: Vec::new(),
             require_sandbox: false,
         }
-    }
-}
-
-impl SafetyConfig {
-    /// Convenience constructor for an enabled config with sensible defaults.
-    pub fn default_enabled() -> Self {
-        Self { enabled: true, ..Default::default() }
     }
 }
 
@@ -197,7 +190,7 @@ pub struct CapabilityConfig {
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     pub config_path: Option<String>,
-    #[serde(default = "default_enabled")]
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub llm: Option<CapabilityLlmConfig>,
@@ -205,10 +198,6 @@ pub struct CapabilityConfig {
     /// capability is backed by a subprocess plugin instead of a built-in implementation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
-}
-
-fn default_enabled() -> bool {
-    true
 }
 
 impl CorreConfig {

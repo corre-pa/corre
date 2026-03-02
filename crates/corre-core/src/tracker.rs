@@ -69,6 +69,26 @@ pub struct SystemMetrics {
     pub process_memory_mb: u64,
 }
 
+impl From<&crate::config::CapabilityConfig> for CapabilityState {
+    fn from(c: &crate::config::CapabilityConfig) -> Self {
+        Self {
+            name: c.name.clone(),
+            description: c.description.clone(),
+            schedule: c.schedule.clone(),
+            enabled: c.enabled,
+            status: RunStatus::Idle,
+            last_started: None,
+            last_completed: None,
+            last_error: None,
+            last_duration_secs: None,
+            articles_produced: None,
+            progress_pct: None,
+            phase: String::new(),
+            recent_logs: VecDeque::new(),
+        }
+    }
+}
+
 pub struct ExecutionTracker {
     states: RwLock<HashMap<String, CapabilityState>>,
     event_tx: broadcast::Sender<DashboardEvent>,
@@ -77,29 +97,7 @@ pub struct ExecutionTracker {
 
 impl ExecutionTracker {
     pub fn new(capabilities: &[crate::config::CapabilityConfig]) -> Arc<Self> {
-        let states: HashMap<String, CapabilityState> = capabilities
-            .iter()
-            .map(|c| {
-                (
-                    c.name.clone(),
-                    CapabilityState {
-                        name: c.name.clone(),
-                        description: c.description.clone(),
-                        schedule: c.schedule.clone(),
-                        enabled: c.enabled,
-                        status: RunStatus::Idle,
-                        last_started: None,
-                        last_completed: None,
-                        last_error: None,
-                        last_duration_secs: None,
-                        articles_produced: None,
-                        progress_pct: None,
-                        phase: String::new(),
-                        recent_logs: VecDeque::new(),
-                    },
-                )
-            })
-            .collect();
+        let states: HashMap<String, CapabilityState> = capabilities.iter().map(|c| (c.name.clone(), CapabilityState::from(c))).collect();
 
         let (event_tx, _) = broadcast::channel(256);
 
@@ -184,21 +182,7 @@ impl ExecutionTracker {
 
     /// Insert a new capability into the tracked set (e.g. after install from the Store).
     pub async fn add_capability(&self, config: &crate::config::CapabilityConfig) {
-        let state = CapabilityState {
-            name: config.name.clone(),
-            description: config.description.clone(),
-            schedule: config.schedule.clone(),
-            enabled: config.enabled,
-            status: RunStatus::Idle,
-            last_started: None,
-            last_completed: None,
-            last_error: None,
-            last_duration_secs: None,
-            articles_produced: None,
-            progress_pct: None,
-            phase: String::new(),
-            recent_logs: VecDeque::new(),
-        };
+        let state = CapabilityState::from(config);
         let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
         self.states.write().await.insert(config.name.clone(), state);
     }

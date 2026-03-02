@@ -35,16 +35,7 @@ pub struct DailyBrief {
 
 impl DailyBrief {
     pub fn from_config(config: &CapabilityConfig) -> Self {
-        Self {
-            tracker: ProgressTracker::new(&config.name),
-            manifest: CapabilityManifest {
-                name: config.name.clone(),
-                description: config.description.clone(),
-                schedule: config.schedule.clone(),
-                mcp_servers: config.mcp_servers.clone(),
-                config_path: config.config_path.clone(),
-            },
-        }
+        Self { tracker: ProgressTracker::new(&config.name), manifest: CapabilityManifest::from(config) }
     }
 }
 

@@ -27,6 +27,10 @@ pub struct RunningService {
     pub status: ServiceStatus,
 }
 
+fn container_name(service: &str) -> String {
+    format!("corre-{service}")
+}
+
 /// Manages Docker-based services declared by capabilities.
 pub struct ServiceManager {
     services: tokio::sync::RwLock<HashMap<String, RunningService>>,
@@ -49,7 +53,7 @@ impl ServiceManager {
             "run".into(),
             "-d".into(),
             "--name".into(),
-            format!("corre-{}", decl.name),
+            container_name(&decl.name),
             "--label".into(),
             format!("corre.service={}", decl.name),
         ];
@@ -95,7 +99,7 @@ impl ServiceManager {
 
     /// Stop a running service by name.
     pub async fn stop_service(&self, name: &str) -> anyhow::Result<()> {
-        let container_name = format!("corre-{name}");
+        let container_name = container_name(name);
 
         let output = tokio::process::Command::new("docker")
             .args(["stop", &container_name])
@@ -118,7 +122,7 @@ impl ServiceManager {
 
     /// Query the status of a service by name.
     pub async fn status(&self, name: &str) -> ServiceStatus {
-        let container_name = format!("corre-{name}");
+        let container_name = container_name(name);
 
         let output = tokio::process::Command::new("docker").args(["inspect", "-f", "{{.State.Status}}", &container_name]).output().await;
 

@@ -71,17 +71,7 @@ fn default_send_mode() -> String {
 
 impl Rolodex {
     pub fn from_config(config: &CapabilityConfig) -> Self {
-        Self {
-            tracker: ProgressTracker::new(&config.name),
-            manifest: CapabilityManifest {
-                name: config.name.clone(),
-                description: config.description.clone(),
-                schedule: config.schedule.clone(),
-                mcp_servers: config.mcp_servers.clone(),
-                config_path: config.config_path.clone(),
-            },
-            config: RolodexConfig::default(),
-        }
+        Self { tracker: ProgressTracker::new(&config.name), manifest: CapabilityManifest::from(config), config: RolodexConfig::default() }
     }
 
     fn load_config(&self, ctx: &CapabilityContext) -> RolodexConfig {

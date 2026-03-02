@@ -258,7 +258,7 @@ async fn execute_capability_tracked(
 
     match run_capability_pipeline(config, registry, cap_name, Some(tracker.clone())).await {
         Ok((output, mcp_pool)) => {
-            let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
+            let article_count = output.article_count();
             mcp_pool.shutdown().await;
             tracker.mark_completed(cap_name, article_count).await;
             tracker.push_log(cap_name, "INFO", &format!("Completed: {article_count} articles produced")).await;
@@ -283,7 +283,7 @@ async fn cmd_run_now(
     let (output, mcp_pool) = run_capability_pipeline(&config, &registry, capability_name, None).await?;
 
     mcp_pool.shutdown().await;
-    let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
+    let article_count = output.article_count();
     tracing::info!("Done. {article_count} articles produced.");
     Ok(())
 }
@@ -388,7 +388,7 @@ async fn run_capability_pipeline(
                     continue;
                 }
                 Ok(ProgressStatus::Done(partial)) => {
-                    let n: usize = partial.sections.iter().map(|s| s.articles.len()).sum();
+                    let n = partial.article_count();
                     tracing::warn!("Capability `{cap_name}` returning partial results ({n} articles)");
                     if let Some(ref t) = tracker {
                         t.push_log(cap_name, "WARN", &format!("Returning partial results ({n} articles)")).await;
@@ -406,7 +406,7 @@ async fn run_capability_pipeline(
     }?;
 
     if let Some(ref t) = tracker {
-        let article_count: usize = output.sections.iter().map(|s| s.articles.len()).sum();
+        let article_count = output.article_count();
         t.push_log(cap_name, "INFO", &format!("Pipeline produced {article_count} articles")).await;
     }
 

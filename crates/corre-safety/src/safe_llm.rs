@@ -61,7 +61,7 @@ mod tests {
     #[tokio::test]
     async fn passes_clean_response() {
         let mock = MockLlmProvider { response: "Here is a summary of the news article.".into() };
-        let config = SafetyConfig::default_enabled();
+        let config = SafetyConfig::default();
         let safe = SafeLlmProvider::new(Box::new(mock), &config);
 
         let resp = safe.complete(LlmRequest::simple("system", "user")).await.unwrap();
@@ -71,7 +71,7 @@ mod tests {
     #[tokio::test]
     async fn redacts_leaked_key_in_response() {
         let mock = MockLlmProvider { response: "The API key found was sk-abc12345678901234567890123456".into() };
-        let config = SafetyConfig::default_enabled();
+        let config = SafetyConfig::default();
         let safe = SafeLlmProvider::new(Box::new(mock), &config);
 
         let resp = safe.complete(LlmRequest::simple("system", "user")).await.unwrap();
@@ -83,7 +83,7 @@ mod tests {
     async fn skips_detection_when_disabled() {
         let key = "sk-abc12345678901234567890123456";
         let mock = MockLlmProvider { response: format!("key: {key}") };
-        let mut config = SafetyConfig::default_enabled();
+        let mut config = SafetyConfig::default();
         config.detect_leaks = false;
         let safe = SafeLlmProvider::new(Box::new(mock), &config);
 

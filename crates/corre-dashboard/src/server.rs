@@ -94,8 +94,7 @@ fn news_title(news: &toml::Value) -> String {
 }
 
 fn news_config_from_toml(config: &CorreConfig) -> (Option<String>, String) {
-    let news_val: toml::Value = config.news.clone();
-    (editor_token(&news_val), news_title(&news_val))
+    (editor_token(&config.news), news_title(&config.news))
 }
 
 /// Collect plugin links from all discovered plugins in the data directory.
@@ -235,11 +234,8 @@ async fn dashboard_page_handler(
 }
 
 async fn status_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    let (et, _) = news_config_from_toml(&config);
-    if check_auth(&et, token_str.as_deref()).is_err() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
     }
     let capabilities = state.tracker.snapshot().await;
     let metrics = state.tracker.system_metrics();
@@ -256,13 +252,9 @@ async fn run_now_handler(
     Query(query): Query<TokenQuery>,
     Path(name): Path<String>,
 ) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    let (et, _) = news_config_from_toml(&config);
-    if check_auth(&et, token_str.as_deref()).is_err() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
     }
-    drop(config);
 
     if state.tracker.is_running(&name).await {
         return (StatusCode::CONFLICT, format!("Capability `{name}` is already running")).into_response();
@@ -275,13 +267,9 @@ async fn run_now_handler(
 }
 
 async fn sse_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    let (et, _) = news_config_from_toml(&config);
-    if check_auth(&et, token_str.as_deref()).is_err() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
     }
-    drop(config);
 
     // Send initial snapshot, then stream incremental events
     let initial_capabilities = state.tracker.snapshot().await;
@@ -329,11 +317,8 @@ async fn historical_logs_handler(
     Query(query): Query<TokenQuery>,
     Path(date): Path<String>,
 ) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    let (et, _) = news_config_from_toml(&config);
-    if check_auth(&et, token_str.as_deref()).is_err() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
     }
 
     // Validate date format: YYYY-MM-DD
@@ -347,8 +332,7 @@ async fn historical_logs_handler(
         return (StatusCode::BAD_REQUEST, "Invalid date format, expected YYYY-MM-DD").into_response();
     }
 
-    let log_path = config.data_dir().join("capabilities_logs").join(format!("capability.log.{date}"));
-    drop(config);
+    let log_path = state.config.read().await.data_dir().join("capabilities_logs").join(format!("capability.log.{date}"));
 
     let contents = match tokio::fs::read_to_string(&log_path).await {
         Ok(c) => c,
@@ -387,12 +371,10 @@ async fn get_settings_handler(
     headers: HeaderMap,
     Query(query): Query<TokenQuery>,
 ) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    let config = state.config.read().await;
-    let (et, _) = news_config_from_toml(&config);
-    if check_auth(&et, token_str.as_deref()).is_err() {
-        return StatusCode::FORBIDDEN.into_response();
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
     }
+    let config = state.config.read().await;
     axum::Json(config.clone()).into_response()
 }
 
@@ -402,13 +384,8 @@ async fn put_settings_handler(
     Query(query): Query<TokenQuery>,
     body: String,
 ) -> Response<Body> {
-    let token_str = extract_token(&headers, &query);
-    {
-        let config = state.config.read().await;
-        let (et, _) = news_config_from_toml(&config);
-        if check_auth(&et, token_str.as_deref()).is_err() {
-            return StatusCode::FORBIDDEN.into_response();
-        }
+    if let Err(resp) = require_auth(&state, &headers, &query).await {
+        return resp;
     }
     let new_config: CorreConfig = match serde_json::from_str(&body) {
         Ok(c) => c,

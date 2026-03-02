@@ -57,6 +57,13 @@ pub struct CapabilityOutput {
     pub custom_content: Option<CustomContent>,
 }
 
+impl CapabilityOutput {
+    /// Total number of articles across all sections.
+    pub fn article_count(&self) -> usize {
+        self.sections.iter().map(|s| s.articles.len()).sum()
+    }
+}
+
 /// The type of content a capability produces.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

@@ -51,7 +51,7 @@ impl McpInstaller {
             }),
             InstallMethod::Binary { download_url_template, binary_name, sha256, command, args } => {
                 let bin_dir = self.data_dir.join("bin");
-                tokio::fs::create_dir_all(&bin_dir).await.map_err(|e| InstallError::Io(e.to_string()))?;
+                tokio::fs::create_dir_all(&bin_dir).await?;
                 self.download_and_verify(download_url_template, sha256, &entry.version, &bin_dir, binary_name).await?;
 
                 let bin_dir_str = bin_dir.to_string_lossy();
@@ -80,14 +80,10 @@ impl McpInstaller {
         let binary_path = bin_dir.join(&server_config.command);
 
         if binary_path.exists() {
-            tokio::fs::remove_file(&binary_path).await.map_err(|e| InstallError::Io(e.to_string()))?;
+            tokio::fs::remove_file(&binary_path).await?;
         } else if server_config.command == "npx" {
             if let Some(pkg) = server_config.args.iter().find(|a| !a.starts_with('-')) {
-                let output = tokio::process::Command::new("npm")
-                    .args(["uninstall", "-g", pkg])
-                    .output()
-                    .await
-                    .map_err(|e| InstallError::Io(e.to_string()))?;
+                let output = tokio::process::Command::new("npm").args(["uninstall", "-g", pkg]).output().await?;
                 if !output.status.success() {
                     tracing::warn!("npm uninstall -g {pkg} exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
                 }
@@ -95,11 +91,7 @@ impl McpInstaller {
         } else if ["uvx", "pipx"].contains(&server_config.command.as_str())
             && let Some(pkg) = server_config.args.first()
         {
-            let output = tokio::process::Command::new("pip")
-                .args(["uninstall", "-y", pkg])
-                .output()
-                .await
-                .map_err(|e| InstallError::Io(e.to_string()))?;
+            let output = tokio::process::Command::new("pip").args(["uninstall", "-y", pkg]).output().await?;
             if !output.status.success() {
                 tracing::warn!("pip uninstall -y {pkg} exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
             }
@@ -125,7 +117,7 @@ impl McpInstaller {
     pub async fn install_capability(&self, entry: &CapabilityEntry) -> Result<(PathBuf, Vec<String>), InstallError> {
         let plugin_dir = self.data_dir.join("plugins").join(&entry.id);
         let bin_dir = plugin_dir.join("bin");
-        tokio::fs::create_dir_all(&bin_dir).await.map_err(|e| InstallError::Io(e.to_string()))?;
+        tokio::fs::create_dir_all(&bin_dir).await?;
 
         match &entry.install {
             InstallMethod::Binary { download_url_template, binary_name, sha256, .. } => {
@@ -139,15 +131,15 @@ impl McpInstaller {
         // Generate manifest.toml from the inline manifest
         let manifest_toml = self.generate_capability_manifest(entry);
         let manifest_path = plugin_dir.join("manifest.toml");
-        tokio::fs::write(&manifest_path, manifest_toml).await.map_err(|e| InstallError::Io(e.to_string()))?;
+        tokio::fs::write(&manifest_path, manifest_toml).await?;
 
         // Write per-capability config file
         let config_dir = self.data_dir.join("config").join("capabilities");
-        tokio::fs::create_dir_all(&config_dir).await.map_err(|e| InstallError::Io(e.to_string()))?;
+        tokio::fs::create_dir_all(&config_dir).await?;
 
         let cap_config = format!("installed = true\nregistry_id = \"{}\"\nversion = \"{}\"\n", entry.id, entry.version);
         let config_path = config_dir.join(format!("{}.toml", entry.id));
-        tokio::fs::write(&config_path, cap_config).await.map_err(|e| InstallError::Io(e.to_string()))?;
+        tokio::fs::write(&config_path, cap_config).await?;
 
         let mcp_deps = entry.manifest.mcp_dependencies.clone();
         tracing::info!("Installed capability `{}` v{}", entry.id, entry.version);
@@ -164,12 +156,12 @@ impl McpInstaller {
         let mcp_deps = self.read_capability_mcp_deps(&plugin_dir).await;
 
         if plugin_dir.exists() {
-            tokio::fs::remove_dir_all(&plugin_dir).await.map_err(|e| InstallError::Io(e.to_string()))?;
+            tokio::fs::remove_dir_all(&plugin_dir).await?;
         }
 
         let config_path = self.data_dir.join("config").join("capabilities").join(format!("{id}.toml"));
         if config_path.exists() {
-            tokio::fs::remove_file(&config_path).await.map_err(|e| InstallError::Io(e.to_string()))?;
+            tokio::fs::remove_file(&config_path).await?;
         }
 
         tracing::info!("Uninstalled capability `{id}`");
@@ -222,13 +214,13 @@ impl McpInstaller {
         }
 
         let dest = dest_dir.join(dest_name);
-        tokio::fs::write(&dest, &bytes).await.map_err(|e| InstallError::Io(e.to_string()))?;
+        tokio::fs::write(&dest, &bytes).await?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(0o755);
-            std::fs::set_permissions(&dest, perms).map_err(|e| InstallError::Io(e.to_string()))?;
+            std::fs::set_permissions(&dest, perms)?;
         }
 
         Ok(())
@@ -405,6 +397,12 @@ pub enum InstallError {
     UnsupportedPlatform(String),
     #[error("IO error: {0}")]
     Io(String),
+}
+
+impl From<std::io::Error> for InstallError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e.to_string())
+    }
 }
 
 #[cfg(test)]

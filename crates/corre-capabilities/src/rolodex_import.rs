@@ -75,19 +75,7 @@ pub fn import_csv(db: &Database, path: &Path, dup_action: DuplicateAction) -> an
         contact.nickname = get(nickname_idx);
         contact.notes = get(notes_idx);
 
-        match handle_duplicate(db, &contact, dup_action)? {
-            DupResult::Insert => {
-                db.insert_contact(&contact)?;
-                db.assign_default_strategies(&contact)?;
-                result.imported += 1;
-            }
-            DupResult::Updated => {
-                result.imported += 1;
-            }
-            DupResult::Skipped => {
-                result.skipped += 1;
-            }
-        }
+        insert_or_dedup(db, &contact, dup_action, &mut result)?;
     }
 
     Ok(result)
@@ -133,15 +121,7 @@ pub fn import_google(db: &Database, path: &Path, dup_action: DuplicateAction) ->
         contact.nickname = get(nickname_idx);
         contact.notes = get(notes_idx);
 
-        match handle_duplicate(db, &contact, dup_action)? {
-            DupResult::Insert => {
-                db.insert_contact(&contact)?;
-                db.assign_default_strategies(&contact)?;
-                result.imported += 1;
-            }
-            DupResult::Updated => result.imported += 1,
-            DupResult::Skipped => result.skipped += 1,
-        }
+        insert_or_dedup(db, &contact, dup_action, &mut result)?;
     }
 
     Ok(result)
@@ -182,15 +162,7 @@ pub fn import_outlook(db: &Database, path: &Path, dup_action: DuplicateAction) -
         let mut contact = new_contact(first_name, last_name, get(email_idx), get(phone_idx), get(birthday_idx), Importance::Medium);
         contact.notes = get(notes_idx);
 
-        match handle_duplicate(db, &contact, dup_action)? {
-            DupResult::Insert => {
-                db.insert_contact(&contact)?;
-                db.assign_default_strategies(&contact)?;
-                result.imported += 1;
-            }
-            DupResult::Updated => result.imported += 1,
-            DupResult::Skipped => result.skipped += 1,
-        }
+        insert_or_dedup(db, &contact, dup_action, &mut result)?;
     }
 
     Ok(result)
@@ -223,15 +195,7 @@ pub fn import_facebook(db: &Database, path: &Path, dup_action: DuplicateAction) 
         let mut contact = new_contact(first_name, last_name, None, None, None, Importance::Medium);
         contact.facebook = entry.get("contact_info").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        match handle_duplicate(db, &contact, dup_action)? {
-            DupResult::Insert => {
-                db.insert_contact(&contact)?;
-                db.assign_default_strategies(&contact)?;
-                result.imported += 1;
-            }
-            DupResult::Updated => result.imported += 1,
-            DupResult::Skipped => result.skipped += 1,
-        }
+        insert_or_dedup(db, &contact, dup_action, &mut result)?;
     }
 
     Ok(result)
@@ -293,15 +257,7 @@ pub fn import_vcard(db: &Database, path: &Path, dup_action: DuplicateAction) -> 
         let mut contact = new_contact(first_name, last_name, email, phone, birthday, Importance::Medium);
         contact.notes = notes;
 
-        match handle_duplicate(db, &contact, dup_action)? {
-            DupResult::Insert => {
-                db.insert_contact(&contact)?;
-                db.assign_default_strategies(&contact)?;
-                result.imported += 1;
-            }
-            DupResult::Updated => result.imported += 1,
-            DupResult::Skipped => result.skipped += 1,
-        }
+        insert_or_dedup(db, &contact, dup_action, &mut result)?;
     }
 
     Ok(result)
@@ -315,6 +271,20 @@ enum DupResult {
     Insert,
     Updated,
     Skipped,
+}
+
+/// Check for duplicates, insert or update accordingly, and bump the result counters.
+fn insert_or_dedup(db: &Database, contact: &Contact, dup_action: DuplicateAction, result: &mut ImportResult) -> anyhow::Result<()> {
+    match handle_duplicate(db, contact, dup_action)? {
+        DupResult::Insert => {
+            db.insert_contact(contact)?;
+            db.assign_default_strategies(contact)?;
+            result.imported += 1;
+        }
+        DupResult::Updated => result.imported += 1,
+        DupResult::Skipped => result.skipped += 1,
+    }
+    Ok(())
 }
 
 fn handle_duplicate(db: &Database, contact: &Contact, action: DuplicateAction) -> anyhow::Result<DupResult> {

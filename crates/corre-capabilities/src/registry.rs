@@ -45,13 +45,7 @@ impl CapabilityRegistry {
             // Check if this capability is backed by a plugin
             if config.plugin.is_some() || plugin_map.contains_key(config.name.as_str()) {
                 if let Some(plugin) = plugin_map.get(config.name.as_str()) {
-                    let manifest = corre_core::capability::CapabilityManifest {
-                        name: config.name.clone(),
-                        description: config.description.clone(),
-                        schedule: config.schedule.clone(),
-                        mcp_servers: config.mcp_servers.clone(),
-                        config_path: config.config_path.clone(),
-                    };
+                    let manifest = corre_core::capability::CapabilityManifest::from(config);
                     let cap = crate::subprocess::SubprocessCapability::new(manifest, plugin.binary.clone(), plugin.dir.clone())
                         .with_outputs(plugin.manifest.plugin.permissions.outputs.clone())
                         .with_sandbox(plugin.manifest.plugin.permissions.sandbox.clone())

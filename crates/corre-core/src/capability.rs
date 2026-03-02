@@ -180,6 +180,18 @@ impl ProgressTracker {
     }
 }
 
+impl From<&crate::config::CapabilityConfig> for CapabilityManifest {
+    fn from(c: &crate::config::CapabilityConfig) -> Self {
+        Self {
+            name: c.name.clone(),
+            description: c.description.clone(),
+            schedule: c.schedule.clone(),
+            mcp_servers: c.mcp_servers.clone(),
+            config_path: c.config_path.clone(),
+        }
+    }
+}
+
 /// Trait implemented by each capability (daily brief, stock review, etc.).
 #[async_trait::async_trait]
 pub trait Capability: Send + Sync {

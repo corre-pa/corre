@@ -1,5 +1,6 @@
 //! Plugin manifest (`manifest.toml`) types.
 
+use crate::types::ContentType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -28,7 +29,7 @@ pub struct PluginMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary_name: Option<String>,
     #[serde(default)]
-    pub content_type: ContentTypeConfig,
+    pub content_type: ContentType,
     #[serde(default)]
     pub execution_mode: ExecutionMode,
     #[serde(default)]
@@ -48,15 +49,6 @@ pub struct PluginLink {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-}
-
-/// Content type configuration in the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ContentTypeConfig {
-    #[default]
-    Newspaper,
-    Custom,
 }
 
 /// Default configuration values that the host uses if not overridden.
@@ -313,7 +305,7 @@ mod tests {
             content_type = "custom"
         "#;
         let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
-        assert_eq!(manifest.plugin.content_type, ContentTypeConfig::Custom);
+        assert_eq!(manifest.plugin.content_type, ContentType::Custom);
     }
 
     #[test]
