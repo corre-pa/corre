@@ -18,17 +18,7 @@ use rmcp::{ServerHandler, ServiceExt, tool};
 struct SmtpServer;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct SendEmailParams {
-    #[schemars(description = "Recipient email address")]
-    to: String,
-    #[schemars(description = "Email subject line")]
-    subject: String,
-    #[schemars(description = "Email body text")]
-    body: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct DraftEmailParams {
+struct EmailParams {
     #[schemars(description = "Recipient email address")]
     to: String,
     #[schemars(description = "Email subject line")]
@@ -40,7 +30,7 @@ struct DraftEmailParams {
 #[tool(tool_box)]
 impl SmtpServer {
     #[tool(description = "Send an email via SMTP")]
-    async fn send_email(&self, #[tool(aggr)] params: SendEmailParams) -> Result<String, String> {
+    async fn send_email(&self, #[tool(aggr)] params: EmailParams) -> Result<String, String> {
         use lettre::message::header::ContentType;
         use lettre::transport::smtp::authentication::Credentials;
         use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
@@ -71,7 +61,7 @@ impl SmtpServer {
     }
 
     #[tool(description = "Draft an email (returns the email content without sending)")]
-    fn draft_email(&self, #[tool(aggr)] params: DraftEmailParams) -> String {
+    fn draft_email(&self, #[tool(aggr)] params: EmailParams) -> String {
         serde_json::json!({
             "status": "drafted",
             "to": params.to,

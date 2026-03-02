@@ -15,9 +15,6 @@ pub struct SearchResultItem {
     pub url: String,
     #[serde(default)]
     pub description: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub extra_snippets: Vec<String>,
 }
 
 /// Parse MCP tool results into search result items. Handles JSON arrays,

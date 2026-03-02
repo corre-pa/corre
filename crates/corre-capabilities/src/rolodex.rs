@@ -37,8 +37,6 @@ struct RolodexConfig {
     birthday_message_style: String,
     #[serde(default = "default_checkin_style")]
     checkin_message_style: String,
-    #[serde(default = "default_send_mode")]
-    send_mode: String,
 }
 
 impl Default for RolodexConfig {
@@ -48,7 +46,6 @@ impl Default for RolodexConfig {
             max_news_per_contact: default_max_news(),
             birthday_message_style: default_birthday_style(),
             checkin_message_style: default_checkin_style(),
-            send_mode: default_send_mode(),
         }
     }
 }
@@ -65,10 +62,6 @@ fn default_birthday_style() -> String {
 fn default_checkin_style() -> String {
     "casual".into()
 }
-fn default_send_mode() -> String {
-    "draft".into()
-}
-
 impl Rolodex {
     pub fn from_config(config: &CapabilityConfig) -> Self {
         Self { tracker: ProgressTracker::new(&config.name), manifest: CapabilityManifest::from(config), config: RolodexConfig::default() }
@@ -544,91 +537,4 @@ async fn scrape_contact_profiles(
             )
         })
         .collect())
-}
-
-// ---------------------------------------------------------------------------
-// Message dispatch
-// ---------------------------------------------------------------------------
-
-/// Send or draft a message to a contact based on their preferred contact method.
-/// In "draft" mode, returns an Article for user review. In "auto" mode, sends via MCP.
-#[allow(dead_code)]
-async fn send_or_draft_message(
-    ctx: &CapabilityContext,
-    contact: &Contact,
-    subject: &str,
-    message: &str,
-    send_mode: &str,
-) -> anyhow::Result<Option<Article>> {
-    if send_mode == "draft" {
-        return Ok(Some(Article {
-            title: format!("Draft: {subject}"),
-            summary: format!("Draft message for {} via {}", contact.full_name(), contact.preferred_contact_method),
-            body: format!(
-                "**To:** {} ({})\n**Via:** {}\n\n{}",
-                contact.full_name(),
-                contact_address(contact),
-                contact.preferred_contact_method,
-                message
-            ),
-            sources: vec![],
-            score: 0.5,
-        }));
-    }
-
-    // Auto mode: dispatch via appropriate MCP server
-    let (server, tool, args) = match contact.preferred_contact_method {
-        crate::rolodex_db::ContactMethod::Email => {
-            let to = contact.email.as_deref().unwrap_or_default();
-            ("smtp", "send_email", serde_json::json!({"to": to, "subject": subject, "body": message}))
-        }
-        crate::rolodex_db::ContactMethod::Telegram => {
-            let chat_id = contact.telegram.as_deref().unwrap_or_default();
-            ("telegram", "send_message", serde_json::json!({"chat_id": chat_id, "text": message}))
-        }
-        crate::rolodex_db::ContactMethod::WhatsApp => {
-            let phone = contact.whatsapp.as_deref().or(contact.phone.as_deref()).unwrap_or_default();
-            ("whatsapp", "send_message", serde_json::json!({"phone": phone, "text": message}))
-        }
-        crate::rolodex_db::ContactMethod::Signal
-        | crate::rolodex_db::ContactMethod::Facebook
-        | crate::rolodex_db::ContactMethod::LinkedIn => {
-            tracing::warn!("No MCP server for {} — falling back to draft mode", contact.preferred_contact_method);
-            return Ok(Some(Article {
-                title: format!("Draft: {subject}"),
-                summary: format!("Message for {} (no auto-send for {})", contact.full_name(), contact.preferred_contact_method),
-                body: message.to_string(),
-                sources: vec![],
-                score: 0.5,
-            }));
-        }
-    };
-
-    match ctx.mcp.call_tool(server, tool, args).await {
-        Ok(_) => {
-            tracing::info!("Sent message to {} via {server}", contact.full_name());
-            Ok(None) // No article needed, message was sent
-        }
-        Err(e) => {
-            tracing::warn!("Failed to send message to {} via {server}: {e}", contact.full_name());
-            Ok(Some(Article {
-                title: format!("Failed to send: {subject}"),
-                summary: format!("Could not send to {} via {server}: {e}", contact.full_name()),
-                body: format!("Original message:\n\n{message}"),
-                sources: vec![],
-                score: 0.6,
-            }))
-        }
-    }
-}
-
-fn contact_address(contact: &Contact) -> String {
-    match contact.preferred_contact_method {
-        crate::rolodex_db::ContactMethod::Email => contact.email.clone().unwrap_or_default(),
-        crate::rolodex_db::ContactMethod::Telegram => contact.telegram.clone().unwrap_or_default(),
-        crate::rolodex_db::ContactMethod::Signal => contact.signal.clone().or_else(|| contact.phone.clone()).unwrap_or_default(),
-        crate::rolodex_db::ContactMethod::WhatsApp => contact.whatsapp.clone().or_else(|| contact.phone.clone()).unwrap_or_default(),
-        crate::rolodex_db::ContactMethod::Facebook => contact.facebook.clone().unwrap_or_default(),
-        crate::rolodex_db::ContactMethod::LinkedIn => contact.linkedin.clone().unwrap_or_default(),
-    }
 }

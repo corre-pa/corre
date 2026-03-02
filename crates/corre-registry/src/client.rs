@@ -89,34 +89,10 @@ impl RegistryClient {
         Ok(manifest.servers.into_iter().find(|e| e.id == id))
     }
 
-    // ── Capability methods ──────────────────────────────────────────────
-
-    /// Fetch all capability entries from the registry.
-    pub async fn fetch_capabilities(&self) -> Result<Vec<CapabilityEntry>, RegistryError> {
-        let manifest = self.get_manifest().await?;
-        Ok(manifest.capabilities)
-    }
-
     /// Look up a single capability entry by ID.
     pub async fn lookup_capability(&self, id: &str) -> Result<Option<CapabilityEntry>, RegistryError> {
         let manifest = self.get_manifest().await?;
         Ok(manifest.capabilities.into_iter().find(|e| e.id == id))
-    }
-
-    /// Search capability entries by matching query against name, description, and tags.
-    pub async fn search_capabilities(&self, query: &str) -> Result<Vec<CapabilityEntry>, RegistryError> {
-        let manifest = self.get_manifest().await?;
-        let q = query.to_lowercase();
-        let results = manifest
-            .capabilities
-            .into_iter()
-            .filter(|entry| {
-                entry.name.to_lowercase().contains(&q)
-                    || entry.description.to_lowercase().contains(&q)
-                    || entry.tags.iter().any(|t| t.to_lowercase().contains(&q))
-            })
-            .collect();
-        Ok(results)
     }
 }
 

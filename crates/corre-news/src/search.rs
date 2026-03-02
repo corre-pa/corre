@@ -3,13 +3,12 @@
 //! Articles are indexed with `title`, `summary`, and `body` as text fields, plus `date`
 //! and `section` as stored string fields. The index persists to `{data_dir}/search_index/`.
 
-use crate::edition::Edition;
 use anyhow::Context;
 use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
-use tantivy::{Index, IndexWriter, ReloadPolicy};
+use tantivy::{Index, ReloadPolicy};
 
 /// Full-text search index over archived editions using tantivy.
 pub struct SearchIndex {
@@ -40,18 +39,6 @@ impl SearchIndex {
         (schema_builder.build(), title_field, summary_field, body_field, date_field, section_field)
     }
 
-    pub fn open_or_create(data_dir: &Path) -> anyhow::Result<Self> {
-        let index_dir = data_dir.join("search_index");
-        std::fs::create_dir_all(&index_dir)?;
-
-        let (schema, title_field, summary_field, body_field, date_field, section_field) = Self::build_schema();
-
-        let index = Index::open_or_create(tantivy::directory::MmapDirectory::open(&index_dir)?, schema)
-            .context("Failed to open/create search index")?;
-
-        Ok(Self { index, title_field, summary_field, body_field, date_field, section_field })
-    }
-
     /// Open an existing search index in read-only mode. Returns `None` if the
     /// index directory does not exist yet (no editions have been indexed).
     pub fn open_readonly(data_dir: &Path) -> anyhow::Result<Option<Self>> {
@@ -66,27 +53,6 @@ impl SearchIndex {
             .context("Failed to open search index read-only")?;
 
         Ok(Some(Self { index, title_field, summary_field, body_field, date_field, section_field }))
-    }
-
-    /// Index all articles from an edition.
-    pub fn index_edition(&self, edition: &Edition) -> anyhow::Result<()> {
-        let mut writer: IndexWriter = self.index.writer(50_000_000)?;
-        let date_str = edition.date.format("%Y-%m-%d").to_string();
-
-        for section in &edition.sections {
-            for article in &section.articles {
-                let mut doc = TantivyDocument::default();
-                doc.add_text(self.title_field, &article.title);
-                doc.add_text(self.summary_field, &article.summary);
-                doc.add_text(self.body_field, &article.body);
-                doc.add_text(self.date_field, &date_str);
-                doc.add_text(self.section_field, &section.title);
-                writer.add_document(doc)?;
-            }
-        }
-
-        writer.commit()?;
-        Ok(())
     }
 
     /// Search articles by query string. Returns top N results.

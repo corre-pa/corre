@@ -50,14 +50,11 @@ fn convert_messages(messages: &[LlmMessage]) -> Vec<ChatMessage> {
 #[async_trait::async_trait]
 impl LlmProvider for OpenAiCompatProvider {
     async fn complete(&self, request: LlmRequest) -> anyhow::Result<LlmResponse> {
-        // We don't send response_format since not all providers support it
-        // (e.g. Venice.ai with llama models). The prompt itself asks for JSON when needed.
         let api_request = ApiRequest {
             model: self.default_model.clone(),
             messages: convert_messages(&request.messages),
             temperature: Some(request.temperature.unwrap_or(self.default_temperature)),
             max_completion_tokens: request.max_completion_tokens,
-            response_format: None,
         };
 
         let url = format!("{}/chat/completions", self.base_url);

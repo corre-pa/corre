@@ -70,11 +70,6 @@ impl<W: AsyncWrite + Unpin> CodecWriter<W> {
         self.write_json(notif).await
     }
 
-    /// Write any serializable value as a newline-terminated JSON line.
-    pub async fn write_raw(&mut self, value: &serde_json::Value) -> anyhow::Result<()> {
-        self.write_json(value).await
-    }
-
     async fn write_json(&mut self, value: &impl serde::Serialize) -> anyhow::Result<()> {
         let mut json = serde_json::to_string(value)?;
         json.push('\n');
@@ -116,10 +111,6 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> MessageCodec<R, W> {
 
     pub async fn write_notification(&mut self, notif: &Notification) -> anyhow::Result<()> {
         self.writer.write_notification(notif).await
-    }
-
-    pub async fn write_raw(&mut self, value: &serde_json::Value) -> anyhow::Result<()> {
-        self.writer.write_raw(value).await
     }
 }
 

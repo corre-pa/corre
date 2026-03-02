@@ -432,14 +432,6 @@ pub async fn serve(state: Arc<AppState>, addr: std::net::SocketAddr) -> anyhow::
     Ok(())
 }
 
-/// Start the web server with additional routes merged in (e.g. dashboard).
-pub async fn serve_with_extra_routes(state: Arc<AppState>, extra: Router, addr: std::net::SocketAddr) -> anyhow::Result<()> {
-    let router = build_router(state).merge(extra);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router).await?;
-    Ok(())
-}
-
 fn no_editions_page(title: &str) -> String {
     format!(
         r#"<!DOCTYPE html>

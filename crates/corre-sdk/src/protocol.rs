@@ -1,6 +1,5 @@
 //! CCPP v1 JSON-RPC 2.0 message types.
 
-use crate::llm::LlmRequest;
 use crate::types::CapabilityOutput;
 use serde::{Deserialize, Serialize};
 
@@ -34,9 +33,6 @@ pub const PROTOCOL_VERSION: &str = "1.0";
 
 /// Maximum message size in bytes (10 MB).
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
-
-/// Maximum individual string field size in bytes (1 MB).
-pub const MAX_STRING_FIELD_BYTES: usize = 1024 * 1024;
 
 // ── Envelope ─────────────────────────────────────────────────────────────
 
@@ -135,9 +131,6 @@ pub struct McpListToolsParams {
     pub server_name: String,
 }
 
-/// `llm/complete` (Capability → Host) params.
-pub type LlmCompleteParams = LlmRequest;
-
 /// `progress` notification params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressParams {
@@ -206,22 +199,6 @@ pub struct OutputRestParams {
 pub struct OutputWebhookParams {
     pub url: String,
     pub body: serde_json::Value,
-}
-
-// ── Daemon-mode types (defined now, dispatch deferred) ───────────────────
-
-/// `heartbeat` (Capability → Host, Notification): daemon reports liveness.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HeartbeatParams {
-    pub uptime_secs: u64,
-}
-
-/// `output/emit` (Capability → Host, Notification): emit a discrete output item.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputEmitParams {
-    pub output: CapabilityOutput,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
 }
 
 // ── Error codes for output operations ────────────────────────────────────

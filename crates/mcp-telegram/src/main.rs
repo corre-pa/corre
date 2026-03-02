@@ -14,25 +14,17 @@ use rmcp::{ServerHandler, ServiceExt, tool};
 struct TelegramServer;
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct SendMessageParams {
-    #[schemars(description = "Telegram chat ID to send the message to")]
-    chat_id: String,
-    #[schemars(description = "Message text (supports Telegram MarkdownV2)")]
-    text: String,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-struct DraftMessageParams {
+struct MessageParams {
     #[schemars(description = "Telegram chat ID")]
     chat_id: String,
-    #[schemars(description = "Message text")]
+    #[schemars(description = "Message text (supports Telegram MarkdownV2)")]
     text: String,
 }
 
 #[tool(tool_box)]
 impl TelegramServer {
     #[tool(description = "Send a message via Telegram Bot API")]
-    async fn send_message(&self, #[tool(aggr)] params: SendMessageParams) -> Result<String, String> {
+    async fn send_message(&self, #[tool(aggr)] params: MessageParams) -> Result<String, String> {
         let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
         let url = format!("https://api.telegram.org/bot{token}/sendMessage");
 
@@ -56,7 +48,7 @@ impl TelegramServer {
     }
 
     #[tool(description = "Draft a Telegram message (returns content without sending)")]
-    fn draft_message(&self, #[tool(aggr)] params: DraftMessageParams) -> String {
+    fn draft_message(&self, #[tool(aggr)] params: MessageParams) -> String {
         serde_json::json!({
             "status": "drafted",
             "chat_id": params.chat_id,

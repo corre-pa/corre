@@ -11,4 +11,3 @@ pub mod tester;
 
 pub use client::RegistryClient;
 pub use installer::McpInstaller;
-pub use manifest::CapabilityEntry;

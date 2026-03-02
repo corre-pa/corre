@@ -5,7 +5,9 @@
 //! strategy sets from a contact's importance level.
 
 use super::db::Database;
-use super::models::{Contact, Importance, OutreachLog, OutreachStrategy, StrategyType};
+#[cfg(test)]
+use super::models::OutreachLog;
+use super::models::{Contact, Importance, OutreachStrategy, StrategyType};
 use anyhow::Context;
 use rusqlite::params;
 
@@ -46,6 +48,7 @@ impl Database {
     /// Find all enabled strategies that are due for execution.
     /// A strategy is due when `last_executed` is NULL or when
     /// `interval_days` has elapsed since `last_executed`.
+    #[cfg(test)]
     pub fn strategies_due(&self, now: &chrono::DateTime<chrono::Utc>) -> anyhow::Result<Vec<OutreachStrategy>> {
         let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
         let mut stmt = self.conn().prepare(
@@ -83,6 +86,7 @@ impl Database {
     }
 
     /// Log an outreach action.
+    #[cfg(test)]
     pub fn log_outreach(&self, log: &OutreachLog) -> anyhow::Result<()> {
         self.conn().execute(
             "INSERT INTO outreach_log (id, contact_id, strategy_type, executed_at, result, details) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -92,6 +96,7 @@ impl Database {
     }
 
     /// Get outreach logs for a contact, most recent first.
+    #[cfg(test)]
     pub fn get_outreach_logs(&self, contact_id: &str) -> anyhow::Result<Vec<OutreachLog>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, contact_id, strategy_type, executed_at, result, details \
@@ -181,6 +186,7 @@ fn row_to_strategy(row: &rusqlite::Row) -> rusqlite::Result<OutreachStrategy> {
     })
 }
 
+#[cfg(test)]
 fn row_to_log(row: &rusqlite::Row) -> rusqlite::Result<OutreachLog> {
     Ok(OutreachLog {
         id: row.get(0)?,

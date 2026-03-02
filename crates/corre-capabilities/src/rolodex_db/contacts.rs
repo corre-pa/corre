@@ -101,6 +101,7 @@ impl Database {
     }
 
     /// Find contacts at or above the given importance level.
+    #[cfg(test)]
     pub fn contacts_by_importance(&self, min_importance: Importance) -> anyhow::Result<Vec<Contact>> {
         let all = self.list_contacts()?;
         Ok(all.into_iter().filter(|c| c.importance >= min_importance).collect())

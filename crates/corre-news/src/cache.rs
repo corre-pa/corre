@@ -116,7 +116,7 @@ impl EditionCache {
     }
 
     /// Check whether a URL has appeared in any previous edition.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub async fn contains_url(&self, url: &str) -> bool {
         self.inner.read().await.seen_urls.contains(url)
     }
