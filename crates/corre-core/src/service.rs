@@ -136,11 +136,10 @@ impl ServiceManager {
 
     /// List all known services with their current status.
     pub async fn list(&self) -> Vec<(String, ServiceStatus)> {
-        let services = self.services.read().await;
-        let mut result = Vec::new();
-        for (name, _) in services.iter() {
-            let status = self.status(name).await;
-            result.push((name.clone(), status));
+        let names: Vec<String> = self.services.read().await.keys().cloned().collect();
+        let mut result = Vec::with_capacity(names.len());
+        for name in &names {
+            result.push((name.clone(), self.status(name).await));
         }
         result
     }

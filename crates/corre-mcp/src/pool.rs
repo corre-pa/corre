@@ -30,25 +30,18 @@ impl McpPool {
 
     /// Return a cloned `Peer` handle for the given server, starting it if needed.
     /// The `Peer` is `Clone` and safe to use outside the lock.
+    ///
+    /// The lock is held across the entire get-or-start operation to prevent a
+    /// TOCTOU race where two callers both spawn the same server, orphaning the
+    /// duplicate child process.
     async fn get_peer(&self, server_name: &str) -> anyhow::Result<Peer<RoleClient>> {
-        // Fast path: server already running
-        {
-            let clients = self.clients.lock().await;
-            if let Some(client) = clients.get(server_name) {
-                return Ok(client.peer().clone());
-            }
+        let mut clients = self.clients.lock().await;
+        if let Some(client) = clients.get(server_name) {
+            return Ok(client.peer().clone());
         }
-
-        // Slow path: start the server without holding the lock
         let client = self.start_server(server_name).await?;
         let peer = client.peer().clone();
-
-        let mut clients = self.clients.lock().await;
-        // Another task may have started the same server concurrently
-        if !clients.contains_key(server_name) {
-            clients.insert(server_name.to_string(), client);
-        }
-
+        clients.insert(server_name.to_string(), client);
         Ok(peer)
     }
 

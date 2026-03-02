@@ -303,10 +303,12 @@ struct TopicsQuery {
 async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TopicsQuery>) -> Response<Body> {
     let token_query = TokenQuery { token: query.token.clone() };
     let token_str = extract_token(&headers, &token_query);
-    let config = state.config.read().await;
-    let news = NewsConfig::from_toml_table(Some(&config.news));
-    let title = news.title.clone();
-    if let Err(e) = check_auth(&news.editor_token, token_str.as_deref()) {
+    let (title, editor_token, topics_path) = {
+        let config = state.config.read().await;
+        let news = NewsConfig::from_toml_table(Some(&config.news));
+        (news.title.clone(), news.editor_token.clone(), resolve_topics_path(&config, query.cap.as_deref()))
+    };
+    if let Err(e) = check_auth(&editor_token, token_str.as_deref()) {
         return match e {
             AuthError::NotConfigured => login_page(
                 &title,
@@ -318,8 +320,7 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
         };
     }
     let token = token_str.unwrap_or_default();
-    let topics_path = resolve_topics_path(&config, query.cap.as_deref());
-    let topics_yaml = std::fs::read_to_string(&topics_path).unwrap_or_default();
+    let topics_yaml = tokio::fs::read_to_string(&topics_path).await.unwrap_or_default();
     let empty_default = || serde_json::json!({"daily-briefing": {"sections": []}});
     let topics_value: serde_json::Value =
         serde_yaml_ng::from_str(&topics_yaml).ok().filter(|v: &serde_json::Value| !v.is_null()).unwrap_or_else(empty_default);
@@ -334,14 +335,16 @@ async fn topics_page_handler(State(state): State<Arc<AppState>>, headers: Header
 async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, Query(query): Query<TopicsQuery>) -> Response<Body> {
     let token_query = TokenQuery { token: query.token.clone() };
     let token_str = extract_token(&headers, &token_query);
-    let config = state.config.read().await;
-    let news = NewsConfig::from_toml_table(Some(&config.news));
-    if let Err(e) = check_auth(&news.editor_token, token_str.as_deref()) {
+    let (editor_token, topics_path) = {
+        let config = state.config.read().await;
+        let news = NewsConfig::from_toml_table(Some(&config.news));
+        (news.editor_token.clone(), resolve_topics_path(&config, query.cap.as_deref()))
+    };
+    if let Err(e) = check_auth(&editor_token, token_str.as_deref()) {
         return auth_error_response(e);
     }
-    let topics_path = resolve_topics_path(&config, query.cap.as_deref());
     tracing::info!("Reading topics from {}", topics_path.display());
-    match std::fs::read_to_string(&topics_path) {
+    match tokio::fs::read_to_string(&topics_path).await {
         Ok(content) => {
             tracing::info!("Successfully read topics ({} bytes)", content.len());
             (StatusCode::OK, content).into_response()
@@ -365,18 +368,20 @@ async fn put_topics_handler(
 ) -> Response<Body> {
     let token_query = TokenQuery { token: query.token.clone() };
     let token_str = extract_token(&headers, &token_query);
-    let config = state.config.read().await;
-    let news = NewsConfig::from_toml_table(Some(&config.news));
-    if let Err(e) = check_auth(&news.editor_token, token_str.as_deref()) {
+    let (editor_token, topics_path) = {
+        let config = state.config.read().await;
+        let news = NewsConfig::from_toml_table(Some(&config.news));
+        (news.editor_token.clone(), resolve_topics_write_path(&config, query.cap.as_deref()))
+    };
+    if let Err(e) = check_auth(&editor_token, token_str.as_deref()) {
         return auth_error_response(e);
     }
-    let topics_path = resolve_topics_write_path(&config, query.cap.as_deref());
     if let Some(parent) = topics_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create directory: {e}")).into_response();
         }
     }
-    if let Err(e) = std::fs::write(&topics_path, &body) {
+    if let Err(e) = tokio::fs::write(&topics_path, &body).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write topics: {e}")).into_response();
     }
     (StatusCode::OK, "Topics saved.").into_response()
