@@ -3,6 +3,28 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.16.0] - 2026-03-02
+
+### Fixed
+- Dispatch plugin requests concurrently to prevent LLM scoring hangs.
+- Stop safety layer from breaking MCP search results.
+- Upgrade plugin link URLs to HTTPS when dashboard is served over TLS.
+- Use protocol-relative URLs for links.
+- Replace hand-built TOML generation with `toml::to_string_pretty`.
+- Harden panic and error-handling paths across the codebase.
+- Deduplicate plugin stderr logs and strip ANSI escape sequences.
+- Wire boundary wrapping and harden role marker sanitization.
+- Demultiplex SDK codec to enable concurrent RPC calls.
+- Resolve three concurrency bugs (deadlock, TOCTOU race, blocking I/O).
+- Use modern Tailscale serve syntax and document remote access.
+
+### Changed
+- Apply idiomatic Rust patterns across 14 files.
+- Consolidate DRY violations across 10 crates.
+- Remove dead code across 8 crates.
+- Remove 12 unused dependency declarations across 6 crates.
+- Upgrade base image to Trixie.
+
 ## [0.15.0] - 2026-03-01
 
 ### Added
