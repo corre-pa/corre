@@ -1,6 +1,12 @@
 //! Async helper for capability authors to interact with the host via CCPP.
+//!
+//! [`CapabilityClient`] spawns a background reader task that demultiplexes incoming
+//! messages: responses are routed to their waiting callers via oneshot channels, while
+//! requests and notifications from the host (e.g. shutdown, cancel) are forwarded to an
+//! mpsc channel readable via [`read_message`](CapabilityClient::read_message). This
+//! allows multiple RPC round-trips to be in-flight simultaneously.
 
-use crate::codec::MessageCodec;
+use crate::codec::{CodecReader, CodecWriter};
 use crate::llm::{LlmRequest, LlmResponse};
 use crate::protocol::{
     CapabilityErrorParams, CapabilityResultParams, InitializeParams, InitializeResult, LogParams, McpCallToolParams, McpListToolsParams,
@@ -8,39 +14,55 @@ use crate::protocol::{
 };
 use crate::types::CapabilityOutput;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 /// A CCPP client that capability binaries use to communicate with the host.
 ///
 /// Handles the JSON-RPC transport, request ID tracking, and response demultiplexing.
-pub struct CapabilityClient<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> {
-    codec: Mutex<MessageCodec<R, W>>,
+/// A background reader task reads all incoming messages and dispatches responses to
+/// the correct waiter, enabling true concurrent RPC calls.
+pub struct CapabilityClient<W: AsyncWrite + Unpin + Send> {
+    writer: Mutex<CodecWriter<W>>,
     next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Response>>>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
+    incoming_rx: Mutex<mpsc::UnboundedReceiver<Message>>,
+    reader_handle: JoinHandle<()>,
 }
 
-impl CapabilityClient<tokio::io::Stdin, tokio::io::Stdout> {
+impl CapabilityClient<tokio::io::Stdout> {
     /// Create a client connected to stdin/stdout (the standard CCPP transport).
     pub fn from_stdio() -> Self {
         Self::new(tokio::io::stdin(), tokio::io::stdout())
     }
 }
 
-impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> CapabilityClient<R, W> {
-    pub fn new(reader: R, writer: W) -> Self {
-        Self { codec: Mutex::new(MessageCodec::new(reader, writer)), next_id: AtomicU64::new(100), pending: Mutex::new(HashMap::new()) }
-    }
+impl<W: AsyncWrite + Unpin + Send + 'static> CapabilityClient<W> {
+    pub fn new<R: AsyncRead + Unpin + Send + 'static>(reader: R, writer: W) -> Self {
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
 
+        let pending_for_reader = pending.clone();
+        let reader_handle = tokio::spawn(reader_loop(CodecReader::new(reader), pending_for_reader, incoming_tx));
+
+        Self {
+            writer: Mutex::new(CodecWriter::new(writer)),
+            next_id: AtomicU64::new(100),
+            pending,
+            incoming_rx: Mutex::new(incoming_rx),
+            reader_handle,
+        }
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> CapabilityClient<W> {
     /// Wait for the `initialize` request from the host and return the params.
     /// Automatically sends the initialize response.
     pub async fn accept_initialize(&self) -> anyhow::Result<InitializeParams> {
-        let msg = {
-            let mut codec = self.codec.lock().await;
-            codec.read_message().await?
-        };
-        let msg = msg.ok_or_else(|| anyhow::anyhow!("unexpected EOF waiting for initialize"))?;
+        let msg = self.incoming_rx.lock().await.recv().await.ok_or_else(|| anyhow::anyhow!("unexpected EOF waiting for initialize"))?;
 
         match msg {
             Message::Request(req) if req.method == "initialize" => {
@@ -50,8 +72,7 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> CapabilityClient
                 let result = InitializeResult { protocol_version: params.protocol_version.clone(), capabilities: serde_json::json!({}) };
 
                 let resp = Response::ok(req.id, serde_json::to_value(&result)?);
-                let mut codec = self.codec.lock().await;
-                codec.write_response(&resp).await?;
+                self.writer.lock().await.write_response(&resp).await?;
 
                 Ok(params)
             }
@@ -156,10 +177,9 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> CapabilityClient
         Ok(())
     }
 
-    /// Read the next incoming message (used for shutdown/cancel from host).
+    /// Read the next incoming message from the host (e.g. shutdown, cancel).
     pub async fn read_message(&self) -> anyhow::Result<Option<Message>> {
-        let mut codec = self.codec.lock().await;
-        codec.read_message().await
+        Ok(self.incoming_rx.lock().await.recv().await)
     }
 
     // ── Internal ──────────────────────────────────────────────────────
@@ -168,50 +188,62 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> CapabilityClient
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = Request::new(id, method, Some(params));
 
-        let (tx, mut rx) = oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
-        {
-            let mut codec = self.codec.lock().await;
-            codec.write_request(&req).await?;
-        }
+        // Write the request — writer lock is held only for the duration of the write
+        self.writer.lock().await.write_request(&req).await?;
 
-        // Read messages until we get our response (dispatching others along the way)
-        loop {
-            let msg = {
-                let mut codec = self.codec.lock().await;
-                codec.read_message().await?
-            };
-
-            match msg {
-                Some(Message::Response(resp)) => {
-                    if resp.id == id {
-                        return Ok(resp);
-                    }
-                    // Dispatch to other waiters
-                    if let Some(sender) = self.pending.lock().await.remove(&resp.id) {
-                        let _ = sender.send(resp);
-                    }
-                }
-                Some(Message::Request(req)) => {
-                    tracing::debug!("received unexpected request from host: {}", req.method);
-                }
-                Some(Message::Notification(_)) => {
-                    // Notifications from host (shutdown, cancel) — handled by caller
-                }
-                None => anyhow::bail!("unexpected EOF while waiting for response to {method} (id={id})"),
-            }
-
-            // Check if our response arrived via another reader
-            if let Ok(resp) = rx.try_recv() {
-                return Ok(resp);
-            }
-        }
+        // Wait for the reader task to deliver our response — no locks held
+        rx.await.map_err(|_| anyhow::anyhow!("reader task shut down while waiting for response to {method} (id={id})"))
     }
 
     async fn send_notification(&self, method: &str, params: serde_json::Value) -> anyhow::Result<()> {
         let notif = Notification::new(method, Some(params));
-        let mut codec = self.codec.lock().await;
-        codec.write_notification(&notif).await
+        self.writer.lock().await.write_notification(&notif).await
+    }
+}
+
+impl<W: AsyncWrite + Unpin + Send> Drop for CapabilityClient<W> {
+    fn drop(&mut self) {
+        self.reader_handle.abort();
+    }
+}
+
+// ── Background reader task ───────────────────────────────────────────────
+
+/// Reads messages from the transport and dispatches them:
+/// - Responses go to the matching oneshot sender in `pending`
+/// - Requests and notifications go to `incoming_tx`
+async fn reader_loop<R: AsyncRead + Unpin>(
+    mut reader: CodecReader<R>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
+    incoming_tx: mpsc::UnboundedSender<Message>,
+) {
+    loop {
+        match reader.read_message().await {
+            Ok(Some(Message::Response(resp))) => {
+                if let Some(sender) = pending.lock().await.remove(&resp.id) {
+                    let _ = sender.send(resp);
+                } else {
+                    tracing::warn!("received response for unknown request id {}", resp.id);
+                }
+            }
+            Ok(Some(msg)) => {
+                if incoming_tx.send(msg).is_err() {
+                    break;
+                }
+            }
+            Ok(None) => {
+                // EOF — drop all pending senders so waiters get RecvError
+                pending.lock().await.drain();
+                break;
+            }
+            Err(e) => {
+                tracing::error!("codec read error: {e}");
+                pending.lock().await.drain();
+                break;
+            }
+        }
     }
 }

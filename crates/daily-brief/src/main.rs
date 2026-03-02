@@ -309,7 +309,7 @@ async fn run() -> anyhow::Result<()> {
 
 /// Score and summarise a source's search results in a single LLM call.
 async fn score_and_summarize_source(
-    client: &CapabilityClient<tokio::io::Stdin, tokio::io::Stdout>,
+    client: &CapabilityClient<tokio::io::Stdout>,
     section_name: &str,
     select_if: &str,
     results: &[SearchResultItem],
