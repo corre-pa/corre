@@ -1,198 +1,280 @@
 {
-  "id": "venice-uncensored",
-  "description": "Designed for maximum creative freedom and authentic interaction. Ideal for open-ended exploration, roleplay, and unfiltered dialogue. Features minimal content restrictions.",
-  "context": 32000,
-  "price": 0.9
-}
-{
-  "id": "olafangensan-glm-4.7-flash-heretic",
-  "description": "GLM-4.7-Flash-Heretic is an uncensored experimental variant of GLM-4.7-Flash, optimized for creative freedom and unfiltered dialogue with fast inference speed.",
-  "context": 128000,
-  "price": 0.8
-}
-{
-  "id": "zai-org-glm-4.7-flash",
-  "description": "GLM-4.7-Flash is a fast inference variant of GLM-4.7, optimized for speed while maintaining strong reasoning capabilities. Ideal for applications requiring quick responses with good quality.",
-  "context": 128000,
-  "price": 0.5
-}
-{
-  "id": "zai-org-glm-5",
-  "description": "GLM-5 is the next-generation large language model developed by Zhiyuan AI, featuring significantly enhanced reasoning capabilities, improved instruction following, and support for multiple languages. Supports large context windows for processing extensive text and detailed analysis.",
-  "context": 198000,
-  "price": 3.2
-}
-{
-  "id": "zai-org-glm-4.7",
-  "description": "GLM-4.7 is a large language model developed by Zhiyuan AI, featuring strong reasoning capabilities and support for multiple languages. Supports the largest context window for processing extensive text and detailed analysis.",
-  "context": 198000,
-  "price": 2.65
-}
-{
   "id": "qwen3-4b",
   "description": "Optimized for speed and efficiency. Best for quick answers, simple queries, and lightweight tasks on mobile or low-latency connections.",
+  "price": 0.15,
   "context": 32000,
-  "price": 0.15
-}
-{
-  "id": "mistral-31-24b",
-  "description": "Balanced blend of speed and capability. Handles most everyday tasks with reliability, and supports image analysis. Ideal for general use with moderate complexity.",
-  "context": 128000,
-  "price": 2
-}
-{
-  "id": "qwen3-235b-a22b-thinking-2507",
-  "description": "Built for in-depth research and handling long, complex documents. Ideal for technical work, multimodal input, and high-precision tasks.",
-  "context": 128000,
-  "price": 3.5
-}
-{
-  "id": "qwen3-235b-a22b-instruct-2507",
-  "description": "Built for in-depth research and handling long, complex documents. Ideal for technical work, multimodal input, and high-precision tasks.",
-  "context": 128000,
-  "price": 0.75
-}
-{
-  "id": "qwen3-next-80b",
-  "description": "Optimized for speed and efficiency.",
-  "context": 256000,
-  "price": 1.9
-}
-{
-  "id": "qwen3-coder-480b-a35b-instruct",
-  "description": "Optimized for code.",
-  "context": 256000,
-  "price": 3
-}
-{
-  "id": "hermes-3-llama-3.1-405b",
-  "description": "Hermes 3 405B is a frontier level, full parameter finetune of the Llama-3.1 405B foundation model, focused on aligning LLMs to the user, with powerful steering capabilities and control given to the end user.",
-  "context": 128000,
-  "price": 3
-}
-{
-  "id": "google-gemma-3-27b-it",
-  "description": "Gemma 3 introduces multimodality, supporting vision-language input and text outputs. It handles context windows up to 128k tokens, understands over 140 languages, and offers improved math, reasoning, and chat capabilities, including structured outputs and function calling. Gemma 3 27B is Google's latest open source model, successor to Gemma 2.",
-  "context": 198000,
-  "price": 0.2
-}
-{
-  "id": "grok-41-fast",
-  "description": "Grok 4.1 Fast is xAI's best agentic tool-calling model that shines in real-world use cases like customer support and image analysis.",
-  "context": 256000,
-  "price": 1.25
-}
-{
-  "id": "gemini-3-pro-preview",
-  "description": "Gemini 3 Pro is Google flagship frontier model for high-precision multimodal reasoning with strong performance across text, image, and code.",
-  "context": 198000,
-  "price": 15
-}
-{
-  "id": "gemini-3-1-pro-preview",
-  "description": "Gemini 3.1 Pro is the latest evolution of Google flagship frontier model with 1M context, advancing high-precision multimodal reasoning across text, image, and code.",
-  "context": 1000000,
-  "price": 15
-}
-{
-  "id": "gemini-3-flash-preview",
-  "description": "Gemini 3 Flash Preview is a high speed, high value thinking model designed for agentic workflows, multi-turn chat, and coding assistance. It delivers near Pro level reasoning with substantially lower latency.",
-  "context": 256000,
-  "price": 3.75
-}
-{
-  "id": "claude-opus-4-6",
-  "description": "Claude Opus 4.6 is Anthropic's most capable reasoning model, building on Opus 4.5 with enhanced performance across complex software engineering, agentic workflows, and long-horizon tasks. It features a 1M token context window, improved multimodal capabilities, and stronger robustness to prompt injection.",
-  "context": 1000000,
-  "price": 30
-}
-{
-  "id": "claude-opus-45",
-  "description": "Claude Opus 4.5 is Anthropic's frontier reasoning model optimized for complex software engineering, agentic workflows, and long-horizon computer use. It offers strong multimodal capabilities, competitive performance across real-world coding and reasoning benchmarks, and improved robustness to prompt injection.",
-  "context": 198000,
-  "price": 30
-}
-{
-  "id": "claude-sonnet-4-6",
-  "description": "Claude Sonnet 4.6 is Anthropic's best combination of speed and intelligence, offering strong performance on coding, reasoning, and general tasks with excellent speed and cost efficiency. It features a 1M token context window and 64K max output tokens.",
-  "context": 1000000,
-  "price": 18.75
-}
-{
-  "id": "claude-sonnet-45",
-  "description": "Claude Sonnet 4.5 is Anthropic's balanced model offering strong performance on coding, reasoning, and general tasks with good speed and cost efficiency.",
-  "context": 198000,
-  "price": 18.75
+  "max_output": 4096
 }
 {
   "id": "openai-gpt-oss-120b",
   "description": "gpt-oss-120b is an open-weight, 117B-parameter Mixture-of-Experts (MoE) language model from OpenAI designed for high-reasoning, agentic, and general-purpose production use cases. The model supports configurable reasoning depth, full chain-of-thought access, and native tool use, including function calling, browsing, and structured output generation",
+  "price": 0.3,
   "context": 128000,
-  "price": 0.3
+  "max_output": 12288
 }
 {
-  "id": "kimi-k2-thinking",
-  "description": "Kimi K2 Thinking is Moonshot AIs most advanced open reasoning model to date, extending the K2 series into agentic, long-horizon reasoning. Built on the trillion-parameter Mixture-of-Experts (MoE) architecture introduced in Kimi K2, it activates 32 billion parameters per forward pass and supports 256 k-token context windows.",
-  "context": 256000,
-  "price": 3.2
+  "id": "nvidia-nemotron-3-nano-30b-a3b",
+  "description": "NVIDIA Nemotron 3 Nano 30B is a compact and efficient language model from NVIDIA, optimized for fast inference while maintaining strong performance across diverse tasks.",
+  "price": 0.3,
+  "context": 128000,
+  "max_output": 12288
 }
 {
-  "id": "kimi-k2-5",
-  "description": "Kimi K2.5 is Moonshot AIs most advanced open reasoning model, featuring trillion-parameter Mixture-of-Experts architecture with 32B active parameters and 256K context windows.",
-  "context": 256000,
-  "price": 3.75
+  "id": "google-gemma-3-27b-it",
+  "description": "Gemma 3 introduces multimodality, supporting vision-language input and text outputs. It handles context windows up to 128k tokens, understands over 140 languages, and offers improved math, reasoning, and chat capabilities, including structured outputs and function calling. Gemma 3 27B is Google's latest open source model, successor to Gemma 2.",
+  "price": 0.2,
+  "context": 198000,
+  "max_output": 12288
 }
 {
-  "id": "deepseek-v3.2",
-  "description": "DeepSeek-V3.2 is an efficient large language model with DeepSeek Sparse Attention (DSA) for long contexts. It features strong reasoning and tool-use skills, achieving top results on the 2025 IMO and IOI.",
-  "context": 160000,
-  "price": 1
+  "id": "zai-org-glm-4.7-flash",
+  "description": "GLM-4.7-Flash is a fast inference variant of GLM-4.7, optimized for speed while maintaining strong reasoning capabilities. Ideal for applications requiring quick responses with good quality.",
+  "price": 0.5,
+  "context": 128000,
+  "max_output": 12288
+}
+{
+  "id": "olafangensan-glm-4.7-flash-heretic",
+  "description": "GLM-4.7-Flash-Heretic is an uncensored experimental variant of GLM-4.7-Flash, optimized for creative freedom and unfiltered dialogue with fast inference speed.",
+  "price": 0.8,
+  "context": 128000,
+  "max_output": 12288
+}
+{
+  "id": "qwen3-235b-a22b-instruct-2507",
+  "description": "Built for in-depth research and handling long, complex documents. Ideal for technical work, multimodal input, and high-precision tasks.",
+  "price": 0.75,
+  "context": 128000,
+  "max_output": 12288
 }
 {
   "id": "llama-3.2-3b",
   "description": null,
+  "price": 0.6,
   "context": 128000,
-  "price": 0.6
+  "max_output": 4096
 }
 {
-  "id": "llama-3.3-70b",
-  "description": null,
+  "id": "openai-gpt-4o-mini-2024-07-18",
+  "description": "OpenAI's cost-efficient small model that delivers GPT-4 level intelligence at a fraction of the cost. Ideal for high-volume applications requiring strong reasoning. Version: 2024-07-18.",
+  "price": 0.75,
   "context": 128000,
-  "price": 2.8
+  "max_output": 16384
 }
 {
-  "id": "openai-gpt-52",
-  "description": "GPT-5.2 is the latest frontier-grade model in the GPT-5 series, offering stronger agentic and long context performance compared to GPT-5.1. It uses adaptive reasoning to allocate computation dynamically, responding quickly to simple queries while spending more depth on complex tasks.",
-  "context": 256000,
-  "price": 17.5
+  "id": "venice-uncensored",
+  "description": "Designed for maximum creative freedom and authentic interaction. Ideal for open-ended exploration, roleplay, and unfiltered dialogue. Features minimal content restrictions.",
+  "price": 0.9,
+  "context": 32000,
+  "max_output": 4096
 }
 {
-  "id": "openai-gpt-52-codex",
-  "description": "GPT-5.2 Codex is OpenAI specialized coding model built on GPT-5.2, optimized for advanced software development, code generation, and technical problem-solving.",
-  "context": 256000,
-  "price": 17.5
-}
-{
-  "id": "minimax-m21",
-  "description": "MiniMax-M2.1 is a lightweight, state-of-the-art large language model optimized for coding, agentic workflows, and modern application development.",
-  "context": 198000,
-  "price": 1.6
-}
-{
-  "id": "minimax-m25",
-  "description": "MiniMax-M2.5 is a state-of-the-art large language model optimized for coding, agentic workflows, and modern application development with enhanced reasoning capabilities.",
-  "context": 198000,
-  "price": 1.6
+  "id": "grok-41-fast",
+  "description": "Grok 4.1 Fast is xAI's best agentic tool-calling model that shines in real-world use cases like customer support and image analysis.",
+  "price": 0.625,
+  "context": 1000000,
+  "max_output": 30720
 }
 {
   "id": "grok-code-fast-1",
   "description": "Grok Code Fast 1 is a speedy and economical reasoning model that excels at agentic coding",
+  "price": 1.87,
   "context": 256000,
-  "price": 1.87
+  "max_output": 65536
 }
 {
   "id": "qwen3-vl-235b-a22b",
   "description": "Qwen3-VL 235B vision-language model with MoE architecture. The most powerful VL model in the Qwen series with superior visual perception, OCR, and multimodal reasoning.",
+  "price": 1.5,
   "context": 256000,
-  "price": 1.5
+  "max_output": 12288
+}
+{
+  "id": "qwen3-5-35b-a3b",
+  "description": "Qwen 3.5 35B A3B is a highly efficient MoE model with 35B total parameters and only 3B active parameters. It surpasses the larger Qwen3-235B-A22B while being 6.7x smaller, excelling at reasoning, coding, and general knowledge tasks.",
+  "price": 1.25,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "qwen3-next-80b",
+  "description": "Optimized for speed and efficiency.",
+  "price": 1.9,
+  "context": 256000,
+  "max_output": 12288
+}
+{
+  "id": "qwen3-coder-480b-a35b-instruct-turbo",
+  "description": "Turbo variant of Qwen3 Coder 480B, optimized for faster inference on code tasks.",
+  "price": 1.5,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "deepseek-v3.2",
+  "description": "DeepSeek-V3.2 is an efficient large language model with DeepSeek Sparse Attention (DSA) for long contexts. It features strong reasoning and tool-use skills, achieving top results on the 2025 IMO and IOI.",
+  "price": 1,
+  "context": 160000,
+  "max_output": 32768
+}
+{
+  "id": "minimax-m21",
+  "description": "MiniMax-M2.1 is a lightweight, state-of-the-art large language model optimized for coding, agentic workflows, and modern application development.",
+  "price": 1.6,
+  "context": 198000,
+  "max_output": 32768
+}
+{
+  "id": "minimax-m25",
+  "description": "MiniMax-M2.5 is a state-of-the-art large language model optimized for coding, agentic workflows, and modern application development with enhanced reasoning capabilities.",
+  "price": 1.6,
+  "context": 198000,
+  "max_output": 32768
+}
+{
+  "id": "qwen3-235b-a22b-thinking-2507",
+  "description": "Built for in-depth research and handling long, complex documents. Ideal for technical work, multimodal input, and high-precision tasks.",
+  "price": 3.5,
+  "context": 128000,
+  "max_output": 12288
+}
+{
+  "id": "mistral-31-24b",
+  "description": "Balanced blend of speed and capability. Handles most everyday tasks with reliability, and supports image analysis. Ideal for general use with moderate complexity.",
+  "price": 2,
+  "context": 128000,
+  "max_output": 4096
+}
+{
+  "id": "zai-org-glm-4.7",
+  "description": "GLM-4.7 is a large language model developed by Zhiyuan AI, featuring strong reasoning capabilities and support for multiple languages. Supports the largest context window for processing extensive text and detailed analysis.",
+  "price": 2.65,
+  "context": 198000,
+  "max_output": 12288
+}
+{
+  "id": "gemini-3-flash-preview",
+  "description": "Gemini 3 Flash Preview is a high speed, high value thinking model designed for agentic workflows, multi-turn chat, and coding assistance. It delivers near Pro level reasoning with substantially lower latency.",
+  "price": 3.75,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "llama-3.3-70b",
+  "description": null,
+  "price": 2.8,
+  "context": 128000,
+  "max_output": 4096
+}
+{
+  "id": "qwen3-coder-480b-a35b-instruct",
+  "description": "Optimized for code.",
+  "price": 3,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "kimi-k2-thinking",
+  "description": "Kimi K2 Thinking is Moonshot AIs most advanced open reasoning model to date, extending the K2 series into agentic, long-horizon reasoning. Built on the trillion-parameter Mixture-of-Experts (MoE) architecture introduced in Kimi K2, it activates 32 billion parameters per forward pass and supports 256 k-token context windows.",
+  "price": 3.2,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "kimi-k2-5",
+  "description": "Kimi K2.5 is Moonshot AIs most advanced open reasoning model, featuring trillion-parameter Mixture-of-Experts architecture with 32B active parameters and 256K context windows.",
+  "price": 3.75,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "zai-org-glm-4.6",
+  "description": "GLM-4.6 is a large language model developed by Zhiyuan AI, featuring strong reasoning capabilities and support for multiple languages. Supports the largest context window for processing extensive text and detailed analysis.",
+  "price": 2.75,
+  "context": 198000,
+  "max_output": 12288
+}
+{
+  "id": "zai-org-glm-5",
+  "description": "GLM-5 is the next-generation large language model developed by Zhiyuan AI, featuring significantly enhanced reasoning capabilities, improved instruction following, and support for multiple languages. Supports large context windows for processing extensive text and detailed analysis.",
+  "price": 3.2,
+  "context": 198000,
+  "max_output": 32000
+}
+{
+  "id": "hermes-3-llama-3.1-405b",
+  "description": "Hermes 3 405B is a frontier level, full parameter finetune of the Llama-3.1 405B foundation model, focused on aligning LLMs to the user, with powerful steering capabilities and control given to the end user.",
+  "price": 3,
+  "context": 128000,
+  "max_output": 12288
+}
+{
+  "id": "openai-gpt-52",
+  "description": "GPT-5.2 is the latest frontier-grade model in the GPT-5 series, offering stronger agentic and long context performance compared to GPT-5.1. It uses adaptive reasoning to allocate computation dynamically, responding quickly to simple queries while spending more depth on complex tasks.",
+  "price": 17.5,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "openai-gpt-52-codex",
+  "description": "GPT-5.2 Codex is OpenAI specialized coding model built on GPT-5.2, optimized for advanced software development, code generation, and technical problem-solving.",
+  "price": 17.5,
+  "context": 256000,
+  "max_output": 65536
+}
+{
+  "id": "openai-gpt-53-codex",
+  "description": "GPT-5.3 Codex is OpenAI specialized coding model built on GPT-5.3, optimized for advanced software development, code generation, and technical problem-solving.",
+  "price": 17.5,
+  "context": 400000,
+  "max_output": 131072
+}
+{
+  "id": "gemini-3-pro-preview",
+  "description": "Gemini 3 Pro is Google flagship frontier model for high-precision multimodal reasoning with strong performance across text, image, and code.",
+  "price": 15,
+  "context": 198000,
+  "max_output": 32768
+}
+{
+  "id": "gemini-3-1-pro-preview",
+  "description": "Gemini 3.1 Pro is the latest evolution of Google flagship frontier model with 1M context, advancing high-precision multimodal reasoning across text, image, and code.",
+  "price": 15,
+  "context": 1000000,
+  "max_output": 32768
+}
+{
+  "id": "openai-gpt-4o-2024-11-20",
+  "description": "OpenAI's multimodal flagship model with vision capabilities, strong reasoning, and broad knowledge. Popular for its balanced performance across tasks. Version: 2024-11-20.",
+  "price": 12.5,
+  "context": 128000,
+  "max_output": 16384
+}
+{
+  "id": "claude-sonnet-4-6",
+  "description": "Claude Sonnet 4.6 is Anthropic's best combination of speed and intelligence, offering strong performance on coding, reasoning, and general tasks with excellent speed and cost efficiency. It features a 1M token context window and 64K max output tokens.",
+  "price": 18,
+  "context": 1000000,
+  "max_output": 64000
+}
+{
+  "id": "claude-sonnet-4-5",
+  "description": "Claude Sonnet 4.5 is Anthropic's balanced model offering strong performance on coding, reasoning, and general tasks with good speed and cost efficiency.",
+  "price": 18.75,
+  "context": 198000,
+  "max_output": 64000
+}
+{
+  "id": "claude-opus-4-6",
+  "description": "Claude Opus 4.6 is Anthropic's most capable reasoning model, building on Opus 4.5 with enhanced performance across complex software engineering, agentic workflows, and long-horizon tasks. It features a 1M token context window, improved multimodal capabilities, and stronger robustness to prompt injection.",
+  "price": 30,
+  "context": 1000000,
+  "max_output": 128000
+}
+{
+  "id": "claude-opus-4-5",
+  "description": "Claude Opus 4.5 is Anthropic's frontier reasoning model optimized for complex software engineering, agentic workflows, and long-horizon computer use. It offers strong multimodal capabilities, competitive performance across real-world coding and reasoning benchmarks, and improved robustness to prompt injection.",
+  "price": 30,
+  "context": 198000,
+  "max_output": 32768
 }

@@ -15,6 +15,7 @@
           }
         },
         "availableContextTokens": 32000,
+        "maxCompletionTokens": 4096,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp16",
@@ -23,7 +24,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -36,6 +39,55 @@
         "traits": [
           "most_uncensored"
         ]
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1711929600,
+      "id": "zai-org-glm-4.6",
+      "model_spec": {
+        "pricing": {
+          "input": {
+            "usd": 0.85,
+            "diem": 0.85
+          },
+          "cache_input": {
+            "usd": 0.3,
+            "diem": 0.3
+          },
+          "output": {
+            "usd": 2.75,
+            "diem": 2.75
+          }
+        },
+        "model_sets": [
+          "venice_recommendations"
+        ],
+        "availableContextTokens": 198000,
+        "maxCompletionTokens": 12288,
+        "capabilities": {
+          "optimizedForCode": false,
+          "quantization": "fp4",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": false,
+          "supportsMultipleImages": false,
+          "supportsReasoning": false,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": false,
+          "supportsVision": false,
+          "supportsWebSearch": true
+        },
+        "description": "GLM-4.6 is a large language model developed by Zhiyuan AI, featuring strong reasoning capabilities and support for multiple languages. Supports the largest context window for processing extensive text and detailed analysis.",
+        "name": "GLM 4.6",
+        "modelSource": "https://huggingface.co/zai-org/GLM-4.6",
+        "offline": false,
+        "privacy": "private",
+        "traits": []
       },
       "object": "model",
       "owned_by": "venice.ai",
@@ -59,6 +111,7 @@
           "venice_recommendations"
         ],
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -67,7 +120,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -87,7 +142,6 @@
       "created": 1769644800,
       "id": "zai-org-glm-4.7-flash",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 0.125,
@@ -99,6 +153,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -107,7 +162,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -145,6 +202,7 @@
           "venice_recommendations"
         ],
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 32000,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "fp8",
@@ -153,7 +211,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -188,6 +248,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp4",
@@ -196,7 +257,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -231,6 +294,7 @@
           }
         },
         "availableContextTokens": 32000,
+        "maxCompletionTokens": 4096,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -239,10 +303,15 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
+        },
+        "deprecation": {
+          "date": "2026-03-29T00:00:00.000Z"
         },
         "description": "Optimized for speed and efficiency. Best for quick answers, simple queries, and lightweight tasks on mobile or low-latency connections.",
         "name": "Venice Small",
@@ -272,6 +341,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 4096,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -281,10 +351,15 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
+        },
+        "deprecation": {
+          "date": "2026-03-29T00:00:00.000Z"
         },
         "description": "Balanced blend of speed and capability. Handles most everyday tasks with reliability, and supports image analysis. Ideal for general use with moderate complexity.",
         "name": "Venice Medium",
@@ -312,6 +387,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -320,7 +396,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -353,6 +431,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -361,7 +440,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -381,7 +462,6 @@
       "created": 1745903059,
       "id": "qwen3-next-80b",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 0.35,
@@ -393,6 +473,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp16",
@@ -401,7 +482,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -432,6 +515,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "fp8",
@@ -440,7 +524,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -462,7 +548,6 @@
       "created": 1758758400,
       "id": "hermes-3-llama-3.1-405b",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 1.1,
@@ -474,6 +559,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -482,7 +568,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -513,6 +601,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -522,7 +611,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -544,22 +635,23 @@
       "model_spec": {
         "pricing": {
           "input": {
-            "usd": 0.5,
-            "diem": 0.5
+            "usd": 0.25,
+            "diem": 0.25
           },
           "cache_input": {
-            "usd": 0.125,
-            "diem": 0.125
+            "usd": 0.0625,
+            "diem": 0.0625
           },
           "output": {
-            "usd": 1.25,
-            "diem": 1.25
+            "usd": 0.625,
+            "diem": 0.625
           }
         },
         "model_sets": [
           "venice_recommendations"
         ],
-        "availableContextTokens": 256000,
+        "availableContextTokens": 1000000,
+        "maxCompletionTokens": 30720,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -569,7 +661,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -604,6 +698,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 32768,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -613,7 +708,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": true,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -633,7 +730,6 @@
       "created": 1771459200,
       "id": "gemini-3-1-pro-preview",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 2.5,
@@ -672,6 +768,7 @@
           }
         },
         "availableContextTokens": 1000000,
+        "maxCompletionTokens": 32768,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -681,7 +778,9 @@
           "supportsMultipleImages": true,
           "maxImages": 20,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": true,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -716,6 +815,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -725,7 +825,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": true,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -787,6 +889,7 @@
           "venice_recommendations"
         ],
         "availableContextTokens": 1000000,
+        "maxCompletionTokens": 128000,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -796,7 +899,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -814,7 +919,7 @@
     },
     {
       "created": 1764979200,
-      "id": "claude-opus-45",
+      "id": "claude-opus-4-5",
       "model_spec": {
         "pricing": {
           "input": {
@@ -835,6 +940,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 32768,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -844,7 +950,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -867,42 +975,43 @@
         "betaModel": true,
         "pricing": {
           "input": {
-            "usd": 3.75,
-            "diem": 3.75
+            "usd": 3.6,
+            "diem": 3.6
           },
           "cache_input": {
-            "usd": 0.375,
-            "diem": 0.375
+            "usd": 0.36,
+            "diem": 0.36
           },
           "cache_write": {
-            "usd": 4.69,
-            "diem": 4.69
+            "usd": 4.5,
+            "diem": 4.5
           },
           "output": {
-            "usd": 18.75,
-            "diem": 18.75
+            "usd": 18,
+            "diem": 18
           },
           "extended": {
             "context_token_threshold": 200000,
             "input": {
-              "usd": 6,
-              "diem": 6
+              "usd": 7.2,
+              "diem": 7.2
             },
             "output": {
-              "usd": 25,
-              "diem": 25
+              "usd": 27,
+              "diem": 27
             },
             "cache_input": {
-              "usd": 0.6,
-              "diem": 0.6
+              "usd": 0.72,
+              "diem": 0.72
             },
             "cache_write": {
-              "usd": 7.5,
-              "diem": 7.5
+              "usd": 9,
+              "diem": 9
             }
           }
         },
         "availableContextTokens": 1000000,
+        "maxCompletionTokens": 64000,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -912,7 +1021,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -930,9 +1041,8 @@
     },
     {
       "created": 1736899200,
-      "id": "claude-sonnet-45",
+      "id": "claude-sonnet-4-5",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 3.75,
@@ -952,6 +1062,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 64000,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -961,7 +1072,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -981,7 +1094,6 @@
       "created": 1762387200,
       "id": "openai-gpt-oss-120b",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 0.07,
@@ -993,6 +1105,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -1001,7 +1114,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1036,6 +1151,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "int4",
@@ -1044,7 +1160,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1064,7 +1182,6 @@
       "created": 1769548800,
       "id": "kimi-k2-5",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 0.75,
@@ -1083,6 +1200,7 @@
           "venice_recommendations"
         ],
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -1092,7 +1210,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -1130,6 +1250,7 @@
           "venice_recommendations"
         ],
         "availableContextTokens": 160000,
+        "maxCompletionTokens": 32768,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -1138,7 +1259,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1169,6 +1292,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 4096,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp16",
@@ -1177,7 +1301,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1207,6 +1333,7 @@
           }
         },
         "availableContextTokens": 128000,
+        "maxCompletionTokens": 4096,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -1215,7 +1342,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1252,6 +1381,7 @@
           "venice_recommendations"
         ],
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "not-available",
@@ -1260,7 +1390,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1280,7 +1412,6 @@
       "created": 1736899200,
       "id": "openai-gpt-52-codex",
       "model_spec": {
-        "betaModel": true,
         "pricing": {
           "input": {
             "usd": 2.19,
@@ -1296,6 +1427,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -1305,13 +1437,153 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
-          "supportsWebSearch": false
+          "supportsWebSearch": true
         },
         "description": "GPT-5.2 Codex is OpenAI specialized coding model built on GPT-5.2, optimized for advanced software development, code generation, and technical problem-solving.",
         "name": "GPT-5.2 Codex",
+        "modelSource": "",
+        "offline": false,
+        "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1771891200,
+      "id": "openai-gpt-53-codex",
+      "model_spec": {
+        "betaModel": true,
+        "pricing": {
+          "input": {
+            "usd": 2.19,
+            "diem": 2.19
+          },
+          "cache_input": {
+            "usd": 0.219,
+            "diem": 0.219
+          },
+          "output": {
+            "usd": 17.5,
+            "diem": 17.5
+          }
+        },
+        "availableContextTokens": 400000,
+        "maxCompletionTokens": 131072,
+        "capabilities": {
+          "optimizedForCode": true,
+          "quantization": "not-available",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": true,
+          "supportsMultipleImages": true,
+          "maxImages": 10,
+          "supportsReasoning": true,
+          "supportsReasoningEffort": true,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": false,
+          "supportsVision": true,
+          "supportsWebSearch": true
+        },
+        "description": "GPT-5.3 Codex is OpenAI specialized coding model built on GPT-5.3, optimized for advanced software development, code generation, and technical problem-solving.",
+        "name": "GPT-5.3 Codex",
+        "modelSource": "",
+        "offline": false,
+        "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1772236800,
+      "id": "openai-gpt-4o-2024-11-20",
+      "model_spec": {
+        "pricing": {
+          "input": {
+            "usd": 3.125,
+            "diem": 3.125
+          },
+          "output": {
+            "usd": 12.5,
+            "diem": 12.5
+          }
+        },
+        "availableContextTokens": 128000,
+        "maxCompletionTokens": 16384,
+        "capabilities": {
+          "optimizedForCode": false,
+          "quantization": "not-available",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": true,
+          "supportsMultipleImages": true,
+          "maxImages": 10,
+          "supportsReasoning": false,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": false,
+          "supportsVision": true,
+          "supportsWebSearch": true
+        },
+        "description": "OpenAI's multimodal flagship model with vision capabilities, strong reasoning, and broad knowledge. Popular for its balanced performance across tasks. Version: 2024-11-20.",
+        "name": "GPT-4o",
+        "modelSource": "",
+        "offline": false,
+        "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1772236800,
+      "id": "openai-gpt-4o-mini-2024-07-18",
+      "model_spec": {
+        "pricing": {
+          "input": {
+            "usd": 0.1875,
+            "diem": 0.1875
+          },
+          "cache_input": {
+            "usd": 0.09375,
+            "diem": 0.09375
+          },
+          "output": {
+            "usd": 0.75,
+            "diem": 0.75
+          }
+        },
+        "availableContextTokens": 128000,
+        "maxCompletionTokens": 16384,
+        "capabilities": {
+          "optimizedForCode": false,
+          "quantization": "not-available",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": true,
+          "supportsMultipleImages": true,
+          "maxImages": 10,
+          "supportsReasoning": false,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": false,
+          "supportsVision": true,
+          "supportsWebSearch": true
+        },
+        "description": "OpenAI's cost-efficient small model that delivers GPT-4 level intelligence at a fraction of the cost. Ideal for high-volume applications requiring strong reasoning. Version: 2024-07-18.",
+        "name": "GPT-4o Mini",
         "modelSource": "",
         "offline": false,
         "privacy": "anonymized",
@@ -1340,6 +1612,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 32768,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -1348,7 +1621,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1383,6 +1658,7 @@
           }
         },
         "availableContextTokens": 198000,
+        "maxCompletionTokens": 32768,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -1391,7 +1667,9 @@
           "supportsLogProbs": false,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1425,6 +1703,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
         "capabilities": {
           "optimizedForCode": true,
           "quantization": "not-available",
@@ -1433,7 +1712,9 @@
           "supportsLogProbs": true,
           "supportsMultipleImages": false,
           "supportsReasoning": true,
+          "supportsReasoningEffort": true,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": false,
           "supportsWebSearch": true
@@ -1443,6 +1724,65 @@
         "modelSource": "",
         "offline": false,
         "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1771977600,
+      "id": "qwen3-5-35b-a3b",
+      "model_spec": {
+        "betaModel": true,
+        "pricing": {
+          "input": {
+            "usd": 0.3125,
+            "diem": 0.3125
+          },
+          "cache_input": {
+            "usd": 0.15625,
+            "diem": 0.15625
+          },
+          "output": {
+            "usd": 1.25,
+            "diem": 1.25
+          }
+        },
+        "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
+        "capabilities": {
+          "optimizedForCode": true,
+          "quantization": "not-available",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": true,
+          "supportsMultipleImages": true,
+          "maxImages": 5,
+          "supportsReasoning": true,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": true,
+          "supportsVision": true,
+          "supportsWebSearch": true
+        },
+        "constraints": {
+          "temperature": {
+            "default": 1
+          },
+          "top_p": {
+            "default": 0.95
+          },
+          "repetition_penalty": {
+            "default": 1
+          }
+        },
+        "description": "Qwen 3.5 35B A3B is a highly efficient MoE model with 35B total parameters and only 3B active parameters. It surpasses the larger Qwen3-235B-A22B while being 6.7x smaller, excelling at reasoning, coding, and general knowledge tasks.",
+        "name": "Qwen 3.5 35B A3B",
+        "modelSource": "",
+        "offline": false,
+        "privacy": "private",
         "traits": []
       },
       "object": "model",
@@ -1464,6 +1804,7 @@
           }
         },
         "availableContextTokens": 256000,
+        "maxCompletionTokens": 12288,
         "capabilities": {
           "optimizedForCode": false,
           "quantization": "fp8",
@@ -1473,7 +1814,9 @@
           "supportsMultipleImages": true,
           "maxImages": 10,
           "supportsReasoning": false,
+          "supportsReasoningEffort": false,
           "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
           "supportsVideoInput": false,
           "supportsVision": true,
           "supportsWebSearch": true
@@ -1486,6 +1829,96 @@
         "traits": [
           "default_vision"
         ]
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1769472000,
+      "id": "qwen3-coder-480b-a35b-instruct-turbo",
+      "model_spec": {
+        "betaModel": true,
+        "pricing": {
+          "input": {
+            "usd": 0.35,
+            "diem": 0.35
+          },
+          "cache_input": {
+            "usd": 0.04,
+            "diem": 0.04
+          },
+          "output": {
+            "usd": 1.5,
+            "diem": 1.5
+          }
+        },
+        "availableContextTokens": 256000,
+        "maxCompletionTokens": 65536,
+        "capabilities": {
+          "optimizedForCode": true,
+          "quantization": "fp8",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": true,
+          "supportsMultipleImages": false,
+          "supportsReasoning": false,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": false,
+          "supportsVision": false,
+          "supportsWebSearch": true
+        },
+        "description": "Turbo variant of Qwen3 Coder 480B, optimized for faster inference on code tasks.",
+        "name": "Qwen 3 Coder 480B Turbo",
+        "modelSource": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo",
+        "offline": false,
+        "privacy": "private",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "text"
+    },
+    {
+      "created": 1769472000,
+      "id": "nvidia-nemotron-3-nano-30b-a3b",
+      "model_spec": {
+        "betaModel": true,
+        "pricing": {
+          "input": {
+            "usd": 0.075,
+            "diem": 0.075
+          },
+          "output": {
+            "usd": 0.3,
+            "diem": 0.3
+          }
+        },
+        "availableContextTokens": 128000,
+        "maxCompletionTokens": 12288,
+        "capabilities": {
+          "optimizedForCode": false,
+          "quantization": "fp8",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": false,
+          "supportsMultipleImages": false,
+          "supportsReasoning": false,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsVideoInput": false,
+          "supportsVision": false,
+          "supportsWebSearch": true
+        },
+        "description": "NVIDIA Nemotron 3 Nano 30B is a compact and efficient language model from NVIDIA, optimized for fast inference while maintaining strong performance across diverse tasks.",
+        "name": "NVIDIA Nemotron 3 Nano 30B",
+        "modelSource": "https://huggingface.co/nvidia/Nemotron-3-Nano-30B-A3B",
+        "offline": false,
+        "privacy": "private",
+        "traits": []
       },
       "object": "model",
       "owned_by": "venice.ai",
