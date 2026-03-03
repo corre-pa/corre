@@ -56,6 +56,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                 temperature: None,
                 max_completion_tokens: None,
                 max_concurrent: None,
+                extra_body: None,
             });
 
             match name.as_str() {
@@ -94,6 +95,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
             api_key: state.llm_api_key.clone().unwrap_or_else(|| "${VENICE_API_KEY}".into()),
             temperature: 0.3,
             max_concurrent: 10,
+            extra_body: HashMap::new(),
         },
         news: {
             let mut table = toml::map::Map::new();

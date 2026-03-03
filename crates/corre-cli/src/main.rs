@@ -170,10 +170,14 @@ async fn cmd_run(
     // Shutdown channel: the restart endpoint sends `true` to trigger graceful exit
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Shared config: dashboard updates this on PUT /api/settings, scheduler
+    // and run-now handlers read from it so they always see the latest values.
+    let shared_config = Arc::new(RwLock::new(config.clone()));
+
     // Build dashboard state and router
     let dashboard_state = Arc::new(corre_dashboard::server::DashboardState {
         tracker: tracker.clone(),
-        config: Arc::new(RwLock::new(config.clone())),
+        config: shared_config.clone(),
         config_path: config_path.clone(),
         run_trigger: run_tx,
         registry_client: registry_client.clone(),
@@ -202,7 +206,7 @@ async fn cmd_run(
     for cap_config in config.capabilities.iter().filter(|c| c.enabled) {
         let cap_name = cap_config.name.clone();
         let schedule = cap_config.schedule.clone();
-        let config = config.clone();
+        let shared_config = shared_config.clone();
         let registry = registry.clone();
         let tracker = tracker.clone();
 
@@ -211,10 +215,11 @@ async fn cmd_run(
         let callback: Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> =
             Box::new(move || {
                 let cap_name = cap_name.clone();
-                let config = config.clone();
+                let shared_config = shared_config.clone();
                 let registry = registry.clone();
                 let tracker = tracker.clone();
                 Box::pin(async move {
+                    let config = shared_config.read().await.clone();
                     execute_capability_tracked(&config, &registry, &cap_name, tracker.clone()).await;
                 })
             });
@@ -223,15 +228,16 @@ async fn cmd_run(
     }
 
     // Spawn run-now receiver that processes dashboard triggers
-    let run_config = config.clone();
+    let run_shared_config = shared_config.clone();
     let run_registry = registry.clone();
     let run_tracker = tracker.clone();
     tokio::spawn(async move {
         while let Some(cap_name) = run_rx.recv().await {
-            let config = run_config.clone();
+            let shared_config = run_shared_config.clone();
             let registry = run_registry.clone();
             let tracker = run_tracker.clone();
             tokio::spawn(async move {
+                let config = shared_config.read().await.clone();
                 execute_capability_tracked(&config, &registry, &cap_name, tracker).await;
             });
         }
@@ -329,6 +335,12 @@ async fn run_capability_pipeline(
         None => config.llm.clone(),
     };
 
+    tracing::debug!(
+        cap = cap_name,
+        model = %effective_llm.model,
+        extra_body_keys = ?effective_llm.extra_body.keys().collect::<Vec<_>>(),
+        "Effective LLM config for capability"
+    );
     let raw_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&effective_llm)?);
 
     // Conditionally wrap MCP and LLM with safety middleware

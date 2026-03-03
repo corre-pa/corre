@@ -451,6 +451,63 @@ body.xp-desktop {
     gap: 4px 12px;
 }
 
+.xp-field-full {
+    grid-column: 1 / -1;
+}
+
+.xp-textarea {
+    font-family: "Lucida Console", monospace;
+    font-size: 11px;
+    width: 100%;
+    max-width: 100%;
+    resize: vertical;
+}
+
+.xp-field-error {
+    display: block;
+    font-size: 10px;
+    color: #CC2200;
+    min-height: 0;
+}
+
+.cap-llm-overrides {
+    grid-column: 1 / -1;
+    border: 1px solid #D6D2C2;
+    border-radius: 2px;
+    background: #F5F3EB;
+    padding: 0;
+    margin-top: 2px;
+}
+
+.cap-llm-toggle {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    color: #003399;
+    cursor: pointer;
+}
+
+.cap-llm-toggle:hover {
+    background: #E8E4D8;
+}
+
+.cap-llm-body {
+    display: none;
+    padding: 6px 8px;
+    border-top: 1px solid #D6D2C2;
+}
+
+.cap-llm-body.open {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+}
+
 /* Dynamic rows for MCP/capabilities in settings */
 .xp-dynamic-row {
     border: 1px solid #D6D2C2;

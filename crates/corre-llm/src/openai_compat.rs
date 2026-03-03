@@ -3,6 +3,8 @@
 //! Implements `corre_core::capability::LlmProvider` by POSTing to any `/chat/completions`
 //! endpoint that speaks the OpenAI wire format.
 
+use std::collections::HashMap;
+
 use crate::types::*;
 use anyhow::Context;
 use corre_core::capability::{LlmProvider, LlmRequest, LlmResponse};
@@ -15,10 +17,11 @@ pub struct OpenAiCompatProvider {
     api_key: String,
     default_model: String,
     default_temperature: f32,
+    extra_body: HashMap<String, serde_json::Value>,
 }
 
 impl OpenAiCompatProvider {
-    pub fn new(base_url: String, api_key: String, model: String, temperature: f32) -> Self {
+    pub fn new(base_url: String, api_key: String, model: String, temperature: f32, extra_body: HashMap<String, serde_json::Value>) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(300))
@@ -30,12 +33,20 @@ impl OpenAiCompatProvider {
             api_key,
             default_model: model,
             default_temperature: temperature,
+            extra_body,
         }
     }
 
     pub fn from_config(config: &corre_core::config::LlmConfig) -> anyhow::Result<Self> {
         let api_key = corre_core::secret::resolve_value(&config.api_key).context("resolving LLM API key")?;
-        Ok(Self::new(config.base_url.clone(), api_key, config.model.clone(), config.temperature))
+        if !config.extra_body.is_empty() {
+            tracing::debug!(
+                model = %config.model,
+                extra_keys = ?config.extra_body.keys().collect::<Vec<_>>(),
+                "LLM provider created with extra_body"
+            );
+        }
+        Ok(Self::new(config.base_url.clone(), api_key, config.model.clone(), config.temperature, config.extra_body.clone()))
     }
 }
 
@@ -47,11 +58,18 @@ impl LlmProvider for OpenAiCompatProvider {
             messages: request.messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: m.content.clone() }).collect(),
             temperature: Some(request.temperature.unwrap_or(self.default_temperature)),
             max_completion_tokens: request.max_completion_tokens,
+            extra: self.extra_body.clone(),
         };
 
         let url = format!("{}/chat/completions", self.base_url);
         let n_messages = api_request.messages.len();
-        tracing::debug!("LLM request to {} ({n_messages} messages)", self.default_model);
+        let n_extra = api_request.extra.len();
+        tracing::debug!(
+            model = %self.default_model,
+            messages = n_messages,
+            extra_keys = ?api_request.extra.keys().collect::<Vec<_>>(),
+            "LLM request ({n_extra} extra body params)"
+        );
 
         let start = std::time::Instant::now();
         let response = self

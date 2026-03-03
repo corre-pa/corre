@@ -142,6 +142,11 @@ pub struct LlmConfig {
     /// provider's rate limits (e.g. Venice.ai M-tier = 50 req/min).
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
+    /// Arbitrary extra fields passed through to the API request body via
+    /// `#[serde(flatten)]`. Use this for provider-specific parameters like
+    /// `venice_parameters`, `reasoning_effort`, `stream`, etc.
+    #[serde(default)]
+    pub extra_body: HashMap<String, serde_json::Value>,
 }
 
 fn default_temperature() -> f32 {
@@ -164,6 +169,10 @@ pub struct CapabilityLlmConfig {
     pub temperature: Option<f32>,
     pub max_completion_tokens: Option<u32>,
     pub max_concurrent: Option<usize>,
+    /// Per-capability extra body fields. Merged on top of the global
+    /// `extra_body` so capabilities can add or override provider-specific params.
+    #[serde(default)]
+    pub extra_body: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl LlmConfig {
@@ -171,6 +180,14 @@ impl LlmConfig {
     /// the corresponding field in `self`. Connection params (provider, base_url,
     /// api_key) are always inherited from the host config.
     pub fn with_overrides(&self, overrides: &CapabilityLlmConfig) -> LlmConfig {
+        let extra_body = match &overrides.extra_body {
+            Some(cap_extra) => {
+                let mut merged = self.extra_body.clone();
+                merged.extend(cap_extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+                merged
+            }
+            None => self.extra_body.clone(),
+        };
         LlmConfig {
             provider: self.provider.clone(),
             base_url: self.base_url.clone(),
@@ -178,6 +195,7 @@ impl LlmConfig {
             api_key: self.api_key.clone(),
             temperature: overrides.temperature.unwrap_or(self.temperature),
             max_concurrent: overrides.max_concurrent.unwrap_or(self.max_concurrent),
+            extra_body,
         }
     }
 }
@@ -366,7 +384,7 @@ mod tests {
         // NewsConfig is parsed by corre-news, here we just check the raw table
         let news_table = config.news.as_table().expect("[news] should be a table");
         assert_eq!(news_table.get("bind").and_then(|v| v.as_str()), Some("192.168.1.101:5510"));
-        assert_eq!(config.llm.model, "zai-org-glm-4.7-flash");
+        assert_eq!(config.llm.model, "nvidia-nemotron-3-nano-30b-a3b");
         assert_eq!(config.capabilities.len(), 1);
         assert_eq!(config.capabilities[0].name, "daily-brief");
     }
@@ -409,5 +427,58 @@ mod tests {
     fn expand_tilde_works() {
         let expanded = expand_tilde("~/.local/share/corre");
         assert!(!expanded.to_string_lossy().starts_with('~'));
+    }
+
+    #[test]
+    fn json_to_toml_roundtrip_with_llm_overrides() {
+        let json = r#"{
+            "general": {"data_dir": "/tmp/corre", "log_level": "info"},
+            "llm": {
+                "provider": "openai-compatible",
+                "base_url": "https://api.example.com/v1",
+                "model": "base-model",
+                "api_key": "KEY",
+                "temperature": 0.3,
+                "max_concurrent": 10,
+                "extra_body": {"stream": false}
+            },
+            "news": {"bind": "127.0.0.1:5510"},
+            "capabilities": [{
+                "name": "daily-brief",
+                "description": "test",
+                "schedule": "0 0 5 * * *",
+                "enabled": true,
+                "llm": {
+                    "model": "override-model",
+                    "temperature": 0.9,
+                    "extra_body": {"reasoning_effort": "high"}
+                }
+            }],
+            "safety": {
+                "enabled": true,
+                "max_output_bytes": 100000,
+                "sanitize_injections": true,
+                "detect_leaks": true,
+                "boundary_wrap": true,
+                "high_severity_action": "sanitize",
+                "custom_block_patterns": []
+            }
+        }"#;
+        let config: CorreConfig = serde_json::from_str(json).expect("parse JSON");
+        let overrides = config.capabilities[0].llm.as_ref().expect("cap llm overrides present");
+        assert_eq!(overrides.model.as_deref(), Some("override-model"));
+        assert_eq!(overrides.temperature, Some(0.9));
+
+        let toml_str = toml::to_string_pretty(&config).expect("serialize to TOML");
+        let config2: CorreConfig = toml::from_str(&toml_str).expect("re-parse from TOML");
+        let overrides2 = config2.capabilities[0].llm.as_ref().expect("cap llm overrides survive round-trip");
+        assert_eq!(overrides2.model.as_deref(), Some("override-model"));
+        assert_eq!(overrides2.temperature, Some(0.9));
+
+        let effective = config2.llm.with_overrides(overrides2);
+        assert_eq!(effective.model, "override-model");
+        assert_eq!(effective.temperature, 0.9);
+        assert_eq!(effective.extra_body.get("stream"), Some(&serde_json::Value::Bool(false)));
+        assert_eq!(effective.extra_body.get("reasoning_effort"), Some(&serde_json::json!("high")));
     }
 }

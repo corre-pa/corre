@@ -441,6 +441,7 @@
         setVal("llm_api_key", config.llm.api_key);
         setVal("llm_temperature", config.llm.temperature);
         setVal("llm_max_concurrent", config.llm.max_concurrent);
+        setVal("llm_extra_body", jsonPretty(config.llm.extra_body));
 
         setVal("news_bind", config.news.bind);
         setVal("news_title", config.news.title);
@@ -462,6 +463,9 @@
     }
 
     function gatherSettingsForm() {
+        var globalExtra = tryParseJson("llm_extra_body");
+        if (globalExtra === null) return null; // validation failed
+
         var config = {
             general: {
                 data_dir: getVal("general_data_dir"),
@@ -474,6 +478,7 @@
                 api_key: getVal("llm_api_key"),
                 temperature: parseFloat(getVal("llm_temperature")) || 0.3,
                 max_concurrent: parseInt(getVal("llm_max_concurrent"), 10) || 10,
+                extra_body: globalExtra,
             },
             news: {
                 bind: getVal("news_bind"),
@@ -496,6 +501,7 @@
         if (token) config.news.editor_token = token;
 
         // Gather capabilities
+        var capValid = true;
         document.querySelectorAll("#capabilitiesConfig .xp-dynamic-row").forEach(function (row) {
             var cap = {
                 name: row.querySelector(".cap-cfg-name").value.trim(),
@@ -506,10 +512,62 @@
             };
             var configPath = row.querySelector(".cap-cfg-config-path").value.trim();
             if (configPath) cap.config_path = configPath;
+
+            // Restore plugin and log_level from data attributes
+            var plugin = row.dataset.plugin;
+            if (plugin) cap.plugin = plugin;
+            var logLevel = row.dataset.logLevel;
+            if (logLevel) cap.log_level = logLevel;
+
+            // Gather LLM overrides
+            var llmOverrides = gatherCapLlmOverrides(row);
+            if (llmOverrides === false) {
+                capValid = false;
+            } else if (llmOverrides) {
+                cap.llm = llmOverrides;
+            }
+
             if (cap.name) config.capabilities.push(cap);
         });
 
+        if (!capValid) return null;
         return config;
+    }
+
+    function gatherCapLlmOverrides(row) {
+        var model = (row.querySelector(".cap-llm-model") || {}).value || "";
+        var temp = (row.querySelector(".cap-llm-temperature") || {}).value || "";
+        var maxTokens = (row.querySelector(".cap-llm-max-tokens") || {}).value || "";
+        var maxConc = (row.querySelector(".cap-llm-max-concurrent") || {}).value || "";
+        var extraEl = row.querySelector(".cap-llm-extra-body");
+        var extraStr = extraEl ? extraEl.value.trim() : "";
+        var errEl = row.querySelector(".cap-llm-extra-body-err");
+
+        model = model.trim();
+        temp = temp.trim();
+        maxTokens = maxTokens.trim();
+        maxConc = maxConc.trim();
+
+        var hasAny = model || temp || maxTokens || maxConc || (extraStr && extraStr !== "{}");
+        if (!hasAny) return null; // no overrides
+
+        var llm = {};
+        if (model) llm.model = model;
+        if (temp) llm.temperature = parseFloat(temp);
+        if (maxTokens) llm.max_completion_tokens = parseInt(maxTokens, 10);
+        if (maxConc) llm.max_concurrent = parseInt(maxConc, 10);
+
+        if (extraStr && extraStr !== "{}") {
+            try {
+                llm.extra_body = JSON.parse(extraStr);
+                if (errEl) { errEl.textContent = ""; }
+            } catch (e) {
+                if (errEl) { errEl.textContent = "Invalid JSON: " + e.message; }
+                return false; // signal validation failure
+            }
+        }
+
+        return Object.keys(llm).length > 0 ? llm : null;
     }
 
     function addCapabilityRow(cap) {
@@ -517,6 +575,13 @@
         var row = document.createElement("div");
         row.className = "xp-dynamic-row";
         cap = cap || {};
+
+        // Store plugin and log_level as data attributes so they survive round-trip
+        if (cap.plugin) row.dataset.plugin = cap.plugin;
+        if (cap.log_level) row.dataset.logLevel = cap.log_level;
+
+        var llm = cap.llm || {};
+        var llmExtraStr = jsonPretty(llm.extra_body);
 
         row.innerHTML =
             '<div class="xp-fields-grid">' +
@@ -526,16 +591,45 @@
             '<div class="xp-field"><label>MCP servers (comma-sep)</label><input type="text" class="xp-input xp-input-wide cap-cfg-mcp-servers" value="' + esc((cap.mcp_servers || []).join(", ")) + '"></div>' +
             '<div class="xp-field"><label>Config path</label><input type="text" class="xp-input xp-input-wide cap-cfg-config-path" value="' + esc(cap.config_path || "") + '"></div>' +
             '<div class="xp-field xp-field-checkbox"><label><input type="checkbox" class="cap-cfg-enabled"' + (cap.enabled !== false ? " checked" : "") + '> Enabled</label></div>' +
+            '<div class="cap-llm-overrides">' +
+                '<button type="button" class="cap-llm-toggle">LLM overrides &#9656;</button>' +
+                '<div class="cap-llm-body">' +
+                    '<div class="xp-field"><label>Model</label><input type="text" class="xp-input xp-input-wide cap-llm-model" value="' + esc(llm.model || "") + '"></div>' +
+                    '<div class="xp-field"><label>Temperature</label><input type="number" class="xp-input cap-llm-temperature" step="0.1" min="0" max="2" style="width:80px;" value="' + esc(llm.temperature != null ? String(llm.temperature) : "") + '"></div>' +
+                    '<div class="xp-field"><label>Max tokens</label><input type="number" class="xp-input cap-llm-max-tokens" min="1" style="width:100px;" value="' + esc(llm.max_completion_tokens != null ? String(llm.max_completion_tokens) : "") + '"></div>' +
+                    '<div class="xp-field"><label>Max concurrent</label><input type="number" class="xp-input cap-llm-max-concurrent" min="1" style="width:80px;" value="' + esc(llm.max_concurrent != null ? String(llm.max_concurrent) : "") + '"></div>' +
+                    '<div class="xp-field xp-field-full"><label>Extra body (JSON)</label>' +
+                        '<textarea class="xp-input xp-textarea cap-llm-extra-body" rows="2" placeholder=\'{"stream": false}\'>' + esc(llmExtraStr) + '</textarea>' +
+                        '<span class="xp-field-error cap-llm-extra-body-err"></span>' +
+                    '</div>' +
+                '</div>' +
+            '</div>' +
             '</div>' +
             '<button type="button" class="xp-button xp-button-remove">Remove</button>';
 
         row.querySelector(".xp-button-remove").addEventListener("click", function () { row.remove(); });
+        row.querySelector(".cap-llm-toggle").addEventListener("click", function () {
+            var body = row.querySelector(".cap-llm-body");
+            var open = body.classList.toggle("open");
+            this.innerHTML = "LLM overrides " + (open ? "&#9662;" : "&#9656;");
+        });
+        // Auto-expand if overrides are set
+        if (llm.model || llm.temperature != null || llm.max_completion_tokens != null || llm.max_concurrent != null || (llm.extra_body && Object.keys(llm.extra_body).length > 0)) {
+            var body = row.querySelector(".cap-llm-body");
+            body.classList.add("open");
+            row.querySelector(".cap-llm-toggle").innerHTML = "LLM overrides &#9662;";
+        }
         container.appendChild(row);
     }
 
     function saveSettings() {
         var config = gatherSettingsForm();
         var status = document.getElementById("saveStatus");
+        if (config === null) {
+            status.textContent = "Fix validation errors before saving.";
+            status.className = "save-status save-err";
+            return;
+        }
         status.textContent = "Saving...";
         status.className = "save-status";
 
@@ -1483,6 +1577,30 @@
 
     function escapeAttr(s) {
         return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function jsonPretty(obj) {
+        if (!obj || (typeof obj === "object" && Object.keys(obj).length === 0)) return "{}";
+        return JSON.stringify(obj, null, 2);
+    }
+
+    function tryParseJson(id) {
+        var el = document.getElementById(id);
+        var errEl = document.getElementById(id + "_err");
+        if (!el) return {};
+        var val = el.value.trim();
+        if (!val || val === "{}") {
+            if (errEl) errEl.textContent = "";
+            return {};
+        }
+        try {
+            var parsed = JSON.parse(val);
+            if (errEl) errEl.textContent = "";
+            return parsed;
+        } catch (e) {
+            if (errEl) errEl.textContent = "Invalid JSON: " + e.message;
+            return null;
+        }
     }
 
     function esc(str) {

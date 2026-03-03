@@ -5,7 +5,7 @@ log_level = "info"
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"
-model = "zai-org-glm-4.7-flash"
+model = "nvidia-nemotron-3-nano-30b-a3b"
 api_key = "${VENICE_API_KEY}"
 temperature = 0.3
 max_concurrent = 10        # parallel LLM requests; tune to your provider's rate limit
@@ -32,9 +32,15 @@ mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
 
-# [capabilities.llm]
+[capabilities.llm]
 # model = "gpt-4o"              # override the global model for this capability
 # temperature = 0.7             # override temperature
-# base_url = "https://..."      # use a different provider entirely
-# api_key = "${OTHER_API_KEY}"
 # max_concurrent = 5
+
+[capabilities.llm.extra_body]
+stream = false
+reasoning_effort = "minimal"
+
+[capabilities.llm.extra_body.venice_parameters]
+strip_thinking_reposne = true
+include_venice_system_prompt = false

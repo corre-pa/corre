@@ -145,6 +145,12 @@
                             <label for="llm_max_concurrent">Max concurrent</label>
                             <input type="number" id="llm_max_concurrent" class="xp-input" min="1" style="width:80px;">
                         </div>
+                        <div class="xp-field xp-field-full">
+                            <label for="llm_extra_body">Extra body (JSON)</label>
+                            <textarea id="llm_extra_body" class="xp-input xp-textarea" rows="3"
+                                placeholder='{"stream": false, "reasoning_effort": "minimal"}'></textarea>
+                            <span class="xp-field-error" id="llm_extra_body_err"></span>
+                        </div>
                     </div>
                 </div>
 
