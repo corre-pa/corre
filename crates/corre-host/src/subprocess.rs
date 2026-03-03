@@ -12,8 +12,10 @@ use corre_sdk::protocol::{
     Message, Notification, OutputRestParams, OutputStreamParams, OutputWebhookParams, OutputWriteParams, PROTOCOL_VERSION, ProgressParams,
     Request, Response,
 };
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
@@ -51,6 +53,118 @@ fn redact_secrets(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+// ── Plugin process handle ────────────────────────────────────────────────
+
+/// Handles to a spawned plugin subprocess.
+struct PluginProcess {
+    child: Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: BufReader<tokio::process::ChildStdout>,
+}
+
+impl PluginProcess {
+    /// Read one newline-terminated JSON message from the plugin's stdout.
+    /// Skips blank lines; returns `None` only on true EOF (zero bytes read).
+    async fn read_msg(&mut self) -> anyhow::Result<Option<serde_json::Value>> {
+        loop {
+            let mut line = String::new();
+            let n = self.stdout.read_line(&mut line).await?;
+            if n == 0 {
+                return Ok(None);
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.len() > protocol::MAX_MESSAGE_BYTES {
+                anyhow::bail!("message exceeds {} byte limit", protocol::MAX_MESSAGE_BYTES);
+            }
+            return Ok(Some(serde_json::from_str(trimmed)?));
+        }
+    }
+
+    /// Send a newline-terminated JSON message to the plugin's stdin.
+    async fn write_msg(&mut self, value: &serde_json::Value) -> anyhow::Result<()> {
+        let mut json = serde_json::to_string(value)?;
+        json.push('\n');
+        self.stdin.write_all(json.as_bytes()).await?;
+        self.stdin.flush().await?;
+        Ok(())
+    }
+
+    /// Send `initialize` and wait for the response.
+    async fn initialize(&mut self, params: &InitializeParams) -> anyhow::Result<()> {
+        let req = Request::new(1, "initialize", Some(serde_json::to_value(params)?));
+        self.write_msg(&serde_json::to_value(&req)?).await?;
+
+        let resp_val = self.read_msg().await?.ok_or_else(|| anyhow::anyhow!("plugin closed before initialize response"))?;
+
+        let resp: Response = serde_json::from_value(resp_val)?;
+        if let Some(err) = resp.error {
+            anyhow::bail!("plugin initialize failed ({}): {}", err.code, err.message);
+        }
+
+        Ok(())
+    }
+
+    /// Send `shutdown` notification and wait for the process to exit.
+    async fn shutdown(&mut self) {
+        let notif = Notification::new("shutdown", None);
+        let _ = self.write_msg(&serde_json::to_value(&notif).unwrap()).await;
+
+        // 5s grace period
+        match tokio::time::timeout(std::time::Duration::from_secs(5), self.child.wait()).await {
+            Ok(_) => {}
+            Err(_) => {
+                tracing::warn!("plugin did not exit in 5s, killing");
+                let _ = self.child.kill().await;
+            }
+        }
+    }
+
+    /// Write a dispatch result (response + logging) back to the plugin.
+    async fn write_dispatch_result(&mut self, result: &DispatchResult) {
+        if let Some(ref ok) = result.response.result {
+            let redacted = serde_json::to_string(&redact_secrets(ok)).unwrap_or_default();
+            tracing::debug!("Response {} (id={}) result: {redacted}", result.method, result.id);
+        }
+        if let Some(ref err) = result.response.error {
+            tracing::debug!("Response {} (id={}) error: code={} msg={}", result.method, result.id, err.code, err.message);
+        }
+        let resp_val = serde_json::to_value(&result.response).unwrap();
+        let resp_bytes = serde_json::to_string(&resp_val).map(|s| s.len()).unwrap_or(0);
+        match self.write_msg(&resp_val).await {
+            Ok(()) => tracing::info!("Wrote response for {} (id={}, {resp_bytes} bytes)", result.method, result.id),
+            Err(e) => tracing::error!("Failed to write response for {} (id={}): {e}", result.method, result.id),
+        }
+    }
+}
+
+// ── Dispatch result ──────────────────────────────────────────────────────
+
+/// Outcome of dispatching a single plugin request, ready to be written back.
+struct DispatchResult {
+    method: String,
+    id: u64,
+    response: Response,
+}
+
+impl DispatchResult {
+    fn is_fatal(&self) -> bool {
+        self.response.error.as_ref().is_some_and(|e| e.fatal)
+    }
+}
+
+// ── Notification action ──────────────────────────────────────────────────
+
+/// Whether the message loop should continue or shut down after a notification.
+enum LoopAction {
+    Continue,
+    Shutdown,
+}
+
+// ── SubprocessCapability ─────────────────────────────────────────────────
+
 /// A capability backed by an external subprocess speaking CCPP v1/v2.
 pub struct SubprocessCapability {
     manifest: CapabilityManifest,
@@ -72,16 +186,6 @@ struct SubprocessProgress {
     percent: Option<u8>,
     output: Option<CapabilityOutput>,
     error: Option<String>,
-}
-
-/// Send a newline-terminated JSON message to a child's stdin.
-async fn write_msg(stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>, value: &serde_json::Value) -> anyhow::Result<()> {
-    let mut json = serde_json::to_string(value)?;
-    json.push('\n');
-    let mut guard = stdin.lock().await;
-    guard.write_all(json.as_bytes()).await?;
-    guard.flush().await?;
-    Ok(())
 }
 
 impl SubprocessCapability {
@@ -122,59 +226,92 @@ impl SubprocessCapability {
         self
     }
 
-    /// Read one newline-terminated JSON message from the child's stdout.
-    /// Skips blank lines; returns `None` only on true EOF (zero bytes read).
-    async fn read_msg(reader: &mut BufReader<tokio::process::ChildStdout>) -> anyhow::Result<Option<serde_json::Value>> {
-        loop {
+    // ── Setup helpers ────────────────────────────────────────────────────
+
+    fn reset_progress(&self) {
+        let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
+        progress.phase = "init".into();
+        progress.percent = None;
+        progress.output = None;
+        progress.error = None;
+    }
+
+    /// Create the per-capability scoped directory and its `config/` and `logs/` subdirs.
+    /// Returns `(scoped_data_dir, log_dir)`.
+    async fn create_directories(&self) -> anyhow::Result<(PathBuf, PathBuf)> {
+        let scoped_data_dir = self.data_dir.join(&self.manifest.name);
+        let log_dir = scoped_data_dir.join("logs");
+        tokio::fs::create_dir_all(scoped_data_dir.join("config"))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to create capability dir {}: {e}", scoped_data_dir.display()))?;
+        tokio::fs::create_dir_all(&log_dir).await.map_err(|e| anyhow::anyhow!("failed to create log dir {}: {e}", log_dir.display()))?;
+        Ok((scoped_data_dir, log_dir))
+    }
+
+    /// Spawn the plugin binary, take its stdio handles, and start a background
+    /// task that captures stderr and re-emits it through the host's tracing.
+    async fn spawn_plugin(&self) -> anyhow::Result<PluginProcess> {
+        let mut child = self
+            .build_spawn_command()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                anyhow::anyhow!("failed to spawn plugin {} (workdir: {}): {e}", self.binary.display(), self.plugin_dir.display())
+            })?;
+
+        let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
+
+        // Capture stderr in background, parsing child tracing output to preserve
+        // log levels and coalesce multi-line messages into single entries.
+        let cap_name = self.manifest.name.clone();
+        tokio::spawn(async move {
+            let mut stderr_reader = BufReader::new(stderr);
             let mut line = String::new();
-            let n = reader.read_line(&mut line).await?;
-            if n == 0 {
-                return Ok(None);
+            let mut pending_level = tracing::Level::DEBUG;
+            let mut pending_msg = String::new();
+
+            while let Ok(n) = stderr_reader.read_line(&mut line).await {
+                if n == 0 {
+                    break;
+                }
+                let clean = strip_ansi(&line);
+                let trimmed = clean.trim_end();
+                if trimmed.is_empty() {
+                    line.clear();
+                    continue;
+                }
+
+                if let Some((level, msg)) = parse_plugin_level(trimmed) {
+                    // New log entry — flush the previous one
+                    if !pending_msg.is_empty() {
+                        log_plugin_msg(&cap_name, pending_level, &pending_msg);
+                    }
+                    pending_level = level;
+                    pending_msg = msg.to_string();
+                } else {
+                    // Continuation line (multi-line message)
+                    if !pending_msg.is_empty() {
+                        pending_msg.push('\n');
+                    }
+                    pending_msg.push_str(trimmed);
+                }
+
+                line.clear();
             }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
+
+            if !pending_msg.is_empty() {
+                log_plugin_msg(&cap_name, pending_level, &pending_msg);
             }
-            if trimmed.len() > protocol::MAX_MESSAGE_BYTES {
-                anyhow::bail!("message exceeds {} byte limit", protocol::MAX_MESSAGE_BYTES);
-            }
-            return Ok(Some(serde_json::from_str(trimmed)?));
-        }
+        });
+
+        Ok(PluginProcess { child, stdin, stdout: BufReader::new(stdout) })
     }
 
-    /// Send `initialize` and wait for the response.
-    async fn initialize(
-        stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>,
-        reader: &mut BufReader<tokio::process::ChildStdout>,
-        params: &InitializeParams,
-    ) -> anyhow::Result<()> {
-        let req = Request::new(1, "initialize", Some(serde_json::to_value(params)?));
-        write_msg(stdin, &serde_json::to_value(&req)?).await?;
-
-        let resp_val = Self::read_msg(reader).await?.ok_or_else(|| anyhow::anyhow!("plugin closed before initialize response"))?;
-
-        let resp: Response = serde_json::from_value(resp_val)?;
-        if let Some(err) = resp.error {
-            anyhow::bail!("plugin initialize failed ({}): {}", err.code, err.message);
-        }
-
-        Ok(())
-    }
-
-    /// Send `shutdown` notification and wait for the process to exit.
-    async fn shutdown(stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>, child: &mut Child) {
-        let notif = Notification::new("shutdown", None);
-        let _ = write_msg(stdin, &serde_json::to_value(&notif).unwrap()).await;
-
-        // 5s grace period
-        match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-            Ok(_) => {}
-            Err(_) => {
-                tracing::warn!("plugin did not exit in 5s, killing");
-                let _ = child.kill().await;
-            }
-        }
-    }
+    // ── Request dispatch ─────────────────────────────────────────────────
 
     /// Dispatch a single request from the plugin.
     async fn dispatch_request(ctx: &CapabilityContext, req: &Request, outputs: &[OutputDeclaration], data_dir: &Path) -> Response {
@@ -187,6 +324,22 @@ impl SubprocessCapability {
             "output/webhook" => Self::handle_output_webhook(req, outputs).await,
             _ => Response::err(req.id, ErrorCode::METHOD_NOT_FOUND, format!("unknown method: {}", req.method)),
         }
+    }
+
+    /// Log request params, dispatch, log result, and return a `DispatchResult`.
+    async fn dispatch_logged(ctx: &CapabilityContext, req: Request, outputs: &[OutputDeclaration], data_dir: &Path) -> DispatchResult {
+        if let Some(ref params) = req.params {
+            let redacted = serde_json::to_string(&redact_secrets(params)).unwrap_or_default();
+            tracing::debug!("Request {} (id={}) params: {redacted}", req.method, req.id);
+        }
+
+        let start = std::time::Instant::now();
+        let response = Self::dispatch_request(ctx, &req, outputs, data_dir).await;
+        let elapsed = start.elapsed();
+        let is_err = response.error.is_some();
+        tracing::info!("Completed {} (id={}) in {elapsed:.1?}{}", req.method, req.id, if is_err { " [error]" } else { "" });
+
+        DispatchResult { method: req.method, id: req.id, response }
     }
 
     async fn handle_mcp_call_tool(ctx: &CapabilityContext, req: &Request) -> Response {
@@ -314,10 +467,93 @@ impl SubprocessCapability {
         }
     }
 
-    /// Compute the per-capability scoped data directory.
-    fn scoped_data_dir(&self) -> PathBuf {
-        self.data_dir.join(&self.manifest.name)
+    // ── Notification handlers ────────────────────────────────────────────
+
+    /// Process a notification from the plugin. Returns `LoopAction::Shutdown` for
+    /// terminal notifications (`capability/result`, `capability/error`) that signal
+    /// the plugin is done.
+    fn handle_notification(&self, notif: Notification, ctx: &CapabilityContext) -> LoopAction {
+        match notif.method.as_str() {
+            "capability/result" => {
+                if let Some(params) = notif.params
+                    && let Ok(result) = serde_json::from_value::<CapabilityResultParams>(params)
+                {
+                    let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
+                    progress.output = Some(result.output);
+                    progress.phase = "done".into();
+                }
+                LoopAction::Shutdown
+            }
+            "capability/error" => {
+                if let Some(params) = notif.params
+                    && let Ok(err_params) = serde_json::from_value::<CapabilityErrorParams>(params)
+                {
+                    let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
+                    progress.error = Some(err_params.message.clone());
+                    if let Some(partial) = err_params.partial_output {
+                        progress.output = Some(partial);
+                    }
+                }
+                LoopAction::Shutdown
+            }
+            "output/stream" => {
+                if let Some(params) = notif.params
+                    && let Ok(stream) = serde_json::from_value::<OutputStreamParams>(params)
+                {
+                    tracing::info!("[plugin:{}] stream: {}", self.manifest.name, stream.chunk.trim_end());
+                }
+                LoopAction::Continue
+            }
+            "progress" => {
+                if let Some(params) = notif.params
+                    && let Ok(p) = serde_json::from_value::<ProgressParams>(params)
+                {
+                    if let Some(ref tx) = ctx.progress_tx {
+                        let _ = tx.send(ProgressEvent::Progress { pct: p.percent, phase: p.phase.clone() });
+                    }
+                    let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
+                    match p.message {
+                        Some(ref msg) => tracing::info!("[plugin:{}] progress: {} — {msg}", self.manifest.name, p.phase),
+                        None => tracing::info!("[plugin:{}] progress: {}", self.manifest.name, p.phase),
+                    }
+                    progress.phase = p.phase;
+                    progress.percent = p.percent;
+                }
+                LoopAction::Continue
+            }
+            "log" => {
+                if let Some(params) = notif.params
+                    && let Ok(log) = serde_json::from_value::<LogParams>(params)
+                {
+                    if let Some(ref tx) = ctx.progress_tx {
+                        let _ = tx.send(ProgressEvent::Log { level: log.level.clone(), message: log.message.clone() });
+                    }
+                    log_plugin_msg(&self.manifest.name, parse_log_level(&log.level), &log.message);
+                }
+                LoopAction::Continue
+            }
+            _ => {
+                tracing::debug!("ignoring unknown notification: {}", notif.method);
+                LoopAction::Continue
+            }
+        }
     }
+
+    // ── Result extraction ────────────────────────────────────────────────
+
+    fn extract_result(&self) -> anyhow::Result<CapabilityOutput> {
+        let progress = self.progress.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref error) = progress.error {
+            if let Some(ref partial) = progress.output {
+                tracing::warn!("[plugin:{}] error with partial output: {error}", self.manifest.name);
+                return Ok(partial.clone());
+            }
+            anyhow::bail!("plugin error: {error}");
+        }
+        progress.output.clone().ok_or_else(|| anyhow::anyhow!("plugin exited without sending capability/result"))
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────────────
 
     /// Build the `Command` for spawning the plugin, optionally sandboxed with Landlock + seccomp.
     fn build_spawn_command(&self) -> Command {
@@ -357,82 +593,10 @@ impl Capability for SubprocessCapability {
     }
 
     async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput> {
-        // Reset progress state
-        {
-            let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
-            progress.phase = "init".into();
-            progress.percent = None;
-            progress.output = None;
-            progress.error = None;
-        }
+        self.reset_progress();
 
-        // Per-capability scoped directory — create it, config/ and logs/ subdirs before spawning
-        let scoped_data_dir = self.scoped_data_dir();
-        let log_dir = scoped_data_dir.join("logs");
-        tokio::fs::create_dir_all(scoped_data_dir.join("config"))
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to create capability dir {}: {e}", scoped_data_dir.display()))?;
-        tokio::fs::create_dir_all(&log_dir).await.map_err(|e| anyhow::anyhow!("failed to create log dir {}: {e}", log_dir.display()))?;
-
-        let mut child = self
-            .build_spawn_command()
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                anyhow::anyhow!("failed to spawn plugin {} (workdir: {}): {e}", self.binary.display(), self.plugin_dir.display())
-            })?;
-
-        let raw_stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("no stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("no stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("no stderr"))?;
-
-        let stdin = Arc::new(tokio::sync::Mutex::new(raw_stdin));
-        let mut reader = BufReader::new(stdout);
-
-        // Capture stderr in background, parsing child tracing output to preserve
-        // log levels and coalesce multi-line messages into single entries.
-        let cap_name = self.manifest.name.clone();
-        tokio::spawn(async move {
-            let mut stderr_reader = BufReader::new(stderr);
-            let mut line = String::new();
-            let mut pending_level = tracing::Level::DEBUG;
-            let mut pending_msg = String::new();
-
-            while let Ok(n) = stderr_reader.read_line(&mut line).await {
-                if n == 0 {
-                    break;
-                }
-                let clean = strip_ansi(&line);
-                let trimmed = clean.trim_end();
-                if trimmed.is_empty() {
-                    line.clear();
-                    continue;
-                }
-
-                if let Some((level, msg)) = parse_plugin_level(trimmed) {
-                    // New log entry — flush the previous one
-                    if !pending_msg.is_empty() {
-                        log_plugin_msg(&cap_name, pending_level, &pending_msg);
-                    }
-                    pending_level = level;
-                    pending_msg = msg.to_string();
-                } else {
-                    // Continuation line (multi-line message)
-                    if !pending_msg.is_empty() {
-                        pending_msg.push('\n');
-                    }
-                    pending_msg.push_str(trimmed);
-                }
-
-                line.clear();
-            }
-
-            if !pending_msg.is_empty() {
-                log_plugin_msg(&cap_name, pending_level, &pending_msg);
-            }
-        });
+        let (scoped_data_dir, log_dir) = self.create_directories().await?;
+        let mut process = self.spawn_plugin().await?;
 
         // Send initialize — config_dir points at the capability's scoped directory
         let init_params = InitializeParams {
@@ -447,189 +611,77 @@ impl Capability for SubprocessCapability {
             log_dir: Some(log_dir.to_string_lossy().into_owned()),
             log_level: self.log_level.clone(),
         };
+        process.initialize(&init_params).await?;
 
-        Self::initialize(&stdin, &mut reader, &init_params).await?;
+        // Dispatch futures run concurrently within this task (no unsafe transmute
+        // needed — FuturesUnordered borrows locals without requiring 'static).
+        let output_declarations = self.output_declarations.as_slice();
+        let scoped_data_dir = scoped_data_dir.as_path();
+        let mut dispatches: FuturesUnordered<_> = FuturesUnordered::new();
 
-        // SAFETY: all spawned request tasks are joined before this function returns,
-        // so the references remain valid for the duration of every task.
-        let ctx: &'static CapabilityContext = unsafe { std::mem::transmute(ctx) };
-        let output_declarations: &'static [OutputDeclaration] = unsafe { std::mem::transmute(self.output_declarations.as_slice()) };
-        let scoped_data_dir: &'static Path = unsafe { std::mem::transmute(scoped_data_dir.as_path()) };
-
-        let mut request_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-        let fatal_error: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
-
-        // Main message loop: read from plugin, dispatch, respond
+        // Main message loop: read from plugin and poll in-flight dispatches concurrently
         loop {
-            // Check if a fatal error was reported by a dispatch task
-            let maybe_fatal = fatal_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            if let Some(msg) = maybe_fatal {
-                tracing::error!("Fatal error from dispatch task, aborting: {msg}");
-                for handle in &mut request_handles {
-                    let _ = handle.await;
+            tokio::select! {
+                msg = process.read_msg() => {
+                    let msg_val = match msg? {
+                        Some(v) => v,
+                        None => {
+                            // EOF — plugin exited; drain outstanding dispatches
+                            tracing::debug!("Plugin stdout EOF, draining {} outstanding dispatches", dispatches.len());
+                            while let Some(result) = dispatches.next().await {
+                                process.write_dispatch_result(&result).await;
+                            }
+                            break;
+                        }
+                    };
+
+                    let msg: Message = serde_json::from_value(msg_val)?;
+
+                    match msg {
+                        Message::Request(req) => {
+                            if !protocol::ALLOWED_METHODS.contains(&req.method.as_str()) {
+                                let resp = Response::err(
+                                    req.id, ErrorCode::METHOD_NOT_FOUND, format!("method not allowed: {}", req.method),
+                                );
+                                process.write_msg(&serde_json::to_value(&resp)?).await?;
+                                continue;
+                            }
+
+                            let in_flight = dispatches.len() + 1;
+                            tracing::info!("Dispatching {} (id={}, in_flight={in_flight})", req.method, req.id);
+                            dispatches.push(Self::dispatch_logged(ctx, req, output_declarations, scoped_data_dir));
+                        }
+                        Message::Notification(notif) => {
+                            if matches!(self.handle_notification(notif, ctx), LoopAction::Shutdown) {
+                                while let Some(result) = dispatches.next().await {
+                                    process.write_dispatch_result(&result).await;
+                                }
+                                process.shutdown().await;
+                                break;
+                            }
+                        }
+                        Message::Response(_) => {
+                            tracing::debug!("ignoring unexpected response from plugin");
+                        }
+                    }
                 }
-                Self::shutdown(&stdin, &mut child).await;
-                anyhow::bail!("{msg}");
-            }
-
-            let msg_val = match Self::read_msg(&mut reader).await? {
-                Some(v) => v,
-                None => {
-                    // EOF — plugin exited; join outstanding tasks before returning
-                    tracing::debug!("Plugin stdout EOF, joining {} outstanding request handles", request_handles.len());
-                    for handle in &mut request_handles {
-                        let _ = handle.await;
+                Some(result) = dispatches.next(), if !dispatches.is_empty() => {
+                    if result.is_fatal() {
+                        let msg = result.response.error.as_ref().unwrap().message.clone();
+                        tracing::error!("Fatal error on {} (id={}): {msg}", result.method, result.id);
+                        process.write_dispatch_result(&result).await;
+                        while let Some(r) = dispatches.next().await {
+                            process.write_dispatch_result(&r).await;
+                        }
+                        process.shutdown().await;
+                        anyhow::bail!("{msg}");
                     }
-                    break;
-                }
-            };
-
-            let msg: Message = serde_json::from_value(msg_val)?;
-
-            match msg {
-                Message::Request(req) => {
-                    // Validate method is in the allowlist
-                    if !protocol::ALLOWED_METHODS.contains(&req.method.as_str()) {
-                        let resp = Response::err(req.id, ErrorCode::METHOD_NOT_FOUND, format!("method not allowed: {}", req.method));
-                        write_msg(&stdin, &serde_json::to_value(&resp)?).await?;
-                        continue;
-                    }
-
-                    // Spawn a task to dispatch concurrently so the read loop is not blocked.
-                    let stdin = Arc::clone(&stdin);
-                    let fatal_error = Arc::clone(&fatal_error);
-
-                    let in_flight = request_handles.iter().filter(|h| !h.is_finished()).count() + 1;
-                    tracing::info!("Dispatching {} (id={}, in_flight={in_flight})", req.method, req.id);
-
-                    request_handles.push(tokio::spawn(async move {
-                        if let Some(ref params) = req.params {
-                            let redacted = serde_json::to_string(&redact_secrets(params)).unwrap_or_default();
-                            tracing::debug!("Request {} (id={}) params: {redacted}", req.method, req.id);
-                        }
-
-                        let start = std::time::Instant::now();
-                        let resp = Self::dispatch_request(ctx, &req, output_declarations, scoped_data_dir).await;
-                        let elapsed = start.elapsed();
-                        let is_err = resp.error.is_some();
-                        tracing::info!("Completed {} (id={}) in {elapsed:.1?}{}", req.method, req.id, if is_err { " [error]" } else { "" });
-
-                        // If the response carries a fatal error, record it for the main loop
-                        if let Some(ref err) = resp.error {
-                            if err.fatal {
-                                tracing::error!("Fatal error on {} (id={}): {}", req.method, req.id, err.message);
-                                *fatal_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(err.message.clone());
-                            }
-                        }
-
-                        let resp_val = serde_json::to_value(&resp).unwrap();
-
-                        if let Some(ref result) = resp.result {
-                            let redacted = serde_json::to_string(&redact_secrets(result)).unwrap_or_default();
-                            tracing::debug!("Response {} (id={}) result: {redacted}", req.method, req.id);
-                        }
-                        if let Some(ref err) = resp.error {
-                            tracing::debug!("Response {} (id={}) error: code={} msg={}", req.method, req.id, err.code, err.message);
-                        }
-
-                        let resp_bytes = serde_json::to_string(&resp_val).map(|s| s.len()).unwrap_or(0);
-                        match write_msg(&stdin, &resp_val).await {
-                            Ok(()) => tracing::info!("Wrote response for {} (id={}, {resp_bytes} bytes)", req.method, req.id),
-                            Err(e) => tracing::error!("Failed to write response for {} (id={}): {e}", req.method, req.id),
-                        }
-                    }));
-                }
-                Message::Notification(notif) => match notif.method.as_str() {
-                    "capability/result" => {
-                        if let Some(params) = notif.params
-                            && let Ok(result) = serde_json::from_value::<CapabilityResultParams>(params)
-                        {
-                            let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
-                            progress.output = Some(result.output);
-                            progress.phase = "done".into();
-                        }
-                        // Wait for any outstanding request tasks before shutting down.
-                        for handle in &mut request_handles {
-                            let _ = handle.await;
-                        }
-                        Self::shutdown(&stdin, &mut child).await;
-                        break;
-                    }
-                    "capability/error" => {
-                        if let Some(params) = notif.params
-                            && let Ok(err_params) = serde_json::from_value::<CapabilityErrorParams>(params)
-                        {
-                            let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
-                            progress.error = Some(err_params.message.clone());
-                            if let Some(partial) = err_params.partial_output {
-                                progress.output = Some(partial);
-                            }
-                        }
-                        for handle in &mut request_handles {
-                            let _ = handle.await;
-                        }
-                        Self::shutdown(&stdin, &mut child).await;
-                        break;
-                    }
-                    "output/stream" => {
-                        if let Some(params) = notif.params
-                            && let Ok(stream) = serde_json::from_value::<OutputStreamParams>(params)
-                        {
-                            tracing::info!("[plugin:{}] stream: {}", self.manifest.name, stream.chunk.trim_end());
-                        }
-                    }
-                    "progress" => {
-                        if let Some(params) = notif.params
-                            && let Ok(p) = serde_json::from_value::<ProgressParams>(params)
-                        {
-                            if let Some(ref tx) = ctx.progress_tx {
-                                let _ = tx.send(ProgressEvent::Progress { pct: p.percent, phase: p.phase.clone() });
-                            }
-                            let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
-                            match p.message {
-                                Some(ref msg) => tracing::info!("[plugin:{}] progress: {} — {msg}", self.manifest.name, p.phase),
-                                None => tracing::info!("[plugin:{}] progress: {}", self.manifest.name, p.phase),
-                            }
-                            progress.phase = p.phase;
-                            progress.percent = p.percent;
-                        }
-                    }
-                    "log" => {
-                        if let Some(params) = notif.params
-                            && let Ok(log) = serde_json::from_value::<LogParams>(params)
-                        {
-                            if let Some(ref tx) = ctx.progress_tx {
-                                let _ = tx.send(ProgressEvent::Log { level: log.level.clone(), message: log.message.clone() });
-                            }
-                            match log.level.to_uppercase().as_str() {
-                                "ERROR" => tracing::error!("[plugin:{}] {}", self.manifest.name, log.message),
-                                "WARN" => tracing::warn!("[plugin:{}] {}", self.manifest.name, log.message),
-                                "DEBUG" => tracing::debug!("[plugin:{}] {}", self.manifest.name, log.message),
-                                _ => tracing::info!("[plugin:{}] {}", self.manifest.name, log.message),
-                            }
-                        }
-                    }
-                    _ => {
-                        tracing::debug!("ignoring unknown notification: {}", notif.method);
-                    }
-                },
-                Message::Response(_) => {
-                    tracing::debug!("ignoring unexpected response from plugin");
+                    process.write_dispatch_result(&result).await;
                 }
             }
         }
 
-        // Extract result
-        let progress = self.progress.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref error) = progress.error {
-            if let Some(ref partial) = progress.output {
-                tracing::warn!("[plugin:{}] error with partial output: {error}", self.manifest.name);
-                return Ok(partial.clone());
-            }
-            anyhow::bail!("plugin error: {error}");
-        }
-
-        progress.output.clone().ok_or_else(|| anyhow::anyhow!("plugin exited without sending capability/result"))
+        self.extract_result()
     }
 
     async fn in_progress(&self) -> ProgressStatus {
@@ -671,6 +723,17 @@ fn parse_plugin_level(line: &str) -> Option<(tracing::Level, &str)> {
         ("TRACE ", tracing::Level::TRACE),
     ];
     levels.into_iter().find_map(|(prefix, level)| trimmed.strip_prefix(prefix).map(|rest| (level, rest)))
+}
+
+/// Parse a log level string (e.g. "INFO", "error") into a `tracing::Level`.
+fn parse_log_level(s: &str) -> tracing::Level {
+    match s.to_uppercase().as_str() {
+        "ERROR" => tracing::Level::ERROR,
+        "WARN" => tracing::Level::WARN,
+        "DEBUG" => tracing::Level::DEBUG,
+        "TRACE" => tracing::Level::TRACE,
+        _ => tracing::Level::INFO,
+    }
 }
 
 /// Log a plugin message at the given tracing level.
@@ -774,5 +837,13 @@ mod tests {
 
         assert!(parse_plugin_level("just a plain line").is_none());
         assert!(parse_plugin_level("INFORMATION not a level").is_none());
+    }
+
+    #[test]
+    fn parse_log_level_round_trips() {
+        assert_eq!(parse_log_level("ERROR"), tracing::Level::ERROR);
+        assert_eq!(parse_log_level("warn"), tracing::Level::WARN);
+        assert_eq!(parse_log_level("Debug"), tracing::Level::DEBUG);
+        assert_eq!(parse_log_level("unknown"), tracing::Level::INFO);
     }
 }
