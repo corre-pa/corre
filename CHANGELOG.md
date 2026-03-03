@@ -3,6 +3,21 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.17.0] - 2026-03-03
+
+### Added
+- **extra_body pass-through** for provider-specific LLM parameters, enabling
+  direct control over vendor extensions (e.g. Venice.ai model parameters).
+- **Plugin-owned log files** with daily rotation, giving each plugin its own
+  dedicated log output.
+- **corre-host crate** extracted from subprocess hosting logic, with debug
+  logging and fatal error handling.
+- `update_models` maintenance script.
+- 35x speedup in daily-brief run times.
+
+### Changed
+- `SubprocessCapability::execute()` restructured for clarity and safety.
+
 ## [0.16.0] - 2026-03-02
 
 ### Fixed
