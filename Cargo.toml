@@ -12,6 +12,7 @@ members = [
     "crates/mcp-smtp",
     "crates/mcp-telegram",
     "crates/corre-registry",
+    "crates/corre-host",
     "crates/corre-cli",
     "crates/daily-brief",
 ]
@@ -32,6 +33,7 @@ corre-capabilities = { path = "crates/corre-capabilities" }
 corre-safety = { path = "crates/corre-safety" }
 corre-dashboard = { path = "crates/corre-dashboard" }
 corre-registry = { path = "crates/corre-registry" }
+corre-host = { path = "crates/corre-host" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

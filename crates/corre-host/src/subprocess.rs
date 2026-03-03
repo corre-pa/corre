@@ -487,7 +487,7 @@ impl Capability for SubprocessCapability {
                     let fatal_error = Arc::clone(&fatal_error);
 
                     let in_flight = request_handles.iter().filter(|h| !h.is_finished()).count() + 1;
-                    tracing::debug!("Dispatching {} (id={}, in_flight={in_flight})", req.method, req.id);
+                    tracing::info!("Dispatching {} (id={}, in_flight={in_flight})", req.method, req.id);
 
                     request_handles.push(tokio::spawn(async move {
                         if let Some(ref params) = req.params {
@@ -499,8 +499,7 @@ impl Capability for SubprocessCapability {
                         let resp = Self::dispatch_request(ctx, &req, output_declarations, scoped_data_dir).await;
                         let elapsed = start.elapsed();
                         let is_err = resp.error.is_some();
-                        tracing::debug!("Completed {} (id={}) in {elapsed:.1?}{}", req.method, req.id, if is_err { " [error]" } else { ""
-                        });
+                        tracing::info!("Completed {} (id={}) in {elapsed:.1?}{}", req.method, req.id, if is_err { " [error]" } else { "" });
 
                         // If the response carries a fatal error, record it for the main loop
                         if let Some(ref err) = resp.error {
@@ -522,8 +521,8 @@ impl Capability for SubprocessCapability {
 
                         let resp_bytes = serde_json::to_string(&resp_val).map(|s| s.len()).unwrap_or(0);
                         match write_msg(&stdin, &resp_val).await {
-                            Ok(()) => tracing::debug!("Wrote response for {} (id={}, {resp_bytes} bytes)", req.method, req.id),
-                            Err(e) => tracing::debug!("Failed to write response for {} (id={}): {e}", req.method, req.id),
+                            Ok(()) => tracing::info!("Wrote response for {} (id={}, {resp_bytes} bytes)", req.method, req.id),
+                            Err(e) => tracing::error!("Failed to write response for {} (id={}): {e}", req.method, req.id),
                         }
                     }));
                 }
@@ -563,7 +562,7 @@ impl Capability for SubprocessCapability {
                         if let Some(params) = notif.params
                             && let Ok(stream) = serde_json::from_value::<OutputStreamParams>(params)
                         {
-                            tracing::debug!("[plugin:{}] stream: {}", self.manifest.name, stream.chunk.trim_end());
+                            tracing::info!("[plugin:{}] stream: {}", self.manifest.name, stream.chunk.trim_end());
                         }
                     }
                     "progress" => {

@@ -66,10 +66,10 @@ impl SanitizationReport {
             "Safety pipeline findings"
         );
         for inj in &self.injections_found {
-            tracing::info!(server, tool, "Injection pattern detected: {inj}");
+            tracing::warn!(server, tool, "Injection pattern detected: {inj}");
         }
         for v in &self.policy_violations {
-            tracing::info!(server, tool, "Policy violation: {v}");
+            tracing::warn!(server, tool, "Policy violation: {v}");
         }
         for detail in &self.details {
             tracing::debug!(

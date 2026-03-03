@@ -51,7 +51,7 @@ impl LlmProvider for OpenAiCompatProvider {
 
         let url = format!("{}/chat/completions", self.base_url);
         let n_messages = api_request.messages.len();
-        tracing::info!("LLM request to {} ({n_messages} messages)", self.default_model);
+        tracing::debug!("LLM request to {} ({n_messages} messages)", self.default_model);
 
         let start = std::time::Instant::now();
         let response = self
@@ -64,7 +64,7 @@ impl LlmProvider for OpenAiCompatProvider {
             .context("Failed to send request to LLM API")?;
 
         let status = response.status();
-        tracing::info!("LLM response: {status} in {:.1?}", start.elapsed());
+        tracing::debug!("LLM response: {status} in {:.1?}", start.elapsed());
         if !status.is_success() {
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                 let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(|v| v.to_string());

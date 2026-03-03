@@ -25,7 +25,15 @@ impl ErrorCode {
     pub const LLM_RATE_LIMITED: i64 = -32020;
     pub const LLM_TRUNCATED: i64 = -32021;
     pub const LLM_PROVIDER_ERROR: i64 = -32022;
+    pub const LLM_AUTH_FAILED: i64 = -32023;
+    pub const LLM_PAYMENT_REQUIRED: i64 = -32024;
     pub const SAFETY_BLOCKED: i64 = -32030;
+
+    /// Returns `true` for error codes that indicate an unrecoverable condition
+    /// (e.g. bad credentials, payment issues) where retrying is pointless.
+    pub fn is_fatal(code: i64) -> bool {
+        matches!(code, Self::LLM_AUTH_FAILED | Self::LLM_PAYMENT_REQUIRED)
+    }
 }
 
 /// Current protocol version string.
@@ -78,6 +86,12 @@ pub struct RpcError {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fatal: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 // ── Method parameter/result structs ──────────────────────────────────────
@@ -222,11 +236,30 @@ impl Response {
     }
 
     pub fn err(id: u64, code: i64, message: impl Into<String>) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: None, error: Some(RpcError { code, message: message.into(), data: None }) }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(RpcError { code, message: message.into(), data: None, fatal: false }),
+        }
+    }
+
+    pub fn fatal_err(id: u64, code: i64, message: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(RpcError { code, message: message.into(), data: None, fatal: true }),
+        }
     }
 
     pub fn err_with_data(id: u64, code: i64, message: impl Into<String>, data: serde_json::Value) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: None, error: Some(RpcError { code, message: message.into(), data: Some(data) }) }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(RpcError { code, message: message.into(), data: Some(data), fatal: false }),
+        }
     }
 }
 
@@ -295,6 +328,36 @@ mod tests {
         let json = serde_json::to_string(&notif).unwrap();
         let parsed: Notification = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.method, "progress");
+    }
+
+    #[test]
+    fn rpc_error_fatal_round_trip() {
+        let resp = Response::fatal_err(1, ErrorCode::LLM_AUTH_FAILED, "401 Unauthorized");
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"fatal\":true"));
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        let err = parsed.error.unwrap();
+        assert!(err.fatal);
+        assert_eq!(err.code, ErrorCode::LLM_AUTH_FAILED);
+    }
+
+    #[test]
+    fn rpc_error_non_fatal_omits_field() {
+        let resp = Response::err(1, ErrorCode::LLM_PROVIDER_ERROR, "server error");
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(!json.contains("fatal"));
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.error.unwrap().fatal);
+    }
+
+    #[test]
+    fn error_code_is_fatal() {
+        assert!(ErrorCode::is_fatal(ErrorCode::LLM_AUTH_FAILED));
+        assert!(ErrorCode::is_fatal(ErrorCode::LLM_PAYMENT_REQUIRED));
+        assert!(!ErrorCode::is_fatal(ErrorCode::LLM_RATE_LIMITED));
+        assert!(!ErrorCode::is_fatal(ErrorCode::LLM_PROVIDER_ERROR));
+        assert!(!ErrorCode::is_fatal(ErrorCode::LLM_TRUNCATED));
+        assert!(!ErrorCode::is_fatal(ErrorCode::MCP_TOOL_ERROR));
     }
 
     #[test]

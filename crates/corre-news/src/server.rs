@@ -343,7 +343,7 @@ async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderM
     tracing::info!("Reading topics from {}", topics_path.display());
     match tokio::fs::read_to_string(&topics_path).await {
         Ok(content) => {
-            tracing::info!("Successfully read topics ({} bytes)", content.len());
+            tracing::debug!("Successfully read topics ({} bytes)", content.len());
             (StatusCode::OK, content).into_response()
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -351,7 +351,7 @@ async fn get_topics_handler(State(state): State<Arc<AppState>>, headers: HeaderM
             (StatusCode::OK, String::new()).into_response()
         }
         Err(e) => {
-            tracing::info!("Failed to read topics from {}: {e}", topics_path.display());
+            tracing::warn!("Failed to read topics from {}: {e}", topics_path.display());
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read topics: {e}")).into_response()
         }
     }

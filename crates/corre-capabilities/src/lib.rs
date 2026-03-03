@@ -1,12 +1,10 @@
-//! Capability implementations and the `CapabilityRegistry`.
+//! Capability implementations.
 //!
-//! Contains the Rolodex capability, a registry that maps capability names to trait
-//! objects, and shared helpers re-exported from `corre-sdk`.
+//! Contains built-in capabilities (Rolodex, daily-brief) and shared helpers.
+//! The subprocess host and capability registry have moved to `corre-host`.
 
 pub mod daily_brief;
-pub mod registry;
 pub mod rolodex;
 pub mod rolodex_db;
 pub mod rolodex_import;
-pub mod subprocess;
 pub mod tools;

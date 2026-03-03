@@ -69,7 +69,7 @@ impl EditionCache {
         let merged = match inner.editions.get(&edition.date) {
             Some(existing) => {
                 let merged = merge_editions(existing, edition);
-                tracing::info!(
+                tracing::debug!(
                     "Merged edition for {}: {} sections, {} articles",
                     merged.date,
                     merged.sections.len(),

@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let stderr_filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| config.general.log_level.parse().unwrap_or_default());
     let file_filter = tracing_subscriber::EnvFilter::new(
-        "info,corre_core=debug,corre_mcp=debug,corre_llm=debug,corre_capabilities=debug,corre_safety=debug,corre_cli=debug",
+        "info,corre_core=debug,corre_mcp=debug,corre_llm=debug,corre_host=debug,corre_safety=debug,corre_cli=debug",
     );
 
     tracing_subscriber::registry()
@@ -149,7 +149,7 @@ async fn cmd_run(
 
     // Build capability registry first, then filter config to only capabilities
     // that have a backing implementation (built-in or installed plugin).
-    let registry = Arc::new(corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir));
+    let registry = Arc::new(corre_host::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir));
     config.capabilities.retain(|c| registry.get(&c.name).is_some());
 
     // Create execution tracker for dashboard (only contains real capabilities)
@@ -252,7 +252,7 @@ async fn cmd_run(
 /// Execute a capability with tracker integration (mark running/completed/failed, push logs).
 async fn execute_capability_tracked(
     config: &corre_core::config::CorreConfig,
-    registry: &corre_capabilities::registry::CapabilityRegistry,
+    registry: &corre_host::registry::CapabilityRegistry,
     cap_name: &str,
     tracker: Arc<ExecutionTracker>,
 ) {
@@ -281,7 +281,7 @@ async fn cmd_run_now(
     plugins: Vec<corre_core::plugin::DiscoveredPlugin>,
 ) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
-    let registry = corre_capabilities::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir);
+    let registry = corre_host::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir);
 
     let (output, mcp_pool) = run_capability_pipeline(&config, &registry, capability_name, None).await?;
 
@@ -294,7 +294,7 @@ async fn cmd_run_now(
 /// Shared pipeline: build MCP pool, run capability. Returns the output and pool.
 async fn run_capability_pipeline(
     config: &corre_core::config::CorreConfig,
-    registry: &corre_capabilities::registry::CapabilityRegistry,
+    registry: &corre_host::registry::CapabilityRegistry,
     cap_name: &str,
     tracker: Option<Arc<ExecutionTracker>>,
 ) -> anyhow::Result<(corre_core::capability::CapabilityOutput, corre_mcp::McpPool)> {
