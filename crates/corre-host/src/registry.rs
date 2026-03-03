@@ -35,13 +35,18 @@ impl CapabilityRegistry {
 
     /// Build a registry with all built-in capabilities and discovered plugins,
     /// filtered by what's enabled in config.
-    pub fn from_config(configs: &[CapabilityConfig], plugins: &[DiscoveredPlugin], data_dir: &Path) -> Self {
+    ///
+    /// `global_log_level` is the fallback log level from `[general] log_level` —
+    /// each capability may override it via `CapabilityConfig::log_level`.
+    pub fn from_config(configs: &[CapabilityConfig], plugins: &[DiscoveredPlugin], data_dir: &Path, global_log_level: &str) -> Self {
         let mut registry = Self::new();
 
         // Index plugins by name for quick lookup
         let plugin_map: HashMap<&str, &DiscoveredPlugin> = plugins.iter().map(|p| (p.manifest.plugin.name.as_str(), p)).collect();
 
         for config in configs.iter().filter(|c| c.enabled) {
+            let resolved_log_level = config.log_level.clone().unwrap_or_else(|| global_log_level.to_owned());
+
             // Check if this capability is backed by a plugin
             if config.plugin.is_some() || plugin_map.contains_key(config.name.as_str()) {
                 if let Some(plugin) = plugin_map.get(config.name.as_str()) {
@@ -49,7 +54,8 @@ impl CapabilityRegistry {
                     let cap = crate::subprocess::SubprocessCapability::new(manifest, plugin.binary.clone(), plugin.dir.clone())
                         .with_outputs(plugin.manifest.plugin.permissions.outputs.clone())
                         .with_sandbox(plugin.manifest.plugin.permissions.sandbox.clone())
-                        .with_data_dir(data_dir.to_path_buf());
+                        .with_data_dir(data_dir.to_path_buf())
+                        .with_log_level(resolved_log_level);
                     registry.register(Arc::new(cap));
                 } else {
                     tracing::warn!("Capability `{}` has plugin set but no plugin directory found, skipping", config.name);

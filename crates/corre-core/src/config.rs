@@ -198,6 +198,10 @@ pub struct CapabilityConfig {
     /// capability is backed by a subprocess plugin instead of a built-in implementation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
+    /// Per-capability log level override (e.g. "debug", "info"). Falls back to
+    /// `[general] log_level` when not set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
 }
 
 impl CorreConfig {

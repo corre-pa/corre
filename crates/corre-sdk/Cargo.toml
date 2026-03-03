@@ -11,6 +11,8 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 ammonia = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 toml = { workspace = true }

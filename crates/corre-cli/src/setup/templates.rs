@@ -68,6 +68,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                     enabled: true,
                     llm: llm_override,
                     plugin: None,
+                    log_level: None,
                 },
                 other => CapabilityConfig {
                     name: other.into(),
@@ -78,6 +79,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                     enabled: true,
                     llm: llm_override,
                     plugin: None,
+                    log_level: None,
                 },
             }
         })

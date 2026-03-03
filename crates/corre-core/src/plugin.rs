@@ -79,6 +79,7 @@ pub fn plugin_to_capability_config(plugin: &DiscoveredPlugin) -> crate::config::
         enabled: true,
         llm: None,
         plugin: Some(plugin.dir.to_string_lossy().into_owned()),
+        log_level: None,
     }
 }
 

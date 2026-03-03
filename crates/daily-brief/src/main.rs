@@ -102,19 +102,16 @@ fn load_seen_urls(editions_dir: &Path) -> HashSet<String> {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).without_time().with_target(false).init();
-
     if let Err(e) = run().await {
-        tracing::error!("daily-brief failed: {e:#}");
+        eprintln!("ERROR daily-brief failed: {e:#}");
         std::process::exit(1);
-    } else {
-        tracing::info!("daily-brief completed successfully");
     }
 }
 
 async fn run() -> anyhow::Result<()> {
     let client = Arc::new(CapabilityClient::from_stdio());
     let params = client.accept_initialize().await?;
+    let _guard = corre_sdk::init_tracing(&params.capability_name, params.log_dir.as_deref(), params.log_level.as_deref());
 
     let config_dir = PathBuf::from(&params.config_dir);
     let editions_dir = config_dir.join("editions");

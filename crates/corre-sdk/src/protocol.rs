@@ -112,6 +112,10 @@ pub struct InitializeParams {
     pub mcp_servers: Vec<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
 }
 
 fn default_max_concurrent_llm() -> usize {
@@ -236,21 +240,11 @@ impl Response {
     }
 
     pub fn err(id: u64, code: i64, message: impl Into<String>) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: None,
-            error: Some(RpcError { code, message: message.into(), data: None, fatal: false }),
-        }
+        Self { jsonrpc: "2.0".into(), id, result: None, error: Some(RpcError { code, message: message.into(), data: None, fatal: false }) }
     }
 
     pub fn fatal_err(id: u64, code: i64, message: impl Into<String>) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: None,
-            error: Some(RpcError { code, message: message.into(), data: None, fatal: true }),
-        }
+        Self { jsonrpc: "2.0".into(), id, result: None, error: Some(RpcError { code, message: message.into(), data: None, fatal: true }) }
     }
 
     pub fn err_with_data(id: u64, code: i64, message: impl Into<String>, data: serde_json::Value) -> Self {
@@ -371,6 +365,8 @@ mod tests {
             max_concurrent_llm: 10,
             mcp_servers: vec!["brave-search".into()],
             timeout_secs: 600,
+            log_dir: None,
+            log_level: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         let parsed: InitializeParams = serde_json::from_value(json).unwrap();

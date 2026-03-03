@@ -62,6 +62,8 @@ pub struct SubprocessCapability {
     sandbox_perms: Option<SandboxPermissions>,
     /// Data directory root for resolving output paths.
     data_dir: PathBuf,
+    /// Resolved log level for this plugin (per-capability override or global fallback).
+    log_level: Option<String>,
     progress: RwLock<SubprocessProgress>,
 }
 
@@ -91,6 +93,7 @@ impl SubprocessCapability {
             output_declarations: Vec::new(),
             sandbox_perms: None,
             data_dir: PathBuf::new(),
+            log_level: None,
             progress: RwLock::new(SubprocessProgress { phase: "init".into(), percent: None, output: None, error: None }),
         }
     }
@@ -110,6 +113,12 @@ impl SubprocessCapability {
     /// Set the data directory for resolving output paths.
     pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
         self.data_dir = data_dir;
+        self
+    }
+
+    /// Set the resolved log level for this plugin.
+    pub fn with_log_level(mut self, level: String) -> Self {
+        self.log_level = Some(level);
         self
     }
 
@@ -357,11 +366,13 @@ impl Capability for SubprocessCapability {
             progress.error = None;
         }
 
-        // Per-capability scoped directory — create it and config/ subdir before spawning
+        // Per-capability scoped directory — create it, config/ and logs/ subdirs before spawning
         let scoped_data_dir = self.scoped_data_dir();
+        let log_dir = scoped_data_dir.join("logs");
         tokio::fs::create_dir_all(scoped_data_dir.join("config"))
             .await
             .map_err(|e| anyhow::anyhow!("failed to create capability dir {}: {e}", scoped_data_dir.display()))?;
+        tokio::fs::create_dir_all(&log_dir).await.map_err(|e| anyhow::anyhow!("failed to create log dir {}: {e}", log_dir.display()))?;
 
         let mut child = self
             .build_spawn_command()
@@ -433,6 +444,8 @@ impl Capability for SubprocessCapability {
             max_concurrent_llm: ctx.max_concurrent_llm,
             mcp_servers: self.manifest.mcp_servers.clone(),
             timeout_secs: 600,
+            log_dir: Some(log_dir.to_string_lossy().into_owned()),
+            log_level: self.log_level.clone(),
         };
 
         Self::initialize(&stdin, &mut reader, &init_params).await?;

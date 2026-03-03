@@ -149,7 +149,12 @@ async fn cmd_run(
 
     // Build capability registry first, then filter config to only capabilities
     // that have a backing implementation (built-in or installed plugin).
-    let registry = Arc::new(corre_host::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir));
+    let registry = Arc::new(corre_host::registry::CapabilityRegistry::from_config(
+        &config.capabilities,
+        &plugins,
+        &data_dir,
+        &config.general.log_level,
+    ));
     config.capabilities.retain(|c| registry.get(&c.name).is_some());
 
     // Create execution tracker for dashboard (only contains real capabilities)
@@ -281,7 +286,8 @@ async fn cmd_run_now(
     plugins: Vec<corre_core::plugin::DiscoveredPlugin>,
 ) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
-    let registry = corre_host::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir);
+    let registry =
+        corre_host::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir, &config.general.log_level);
 
     let (output, mcp_pool) = run_capability_pipeline(&config, &registry, capability_name, None).await?;
 

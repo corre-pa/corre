@@ -817,6 +817,7 @@ async fn capability_install_handler(
         enabled: true,
         llm: None,
         plugin: Some(plugin_dir.to_string_lossy().into_owned()),
+        log_level: None,
     };
     state.tracker.add_capability(&cap_config).await;
 
