@@ -1,8 +1,16 @@
-//! Shared types for the daily-brief capability.
+//! Shared types for the `daily-brief` capability.
 //!
-//! The `Edition` struct lives here so that both the `daily-brief` binary
-//! (which writes editions) and `corre-news` (which reads and serves them)
-//! can share the same serialisation format without either depending on the other.
+//! The [`Edition`] struct lives here so that both the `daily-brief` binary (which writes
+//! editions) and `corre-news` (which reads and serves them) can share the same serialisation
+//! format without either depending on the other. The crate re-exports core output types
+//! ([`Article`], [`Section`], [`Source`], [`ContentType`], [`CustomContent`]) from `corre-sdk`
+//! for convenience.
+//!
+//! # Key types
+//!
+//! - **[`Edition`]** — a dated collection of [`Section`]s with an auto-selected headline
+//!   (highest-scoring article title), a tagline, and optional custom HTML content. Constructed
+//!   via [`Edition::new`].
 
 pub use corre_sdk::types::{Article, ContentType, CustomContent, Section, Source};
 

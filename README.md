@@ -1,5 +1,7 @@
 # Corre
 
+> Last updated at v0.17.0
+
 A personal AI task scheduler that runs modular *capabilities* on cron schedules and publishes
 their output as a newspaper-style web interface called **CorreNews**.
 
@@ -24,7 +26,7 @@ their output as a newspaper-style web interface called **CorreNews**.
 
 The first end-to-end capability ships with the MVP. Each morning it:
 
-1. Reads topics from `config/topics.md`
+1. Reads topics from `config/topics.yml`
 2. Searches the web for each topic via the Brave Search MCP server
 3. Deduplicates results and asks an LLM to score them for newsworthiness
 4. Summarises the top stories
@@ -50,15 +52,15 @@ The binary is at `target/release/corre`.
 
 ### 2. Set up API keys
 
-Corre never stores secrets in config files. Instead, `corre.toml` references environment
-variable *names*, and you set the actual values in your shell or a `.env` file.
+Corre never stores secrets in config files. Instead, `corre.toml` uses `${VAR}` references that
+are resolved from the environment at runtime. Set the actual values in your shell or `.env` file.
 
 ```sh
 # LLM provider (Venice.ai by default, or any OpenAI-compatible API)
 export VENICE_API_KEY="your-venice-api-key"
 
 # Brave Search (used by the daily-brief capability)
-export BRAVE_API_KEY="BRAVE_API_KEY"
+export BRAVE_API_KEY="your-brave-api-key"
 ```
 
 ### 3. Configure
@@ -73,11 +75,13 @@ Edit `~/.local/share/corre/corre.toml` to point at your preferred LLM provider:
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"   # or http://localhost:11434/v1 for Ollama
-model = "zai-org-glm-4.7-flash"
-api_key_env = "VENICE_API_KEY"               # name of the env var, not the key itself
+model = "nvidia-nemotron-3-nano-30b-a3b"
+api_key = "${VENICE_API_KEY}"                # ${VAR} references are resolved from the environment
+temperature = 0.3
+max_concurrent = 10                          # parallel LLM requests; tune to your provider's rate limit
 ```
 
-Edit `~/.local/share/corre/config/topics.md` to choose your daily brief topics:
+Edit `~/.local/share/corre/config/topics.yml` to choose your daily brief topics:
 
 ```markdown
 ## Technology
@@ -113,13 +117,19 @@ server runs as a separate service (see `corre-news`).
 corre [OPTIONS] <COMMAND>
 
 Commands:
-  run       Start the full daemon (scheduler + dashboard)
-  run-now   Run a single capability immediately and exit
+  run           Start the full daemon (scheduler + dashboard)
+  run-now       Run a single capability immediately and exit
+  setup         Interactive setup wizard — configure LLM, API keys, topics, and systemd
+  install-deps  Check and install required external dependencies
+  health        Health check: verify data dir and config are accessible (exit 0/1)
 
 Options:
   -c, --config <CONFIG>  Path to config file [default: ~/.local/share/corre/corre.toml]
   -h, --help             Print help
 ```
+
+Running `corre` with no subcommand launches the setup wizard if no config exists, or prints help
+otherwise.
 
 ## Remote access via Tailscale
 
@@ -167,12 +177,13 @@ docker compose logs corre-core | grep "Tailscale is up"
 # Expected: Tailscale is up: 100.x.x.x
 ```
 
-Once running, both services are available over the tailnet with automatic HTTPS:
+Once running, the services are available over the tailnet with automatic HTTPS:
 
-| Service | URL |
-|---------|-----|
-| Dashboard | `https://corre.<tailnet>.ts.net/` |
-| CorreNews | `https://corre.<tailnet>.ts.net:8443/` |
+| Service | Port | URL |
+|---------|------|-----|
+| Dashboard | 5500 | `https://corre.<tailnet>.ts.net:5500/` |
+| CorreNews | 5510 | `https://corre.<tailnet>.ts.net:5510/` |
+| Registry  | 5580 | `https://corre.<tailnet>.ts.net:5580/` |
 
 Replace `corre` with whatever you set `TS_HOSTNAME` to, and `<tailnet>` with your tailnet name
 (visible in the admin console, e.g. `tail1234a.ts.net`).
@@ -219,8 +230,8 @@ Google Play, open it, and sign in.
 
 Once Tailscale is running on both the server and your device, open a browser and navigate to:
 
-- **Dashboard:** `https://corre.<tailnet>.ts.net/`
-- **CorreNews:** `https://corre.<tailnet>.ts.net:8443/`
+- **Dashboard:** `https://corre.<tailnet>.ts.net:5500/`
+- **CorreNews:** `https://corre.<tailnet>.ts.net:5510/`
 
 The HTTPS certificates are provisioned automatically by Tailscale via Let's Encrypt -- no
 manual certificate setup is needed. The connection is end-to-end encrypted over WireGuard and
@@ -233,7 +244,7 @@ never traverses the public internet.
 | `Tailscale is up` never appears in logs | Check that `TAILSCALE_AUTHKEY` is valid and not expired. Generate a new key in the admin console if needed. |
 | Browser shows certificate error | Ensure HTTPS Certificates are enabled in the Tailscale admin DNS settings. |
 | Connection times out from a device | Verify the device is signed into the same Tailscale account and shows as "Connected" in the client. |
-| `corre-news` unreachable on 8443 | Confirm both containers are on the `corre-internal` Docker network (`docker network inspect corre-internal`). |
+| `corre-news` unreachable on 5510 | Confirm both containers are on the `corre-internal` Docker network (`docker network inspect corre-internal`). |
 | Dashboard loads but CorreNews doesn't | `corre-news` depends on `corre-core` being healthy. Check `docker compose ps` and `docker compose logs corre-news`. |
 
 ## Architecture
@@ -243,53 +254,73 @@ never traverses the public internet.
 ```
 corre/                              # source repository
   templates/
-    newspaper.html                  # full-page template (latest edition)
-    edition.html                    # edition page with archive nav
+    newspaper.html                  # CorreNews edition template
+    topics.html                     # topics editor page
   static/
     style.css                       # newspaper CSS
+    settings.css                    # settings/topics page CSS
+    topics.js                       # topics editor JS
   crates/
-    corre-core/                     # shared types and traits
+    corre-sdk/                      # types + protocol for subprocess capabilities
+    corre-core/                     # shared types, traits, config, scheduler
+    corre-host/                     # subprocess capability host (CCPP protocol)
     corre-mcp/                      # MCP server pool
-    corre-llm/                      # LLM provider
-    corre-news/                     # web server + archive + search
-    corre-capabilities/             # capability implementations
+    corre-llm/                      # LLM provider (OpenAI-compatible)
+    corre-news/                     # CorreNews web server + archive + search
+    corre-dashboard/                # operator dashboard web UI + API
+    corre-capabilities/             # built-in capability implementations
     corre-safety/                   # prompt injection defense middleware
+    corre-registry/                 # MCP server + capability registry client
     corre-cli/                      # binary entry point
+    daily-brief/                    # daily research brief (subprocess capability)
+    mcp-smtp/                       # SMTP email MCP server
+    mcp-telegram/                   # Telegram messaging MCP server
 
 ~/.local/share/corre/               # runtime data directory
   corre.toml                        # main config file
+  .env                              # API keys (created by `corre setup`)
   config/
     topics.yml                      # user-editable per-capability config
+    mcp/                            # per-MCP server config files (*.toml)
   editions/
     YYYY-MM-DD/edition.json         # archived editions
+  plugins/                          # installed capability plugins
+  bin/                              # locally installed MCP server binaries
   search_index/                     # Tantivy full-text search index
-  .env                              # API keys (created by `corre setup`)
+  capabilities_logs/                # daily-rotating capability log files
 ```
 
 ### Crate dependency graph
 
 ```
 corre-cli
-  |-- corre-core
+  |-- corre-core       --> corre-sdk
+  |-- corre-host       --> corre-core, corre-sdk
   |-- corre-mcp        --> corre-core
   |-- corre-llm        --> corre-core
   |-- corre-safety     --> corre-core
   |-- corre-capabilities --> corre-core, corre-mcp, corre-llm
   |-- corre-dashboard  --> corre-core, corre-sdk, corre-registry
+  |-- corre-registry
 
-corre-news (standalone)
+corre-news (standalone binary)
   |-- corre-core
+
+daily-brief (subprocess capability)
   |-- corre-sdk
-  |-- daily-brief      (Edition type)
 ```
 
-`corre-core` sits at the bottom with zero internal dependencies. It defines the trait
-abstractions that the other crates implement or consume.
+`corre-sdk` sits at the very bottom with zero internal dependencies — it defines the types and
+protocol that subprocess capabilities use to communicate with the host. `corre-core` depends
+only on `corre-sdk` and defines the trait abstractions that the host-side crates implement.
 
 ### Key abstractions (`corre-core`)
 
 **`Capability`** -- the unit of work. Each capability declares a manifest (name, cron schedule,
 required MCP servers) and an `execute` method that receives a context and returns articles.
+Capabilities can be built-in (compiled into the host binary) or subprocess plugins that
+communicate over stdin/stdout using the CCPP (Corre Capability Plugin Protocol) JSON-RPC
+protocol — see `CAPABILITY_GUIDE.md` for details.
 
 ```rust
 #[async_trait]
@@ -312,26 +343,64 @@ the edition headline.
 
 ### MCP server pool (`corre-mcp`)
 
-MCP servers are defined in `corre.toml` under `[mcp.servers.*]`. They are started lazily as
-stdio child processes on first use, cached for the duration of a capability run, and shut down
-afterward. Environment variable references in the `env` table (e.g. `$BRAVE_API_KEY`) are
-resolved at spawn time from the host environment.
+Each MCP server has its own config file at `~/.local/share/corre/config/mcp/{name}.toml`
+(e.g. `brave-search.toml`). These are created automatically when you install an MCP server
+through the dashboard or the registry. A typical MCP config file:
+
+```toml
+registry_id = "brave-search"
+command = "npx"
+args = ["-y", "@brave/brave-search-mcp-server"]
+installed = true
+
+[env]
+BRAVE_API_KEY = "${BRAVE_API_KEY}"
+```
+
+MCP servers are started lazily as stdio child processes on first use, cached for the duration
+of a capability run, and shut down afterward. Environment variable references (`${VAR}` syntax)
+in the `env` table are resolved at spawn time from the host environment.
 
 ### CorreNews web server (`corre-news`)
 
-- **Axum** HTTP server with askama-rendered newspaper templates
-- **Filesystem archive**: editions stored as dated JSON at
-  `~/.local/share/corre/editions/YYYY-MM-DD/edition.json`
-- **Tantivy** full-text search index over all archived articles, queryable at `GET /search?q=...`
+Standalone binary (port 5510 by default). Axum HTTP server with askama-rendered newspaper
+templates, a filesystem edition archive, and a Tantivy full-text search index.
 
 Routes:
 
 | Path | Description |
 |------|-------------|
 | `GET /` | Latest edition |
-| `GET /edition/:date` | Specific edition with archive navigation |
+| `GET /edition/{date}` | Specific edition with archive navigation |
+| `GET /api/dates` | List available edition dates (JSON) |
 | `GET /search?q=...&limit=N` | Full-text search (returns JSON) |
+| `GET /settings/topics` | Topics editor page (requires `editor_token`) |
+| `GET /api/topics` | Read topics config (JSON) |
+| `PUT /api/topics` | Update topics config |
+| `GET /plugin/{name}/static/{*path}` | Plugin static assets |
 | `GET /static/*` | CSS and static assets |
+
+Set `editor_token` in the `[news]` section to enable the `/settings/topics` page — requests
+must include `?token=<value>` to authenticate.
+
+### Operator dashboard (`corre-dashboard`)
+
+Embedded in the `corre run` process (port 5500 by default). Provides a web UI and REST API
+for monitoring and managing capabilities at runtime.
+
+Key API routes:
+
+| Path | Description |
+|------|-------------|
+| `GET /` | Dashboard web UI |
+| `GET /api/dashboard/status` | Capability execution status (JSON) |
+| `POST /api/dashboard/run/{name}` | Trigger a capability run immediately |
+| `GET /api/dashboard/events` | SSE stream of real-time progress and log events |
+| `GET,PUT /api/settings` | Read/update `corre.toml` settings |
+| `GET /api/registry/catalog` | Browse the MCP server registry |
+| `POST /api/mcp/install` | Install an MCP server from the registry |
+| `POST /api/capabilities/install` | Install a capability plugin |
+| `POST /api/system/restart` | Graceful restart |
 
 ### Scheduler (`corre-core` + `corre-cli`)
 
@@ -339,22 +408,24 @@ The scheduler wraps `tokio-cron-scheduler`. For each enabled capability in confi
 registers an async callback that:
 
 1. Builds an MCP pool with the capability's declared servers
-2. Initializes the LLM provider
-3. Runs the capability with a 10-minute timeout
-4. Stores the resulting edition and updates the search index
+2. Initializes the LLM provider (with per-capability model/temperature overrides if configured)
+3. Wraps MCP and LLM with the safety layer (if enabled)
+4. Runs the capability in an isolated `tokio` task
+5. Forwards real-time progress events to the dashboard via SSE
 
-Capabilities run in isolated `tokio` tasks. A panic or timeout in one capability does not affect
-the scheduler or other capabilities.
+The dashboard can also trigger capabilities on demand via `POST /api/dashboard/run/{name}`.
+A panic or timeout in one capability does not affect the scheduler or other capabilities.
 
-### Daily Brief pipeline (`corre-capabilities`)
+### Daily Brief pipeline (`daily-brief`)
 
+The daily brief runs as a subprocess capability (its own binary communicating via CCPP).
 A deterministic, multi-step pipeline with LLM calls at specific points:
 
-1. **Parse** `config/topics.md` into sections and search queries
+1. **Parse** `config/topics.yml` into sections and search queries
 2. **Search** each query via the `brave-search` MCP server
-3. **Deduplicate** results by URL within each section
+3. **Deduplicate** results by URL within each section (and cross-edition via `seen_urls`)
 4. **Score** results for newsworthiness (LLM call, structured JSON output)
-5. **Filter** to top 5 results per section above the score threshold
+5. **Filter** to top results per section above the score threshold
 6. **Summarise** each top result in 2-3 paragraphs (LLM call)
 7. **Emit** `CapabilityOutput` with articles grouped by section
 
@@ -429,30 +500,42 @@ log_level = "info"                   # or RUST_LOG env var
 [llm]
 provider = "openai-compatible"
 base_url = "https://api.venice.ai/api/v1"
-model = "zai-org-glm-4.7-flash"
-api_key_env = "VENICE_API_KEY"       # env var name, never the actual key
+model = "nvidia-nemotron-3-nano-30b-a3b"
+api_key = "${VENICE_API_KEY}"        # ${VAR} syntax — resolved from env at runtime
 temperature = 0.3
+max_concurrent = 10                  # parallel LLM requests; tune to your provider's rate limit
+
+# Provider-specific parameters passed through to the API request body:
+# [llm.extra_body]
+# stream = false
+# reasoning_effort = "minimal"
+# [llm.extra_body.venice_parameters]
+# include_venice_system_prompt = false
 
 [news]
 bind = "127.0.0.1:5510"
-title = "CorreNews"
-
-[mcp.servers.brave-search]
-command = "npx"
-args = ["-y", "@brave/brave-search-mcp-server"]
-env = { BRAVE_API_KEY = "BRAVE_API_KEY" }   # env var name, same pattern as api_key_env
+title = "Corre News"
+# editor_token = "your-secret"      # set to enable /settings/topics page
 
 [[capabilities]]
 name = "daily-brief"
+description = "Researches topics and produces a daily news briefing"
 schedule = "0 0 5 * * *"
 mcp_servers = ["brave-search"]
-config_path = "config/topics.md"
+config_path = "config/topics.yml"
 enabled = true
+
+# Per-capability LLM overrides (model selection and generation params only):
+# [capabilities.llm]
+# model = "gpt-4o"
+# temperature = 0.7
+# max_concurrent = 5
 ```
 
-To add a new MCP server, append a `[mcp.servers.<name>]` block. To add a new capability, append
+MCP servers are configured as individual files under `config/mcp/` (see the MCP server pool
+section above). To add a new capability, either install a plugin through the dashboard or append
 a `[[capabilities]]` entry referencing the MCP servers it needs.
 
 ## License
 
-MIT
+LicenseRef-Proprietary
