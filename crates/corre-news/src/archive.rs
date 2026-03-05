@@ -1,9 +1,9 @@
 //! Filesystem-backed archive for `Edition` values.
 //!
-//! Editions are stored per-capability under
-//! `{data_dir}/{capability}/editions/YYYY-MM-DD/edition.json`.
+//! Editions are stored per-app under
+//! `{data_dir}/{app}/editions/YYYY-MM-DD/edition.json`.
 //! The archive scans all `{data_dir}/*/editions/` directories so that
-//! editions from any capability are discovered automatically.
+//! editions from any app are discovered automatically.
 
 use crate::edition::Edition;
 use anyhow::Context;
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// Filesystem-based archive for editions.
 ///
 /// Scans `{data_dir}/*/editions/` for date-named subdirectories containing
-/// `edition.json` files. Multiple capabilities may produce editions for the
+/// `edition.json` files. Multiple apps may produce editions for the
 /// same date; in that case the sections are merged into a single edition.
 pub struct Archive {
     data_dir: PathBuf,
@@ -39,7 +39,7 @@ impl Archive {
             .collect()
     }
 
-    /// Load an edition by date, merging across capability directories.
+    /// Load an edition by date, merging across app directories.
     pub fn load(&self, date: NaiveDate) -> anyhow::Result<Option<Edition>> {
         let date_str = date.format("%Y-%m-%d").to_string();
         let mut merged: Option<Edition> = None;
@@ -128,16 +128,16 @@ mod tests {
         )
     }
 
-    /// Write an edition into the per-capability layout expected by Archive.
-    fn write_edition(data_dir: &Path, capability: &str, edition: &Edition) {
-        let dir = data_dir.join(capability).join("editions").join(edition.date.format("%Y-%m-%d").to_string());
+    /// Write an edition into the per-app layout expected by Archive.
+    fn write_edition(data_dir: &Path, app: &str, edition: &Edition) {
+        let dir = data_dir.join(app).join("editions").join(edition.date.format("%Y-%m-%d").to_string());
         std::fs::create_dir_all(&dir).unwrap();
         let json = serde_json::to_string_pretty(edition).unwrap();
         std::fs::write(dir.join("edition.json"), json).unwrap();
     }
 
     #[test]
-    fn load_edition_from_capability_dir() {
+    fn load_edition_from_app_dir() {
         let dir = tempdir().unwrap();
         let archive = Archive::new(dir.path());
         let edition = sample_edition();
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn list_dates_across_capabilities() {
+    fn list_dates_across_apps() {
         let dir = tempdir().unwrap();
         let archive = Archive::new(dir.path());
 
@@ -161,7 +161,7 @@ mod tests {
         let e2 = sample_edition();
         write_edition(dir.path(), "daily-brief", &e2);
 
-        // Same date from a different capability
+        // Same date from a different app
         write_edition(dir.path(), "other-cap", &e2);
 
         let dates = archive.list_dates().unwrap();
@@ -171,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_editions_from_multiple_capabilities() {
+    fn merge_editions_from_multiple_apps() {
         let dir = tempdir().unwrap();
         let archive = Archive::new(dir.path());
 

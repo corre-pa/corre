@@ -1,6 +1,6 @@
 //! CCPP v1 JSON-RPC 2.0 message types.
 
-use crate::types::CapabilityOutput;
+use crate::types::AppOutput;
 use serde::{Deserialize, Serialize};
 
 // ── Error codes ──────────────────────────────────────────────────────────
@@ -96,11 +96,11 @@ fn is_false(v: &bool) -> bool {
 
 // ── Method parameter/result structs ──────────────────────────────────────
 
-/// `initialize` (Host → Capability) params.
+/// `initialize` (Host → App) params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitializeParams {
     pub protocol_version: String,
-    pub capability_name: String,
+    pub app_name: String,
     pub config_dir: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_path: Option<String>,
@@ -134,7 +134,7 @@ pub struct InitializeResult {
     pub capabilities: serde_json::Value,
 }
 
-/// `mcp/callTool` (Capability → Host) params.
+/// `mcp/callTool` (App → Host) params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpCallToolParams {
     pub server_name: String,
@@ -143,7 +143,7 @@ pub struct McpCallToolParams {
     pub arguments: serde_json::Value,
 }
 
-/// `mcp/listTools` (Capability → Host) params.
+/// `mcp/listTools` (App → Host) params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpListToolsParams {
     pub server_name: String,
@@ -166,25 +166,25 @@ pub struct LogParams {
     pub message: String,
 }
 
-/// `capability/result` notification params.
+/// `app/result` notification params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityResultParams {
-    pub output: CapabilityOutput,
+pub struct AppResultParams {
+    pub output: AppOutput,
 }
 
-/// `capability/error` notification params.
+/// `app/error` notification params.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityErrorParams {
+pub struct AppErrorParams {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partial_output: Option<CapabilityOutput>,
+    pub partial_output: Option<AppOutput>,
 }
 
 // ── Output method params ─────────────────────────────────────────────────
 
-/// `output/write` (Capability → Host) params: write a file to a permitted path.
+/// `output/write` (App → Host) params: write a file to a permitted path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputWriteParams {
     /// Relative path under `data_dir` (e.g. "editions/2026-02-26/edition.json").
@@ -195,7 +195,7 @@ pub struct OutputWriteParams {
     pub content_type: Option<String>,
 }
 
-/// `output/stream` (Capability → Host, Notification): stream text chunks.
+/// `output/stream` (App → Host, Notification): stream text chunks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputStreamParams {
     pub chunk: String,
@@ -203,7 +203,7 @@ pub struct OutputStreamParams {
     pub r#final: bool,
 }
 
-/// `output/rest` (Capability → Host) params: POST to a permitted REST endpoint.
+/// `output/rest` (App → Host) params: POST to a permitted REST endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputRestParams {
     pub url: String,
@@ -212,7 +212,7 @@ pub struct OutputRestParams {
     pub content_type: Option<String>,
 }
 
-/// `output/webhook` (Capability → Host) params: fire a webhook.
+/// `output/webhook` (App → Host) params: fire a webhook.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputWebhookParams {
     pub url: String,
@@ -271,8 +271,8 @@ pub const ALLOWED_METHODS: &[&str] = &[
     "llm/complete",
     "progress",
     "log",
-    "capability/result",
-    "capability/error",
+    "app/result",
+    "app/error",
     "shutdown",
     "cancel",
     // Output methods (v2)
@@ -358,7 +358,7 @@ mod tests {
     fn initialize_params_round_trip() {
         let params = InitializeParams {
             protocol_version: "1.0".into(),
-            capability_name: "daily-brief".into(),
+            app_name: "daily-brief".into(),
             config_dir: "/home/user/.local/share/corre".into(),
             config_path: Some("config/topics.yml".into()),
             seen_urls: vec!["https://example.com".into()],
@@ -370,6 +370,6 @@ mod tests {
         };
         let json = serde_json::to_value(&params).unwrap();
         let parsed: InitializeParams = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed.capability_name, "daily-brief");
+        assert_eq!(parsed.app_name, "daily-brief");
     }
 }

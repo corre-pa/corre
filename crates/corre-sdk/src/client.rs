@@ -1,18 +1,18 @@
-//! Async helper for capability authors to interact with the host via CCPP.
+//! Async helper for app authors to interact with the host via CCPP.
 //!
-//! [`CapabilityClient`] spawns a background reader task that demultiplexes incoming
+//! [`AppClient`] spawns a background reader task that demultiplexes incoming
 //! messages: responses are routed to their waiting callers via oneshot channels, while
 //! requests and notifications from the host (e.g. shutdown, cancel) are forwarded to an
-//! mpsc channel readable via [`read_message`](CapabilityClient::read_message). This
+//! mpsc channel readable via [`read_message`](AppClient::read_message). This
 //! allows multiple RPC round-trips to be in-flight simultaneously.
 
 use crate::codec::{CodecReader, CodecWriter};
 use crate::llm::{LlmRequest, LlmResponse};
 use crate::protocol::{
-    CapabilityErrorParams, CapabilityResultParams, InitializeParams, InitializeResult, LogParams, McpCallToolParams, McpListToolsParams,
-    Message, Notification, OutputRestParams, OutputStreamParams, OutputWebhookParams, OutputWriteParams, ProgressParams, Request, Response,
+    AppErrorParams, AppResultParams, InitializeParams, InitializeResult, LogParams, McpCallToolParams, McpListToolsParams, Message,
+    Notification, OutputRestParams, OutputStreamParams, OutputWebhookParams, OutputWriteParams, ProgressParams, Request, Response,
 };
-use crate::types::CapabilityOutput;
+use crate::types::AppOutput;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,12 +20,12 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-/// A CCPP client that capability binaries use to communicate with the host.
+/// A CCPP client that app binaries use to communicate with the host.
 ///
 /// Handles the JSON-RPC transport, request ID tracking, and response demultiplexing.
 /// A background reader task reads all incoming messages and dispatches responses to
 /// the correct waiter, enabling true concurrent RPC calls.
-pub struct CapabilityClient<W: AsyncWrite + Unpin + Send> {
+pub struct AppClient<W: AsyncWrite + Unpin + Send> {
     writer: Mutex<CodecWriter<W>>,
     next_id: AtomicU64,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>>,
@@ -33,14 +33,14 @@ pub struct CapabilityClient<W: AsyncWrite + Unpin + Send> {
     reader_handle: JoinHandle<()>,
 }
 
-impl CapabilityClient<tokio::io::Stdout> {
+impl AppClient<tokio::io::Stdout> {
     /// Create a client connected to stdin/stdout (the standard CCPP transport).
     pub fn from_stdio() -> Self {
         Self::new(tokio::io::stdin(), tokio::io::stdout())
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send + 'static> CapabilityClient<W> {
+impl<W: AsyncWrite + Unpin + Send + 'static> AppClient<W> {
     pub fn new<R: AsyncRead + Unpin + Send + 'static>(reader: R, writer: W) -> Self {
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Response>>>> = Arc::new(Mutex::new(HashMap::new()));
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
@@ -58,7 +58,7 @@ impl<W: AsyncWrite + Unpin + Send + 'static> CapabilityClient<W> {
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send> CapabilityClient<W> {
+impl<W: AsyncWrite + Unpin + Send> AppClient<W> {
     /// Wait for the `initialize` request from the host and return the params.
     /// Automatically sends the initialize response.
     pub async fn accept_initialize(&self) -> anyhow::Result<InitializeParams> {
@@ -127,16 +127,16 @@ impl<W: AsyncWrite + Unpin + Send> CapabilityClient<W> {
         self.send_notification("log", serde_json::to_value(&params)?).await
     }
 
-    /// Send the final capability result to the host.
-    pub async fn send_result(&self, output: CapabilityOutput) -> anyhow::Result<()> {
-        let params = CapabilityResultParams { output };
-        self.send_notification("capability/result", serde_json::to_value(&params)?).await
+    /// Send the final app result to the host.
+    pub async fn send_result(&self, output: AppOutput) -> anyhow::Result<()> {
+        let params = AppResultParams { output };
+        self.send_notification("app/result", serde_json::to_value(&params)?).await
     }
 
     /// Send an error notification to the host.
-    pub async fn send_error(&self, message: &str, phase: Option<&str>, partial_output: Option<CapabilityOutput>) -> anyhow::Result<()> {
-        let params = CapabilityErrorParams { message: message.into(), phase: phase.map(Into::into), partial_output };
-        self.send_notification("capability/error", serde_json::to_value(&params)?).await
+    pub async fn send_error(&self, message: &str, phase: Option<&str>, partial_output: Option<AppOutput>) -> anyhow::Result<()> {
+        let params = AppErrorParams { message: message.into(), phase: phase.map(Into::into), partial_output };
+        self.send_notification("app/error", serde_json::to_value(&params)?).await
     }
 
     // ── Output methods ─────────────────────────────────────────────────
@@ -215,7 +215,7 @@ impl<W: AsyncWrite + Unpin + Send> CapabilityClient<W> {
     }
 }
 
-impl<W: AsyncWrite + Unpin + Send> Drop for CapabilityClient<W> {
+impl<W: AsyncWrite + Unpin + Send> Drop for AppClient<W> {
     fn drop(&mut self) {
         self.reader_handle.abort();
     }

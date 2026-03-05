@@ -6,7 +6,7 @@
 use crate::config::{PolicyAction, SafetyConfig};
 use crate::report::SanitizationReport;
 use crate::{leak_detector, policy, sanitizer, validator};
-use corre_core::capability::{McpCallError, McpCaller};
+use corre_core::app::{McpCallError, McpCaller};
 
 /// A safety-wrapping `McpCaller` that validates, sanitizes, and scans all tool outputs.
 pub struct SafeMcpCaller {

@@ -1,38 +1,38 @@
 # corre-host
 
-Subprocess capability host and plugin registry for Corre. Spawns capability plugin binaries,
+Subprocess app host and plugin registry for Corre. Spawns app plugin binaries,
 brokers their CCPP (Corre Capability Plugin Protocol) JSON-RPC requests, and manages the
-registry of all capabilities (built-in and plugin-based).
+registry of all apps (built-in and plugin-based).
 
 ## Role in the Corre project
 
 `corre-host` sits between `corre-core` (traits) and `corre-cli` (orchestration). It provides
-the generic infrastructure for running any capability as an isolated subprocess, regardless of
-how it was implemented. The CLI registers capabilities through the `CapabilityRegistry` and
+the generic infrastructure for running any app as an isolated subprocess, regardless of
+how it was implemented. The CLI registers apps through the `AppRegistry` and
 calls `execute()` on each one — the registry dispatches to the appropriate implementation.
 
 ## Key types
 
-### `CapabilityRegistry`
+### `AppRegistry`
 
-Maps capability names to `Arc<dyn Capability>` trait objects. Built from config entries and
+Maps app names to `Arc<dyn App>` trait objects. Built from config entries and
 discovered plugins:
 
 ```rust
-let registry = CapabilityRegistry::from_config(&configs, &plugins, &data_dir, "info");
+let registry = AppRegistry::from_config(&configs, &plugins, &data_dir, "info");
 let cap = registry.get("daily-brief").unwrap();
 let output = cap.execute(&ctx).await?;
 ```
 
-### `SubprocessCapability`
+### `SubprocessApp`
 
-Implements `Capability` for external plugin binaries. Handles the full CCPP lifecycle:
+Implements `App` for external plugin binaries. Handles the full CCPP lifecycle:
 
 1. Spawns the plugin binary with optional Landlock + seccomp sandbox
 2. Sends `initialize` request with config paths, MCP servers, and concurrency limits
 3. Runs a concurrent message loop dispatching `mcp/callTool`, `llm/complete`, and `output/write`
 4. Collects `progress` and `log` notifications for the dashboard
-5. Extracts the final `capability/result` or `capability/error`
+5. Extracts the final `app/result` or `app/error`
 
 Multiple RPC requests can be in-flight simultaneously — they are dispatched concurrently via
 `FuturesUnordered` and responses are routed back by request ID.
@@ -54,7 +54,7 @@ Host                           Plugin
   │                               │
   │◄─── progress ────────────────│  (notifications)
   │◄─── log ─────────────────────│
-  │◄─── capability/result ───────│
+  │◄─── app/result ─────────────│
   │                               │
   │──── shutdown ───────────────►│  (optional)
 ```
@@ -85,5 +85,5 @@ LLM errors are classified by HTTP status code and mapped to CCPP error codes:
 
 | Module | Purpose |
 |--------|---------|
-| `registry` | `CapabilityRegistry` — capability name to trait-object mapping |
-| `subprocess` | `SubprocessCapability` — CCPP host, message loop, RPC dispatch |
+| `registry` | `AppRegistry` — app name to trait-object mapping |
+| `subprocess` | `SubprocessApp` — CCPP host, message loop, RPC dispatch |

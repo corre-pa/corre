@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 corre-sdk = { workspace = true }
 corre-core = { workspace = true }
-daily-brief = { path = "../daily-brief" }
+daily-brief = { path = "../../apps/daily-brief" }
 axum = { workspace = true }
 askama = { workspace = true, features = ["serde_json"] }
 tantivy = { workspace = true }

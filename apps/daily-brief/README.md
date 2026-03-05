@@ -1,18 +1,18 @@
 # daily-brief
 
-A standalone subprocess capability that researches topics from a user-configured YAML file,
+A standalone subprocess app that researches topics from a user-configured YAML file,
 searches the web via the Brave Search MCP server, scores and summarises the results with an
 LLM, and produces a newspaper-style edition for CorreNews.
 
 ## Role in the Corre project
 
-`daily-brief` is the reference implementation for Corre's subprocess capability model. It
+`daily-brief` is the reference implementation for Corre's subprocess app model. It
 runs as its own binary, communicating with the Corre host over stdin/stdout using the CCPP
 protocol. The host spawns it, provides access to MCP tools and LLM completions, and persists
 the output.
 
 The crate produces both a library (shared `Edition` type consumed by `corre-news`) and a
-binary (the capability itself).
+binary (the app itself).
 
 ## Pipeline
 
@@ -27,7 +27,7 @@ The daily brief runs an 8-step deterministic pipeline:
 5. **Filter** — drop items with score <= 0.2, keep top 10 per source
 6. **Group** — collect articles into sections preserving the YAML ordering
 7. **Generate tagline** — LLM call at high temperature for a witty headline-inspired tagline
-8. **Persist** — write `edition.json` via `output/write`, send `CapabilityOutput` to host
+8. **Persist** — write `edition.json` via `output/write`, send `AppOutput` to host
 
 ## Configuration
 

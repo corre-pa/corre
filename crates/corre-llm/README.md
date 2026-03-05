@@ -6,7 +6,7 @@ OpenAI-compatible HTTP API.
 
 ## Role in the Corre project
 
-The `LlmProvider` trait is defined in `corre-core` so that capabilities and the safety middleware
+The `LlmProvider` trait is defined in `corre-core` so that apps and the safety middleware
 can depend on the abstraction without pulling in HTTP code. `corre-llm` provides the one
 concrete implementation used in production.
 
@@ -38,4 +38,4 @@ api_key     = "${VENICE_API_KEY}"
 temperature = 0.3
 ```
 
-Per-capability overrides are supported via `[capabilities.llm]` in `corre.toml`.
+Per-app overrides are supported via `[apps.llm]` in `corre.toml`.

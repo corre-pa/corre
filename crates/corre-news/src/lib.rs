@@ -1,6 +1,6 @@
 //! CorreNews — the newspaper-style web server and edition storage layer.
 //!
-//! Sits between the capability pipeline and the end user. After a capability produces
+//! Sits between the app pipeline and the end user. After an app produces
 //! output, the CLI calls into this crate to persist the resulting edition to disk, index
 //! its articles for search, and make it available on the web interface. The crate has no
 //! knowledge of how editions are produced.
@@ -12,7 +12,7 @@
 //!
 //! | Module | Description |
 //! |--------|-------------|
-//! | [`archive`] | Filesystem persistence under `{data_dir}/editions/YYYY-MM-DD/edition.json`. Merges editions from multiple capabilities on the same date and maintains a `_default` cache |
+//! | [`archive`] | Filesystem persistence under `{data_dir}/editions/YYYY-MM-DD/edition.json`. Merges editions from multiple apps on the same date and maintains a `_default` cache |
 //! | [`cache`] | In-memory `BTreeMap<NaiveDate, Edition>` loaded at startup, also tracks seen URLs for cross-edition deduplication |
 //! | [`config`] | [`NewsConfig`] — bind address, title, editor token, and data directory settings |
 //! | [`edition`] | Re-exports the [`Edition`] type (date, headline, sections, tagline, content type) |

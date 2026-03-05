@@ -1,16 +1,16 @@
-//! Standalone daily-brief capability binary.
+//! Standalone daily-brief app binary.
 //!
 //! Communicates with the host via the CCPP protocol over stdin/stdout using
-//! [`corre_sdk::CapabilityClient`]. This binary has no dependency on `corre-core`
-//! or `corre-capabilities` — it uses only `corre-sdk` types and utilities.
+//! [`corre_sdk::AppClient`]. This binary has no dependency on `corre-core`
+//! — it uses only `corre-sdk` types and utilities.
 
 use anyhow::Context as _;
 use corre_sdk::html::{sanitize_html, sanitize_url};
 use corre_sdk::tools::{
     SearchResultItem, extract_json, is_retryable_overload, normalize_freshness, parse_context_length_limit, parse_search_results,
 };
-use corre_sdk::types::{Article, CapabilityOutput, Section, Source};
-use corre_sdk::{CapabilityClient, LlmMessage, LlmRequest, LlmRole};
+use corre_sdk::types::{AppOutput, Article, Section, Source};
+use corre_sdk::{AppClient, LlmMessage, LlmRequest, LlmRole};
 use daily_brief::Edition;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 // ---------------------------------------------------------------------------
-// YAML config model (copied from corre-capabilities — no external deps)
+// YAML config model
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, serde::Deserialize)]
@@ -109,9 +109,9 @@ async fn main() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let client = Arc::new(CapabilityClient::from_stdio());
+    let client = Arc::new(AppClient::from_stdio());
     let params = client.accept_initialize().await?;
-    let _guard = corre_sdk::init_tracing(&params.capability_name, params.log_dir.as_deref(), params.log_level.as_deref());
+    let _guard = corre_sdk::init_tracing(&params.app_name, params.log_dir.as_deref(), params.log_level.as_deref());
 
     let config_dir = PathBuf::from(&params.config_dir);
     let editions_dir = config_dir.join("editions");
@@ -252,8 +252,8 @@ async fn run() -> anyhow::Result<()> {
     let output_sections: Vec<Section> =
         sections.iter().filter_map(|s| article_map.remove(&s.title).map(|articles| Section { title: s.title.clone(), articles })).collect();
 
-    let output = CapabilityOutput {
-        capability_name: "daily-brief".into(),
+    let output = AppOutput {
+        app_name: "daily-brief".into(),
         produced_at: chrono::Utc::now(),
         sections: output_sections.clone(),
         content_type: Default::default(),
@@ -297,14 +297,14 @@ async fn run() -> anyhow::Result<()> {
     client.write_file(&edition_path, &edition_json, Some("application/json")).await?;
     tracing::info!("Edition written to {edition_path}");
 
-    // Still send the CapabilityOutput so the host can track it
+    // Still send the AppOutput so the host can track it
     client.send_result(output).await?;
     Ok(())
 }
 
 /// Score and summarise a source's search results in a single LLM call.
 async fn score_and_summarize_source(
-    client: &CapabilityClient<tokio::io::Stdout>,
+    client: &AppClient<tokio::io::Stdout>,
     section_name: &str,
     select_if: &str,
     results: &[SearchResultItem],

@@ -6,7 +6,7 @@
 use crate::config::SafetyConfig;
 use crate::leak_detector;
 use crate::report::SanitizationReport;
-use corre_core::capability::{LlmProvider, LlmRequest, LlmResponse};
+use corre_core::app::{LlmProvider, LlmRequest, LlmResponse};
 
 /// A safety-wrapping `LlmProvider` that scans LLM responses for leaked secrets.
 ///

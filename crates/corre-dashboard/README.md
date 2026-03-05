@@ -8,11 +8,11 @@ styled as a old-school OS desktop.
 `corre-dashboard` is the control plane for the Corre runtime. It does not produce or archive
 information; it lets an operator observe the running system and act on it:
 
-- Watch capabilities execute in real time via SSE
-- Trigger a capability immediately
+- Watch apps execute in real time via SSE
+- Trigger an app immediately
 - Browse and install MCP servers from `corre-registry`
 - Edit and save `corre.toml` settings at runtime
-- Inspect historical capability logs
+- Inspect historical app logs
 
 The crate exposes an Axum router that is merged into the main web server by `corre-cli`.
 
@@ -34,8 +34,8 @@ All routes require an editor token (query parameter or `Authorization: Bearer` h
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/dashboard` | HTML dashboard page |
-| `GET` | `/api/dashboard/status` | Capability states and system metrics |
-| `POST` | `/api/dashboard/run/{name}` | Trigger immediate capability run |
+| `GET` | `/api/dashboard/status` | App states and system metrics |
+| `POST` | `/api/dashboard/run/{name}` | Trigger immediate app run |
 | `GET` | `/api/dashboard/events` | SSE stream of live updates |
 | `GET` | `/api/dashboard/logs/{date}` | Historical logs |
 | `GET/PUT` | `/api/settings` | Read/write `CorreConfig` |

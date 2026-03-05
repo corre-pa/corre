@@ -2,7 +2,7 @@
 //!
 //! The codec can be used as a combined [`MessageCodec`] or split into independent
 //! [`CodecReader`] and [`CodecWriter`] halves via [`MessageCodec::split`]. The split
-//! form is used by [`CapabilityClient`](crate::client::CapabilityClient) to allow a
+//! form is used by [`AppClient`](crate::client::AppClient) to allow a
 //! background reader task to run concurrently with writes.
 
 use crate::protocol::{MAX_MESSAGE_BYTES, Message, Notification, Request, Response};

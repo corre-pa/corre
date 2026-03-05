@@ -384,18 +384,18 @@ async fn put_topics_handler(
     (StatusCode::OK, "Topics saved.").into_response()
 }
 
-/// Resolve the topics file path for a capability under the plugin data directory.
+/// Resolve the topics file path for an app under the plugin data directory.
 ///
-/// If `cap_name` is given, looks up that capability; otherwise picks the first
-/// capability that declares a `config_path`. The primary path is
-/// `{data_dir}/{capability.name}/{config_path}`. If that doesn't exist yet,
+/// If `cap_name` is given, looks up that app; otherwise picks the first
+/// app that declares a `config_path`. The primary path is
+/// `{data_dir}/{app.name}/{config_path}`. If that doesn't exist yet,
 /// falls back to the legacy root location `{data_dir}/{config_path}` (from
 /// before the plugin architecture). Writes always target the primary path.
 fn resolve_topics_path(config: &CorreConfig, cap_name: Option<&str>) -> PathBuf {
     let data_dir = config.data_dir();
     let cap = match cap_name {
-        Some(name) => config.capabilities.iter().find(|c| c.name == name),
-        None => config.capabilities.iter().find(|c| c.config_path.is_some()),
+        Some(name) => config.apps.iter().find(|c| c.name == name),
+        None => config.apps.iter().find(|c| c.config_path.is_some()),
     };
     match cap.and_then(|c| c.config_path.as_ref().map(|p| (c, p))) {
         Some((c, p)) => {
@@ -415,8 +415,8 @@ fn resolve_topics_path(config: &CorreConfig, cap_name: Option<&str>) -> PathBuf 
 fn resolve_topics_write_path(config: &CorreConfig, cap_name: Option<&str>) -> PathBuf {
     let data_dir = config.data_dir();
     let cap = match cap_name {
-        Some(name) => config.capabilities.iter().find(|c| c.name == name),
-        None => config.capabilities.iter().find(|c| c.config_path.is_some()),
+        Some(name) => config.apps.iter().find(|c| c.name == name),
+        None => config.apps.iter().find(|c| c.config_path.is_some()),
     };
     match cap.and_then(|c| c.config_path.as_ref().map(|p| (c, p))) {
         Some((c, p)) => data_dir.join(&c.name).join(p),
@@ -439,7 +439,7 @@ fn no_editions_page(title: &str) -> String {
 <head><title>{title}</title><link rel="stylesheet" href="/static/style.css"></head>
 <body>
 <header><h1>{title}</h1></header>
-<main><p class="no-editions">No editions yet. Run a capability to generate your first edition.</p></main>
+<main><p class="no-editions">No editions yet. Run an app to generate your first edition.</p></main>
 </body>
 </html>"#
     )

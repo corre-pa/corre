@@ -14,7 +14,7 @@ max_concurrent = 10
 bind = "0.0.0.0:5510"
 title = "Corre News"
 
-[[capabilities]]
+[[apps]]
 name = "daily-brief"
 description = "Researches topics and produces a daily news briefing"
 schedule = "0 0 5 * * *"

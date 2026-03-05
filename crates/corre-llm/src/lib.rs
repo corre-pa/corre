@@ -1,7 +1,7 @@
 //! LLM provider for Corre — speaks the OpenAI `/chat/completions` wire format.
 //!
 //! Contains [`OpenAiCompatProvider`], the single concrete implementation of the
-//! [`LlmProvider`](corre_core::capability::LlmProvider) trait. Any service that exposes
+//! [`LlmProvider`](corre_core::app::LlmProvider) trait. Any service that exposes
 //! an OpenAI-compatible chat completion endpoint works out of the box: Venice.ai, OpenAI,
 //! Ollama, LM Studio, Together AI, and others.
 //!
@@ -19,7 +19,7 @@
 //! let response = provider.complete(LlmRequest::simple("system prompt", "user message")).await?;
 //! ```
 //!
-//! The provider resolves `${VAR}` references in `api_key` at construction time. Per-capability
+//! The provider resolves `${VAR}` references in `api_key` at construction time. Per-app
 //! model and temperature overrides are applied via
 //! [`LlmConfig::with_overrides`](corre_core::config::LlmConfig::with_overrides) before
 //! constructing the provider.

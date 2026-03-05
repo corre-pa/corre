@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A simplified LLM request used by capabilities.
+/// A simplified LLM request used by apps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmRequest {
     pub messages: Vec<LlmMessage>,

@@ -1,15 +1,15 @@
-# corre-capabilities
+# corre-plugin
 
-Built-in capability implementations and the capability registry for Corre.
+Built-in app implementations and the app registry for Corre.
 
 ## Role in the Corre project
 
-This crate contains the concrete capability logic that produces CorreNews editions. It sits
+This crate contains the concrete app logic that produces CorreNews editions. It sits
 near the top of the dependency graph, consuming `corre-core` (traits), `corre-mcp` (MCP calls),
 `corre-llm` (LLM completions), and `corre-db` (contact database). The CLI wires everything
-together and delegates execution to capabilities registered here.
+together and delegates execution to apps registered here.
 
-## Capabilities
+## Apps
 
 ### Daily Research Brief (`daily_brief`)
 
@@ -20,7 +20,7 @@ A multi-step pipeline that:
 3. Deduplicates results by URL
 4. Scores results for newsworthiness (LLM call)
 5. Summarises the top stories (LLM call)
-6. Emits a `CapabilityOutput` grouped by section
+6. Emits an `AppOutput` grouped by section
 
 ### Rolodex (`rolodex`)
 
@@ -30,28 +30,28 @@ executes each strategy, and publishes the results.
 
 ## Key types
 
-### `CapabilityRegistry`
+### `AppRegistry`
 
-Maps capability names to boxed `Capability` trait objects. Instantiates subprocess-backed
-plugin capabilities from `DiscoveredPlugin` entries.
+Maps app names to boxed `App` trait objects. Instantiates subprocess-backed
+plugin apps from `DiscoveredPlugin` entries.
 
 ```rust
-let registry = CapabilityRegistry::new(&config.capabilities, &plugins, &db_path);
+let registry = AppRegistry::new(&config.apps, &plugins, &db_path);
 let cap = registry.get("daily-brief").unwrap();
 ```
 
-### `SubprocessCapability`
+### `SubprocessApp`
 
 Runs an external plugin binary using the CCPP v1 protocol over stdin/stdout, allowing
-third-party capabilities without recompiling Corre.
+third-party apps without recompiling Corre.
 
 ## Modules
 
 | Module | Purpose |
 |--------|---------|
 | `daily_brief` | Daily Research Brief pipeline |
-| `rolodex` | Contact engagement capability |
+| `rolodex` | Contact engagement app |
 | `rolodex_import` | CSV/vCard/JSON import helpers for the contact database |
-| `registry` | `CapabilityRegistry` construction and lookup |
-| `subprocess` | CCPP v1 subprocess capability runner |
+| `registry` | `AppRegistry` construction and lookup |
+| `subprocess` | CCPP v1 subprocess app runner |
 | `tools` | Re-exports shared utilities from `corre-sdk` |

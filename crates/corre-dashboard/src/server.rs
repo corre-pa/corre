@@ -3,6 +3,8 @@
 //! `build_router` returns a fully-configured `Router` ready to be merged into the main
 //! application. All routes require a bearer editor token. The SSE endpoint streams
 //! `DashboardEvent` updates from `ExecutionTracker`.
+//!
+//! "App" routes manage installable plugin apps.
 
 use askama::Template;
 use axum::Router;
@@ -67,17 +69,17 @@ pub fn build_router(state: Arc<DashboardState>) -> Router {
         .route("/api/mcp/test/{name}", post(mcp_test_handler))
         .route("/api/mcp/config/{name}", get(mcp_config_handler))
         .route("/api/mcp/configure/{name}", axum::routing::put(mcp_configure_handler))
-        // Capability install/uninstall routes
-        .route("/api/capabilities/installed", get(capabilities_installed_handler))
-        .route("/api/capabilities/install", post(capability_install_handler))
-        .route("/api/capabilities/uninstall/{name}", post(capability_uninstall_handler))
+        // App install/uninstall routes
+        .route("/api/apps/installed", get(apps_installed_handler))
+        .route("/api/apps/install", post(app_install_handler))
+        .route("/api/apps/uninstall/{name}", post(app_uninstall_handler))
         // System management routes
         .route("/api/system/restart", post(system_restart_handler))
         // Service management routes
         .route("/api/services", get(services_list_handler))
         .route("/api/services/start", post(service_start_handler))
         .route("/api/services/stop/{name}", post(service_stop_handler))
-        // Config editor routes (generic per-capability config read/write)
+        // Config editor routes (generic per-app config read/write)
         .route("/api/config/{name}", get(get_config_handler).put(put_config_handler))
         .route("/dashboard/static/{*path}", get(static_handler))
         .with_state(state)
@@ -144,7 +146,7 @@ fn expand_link_url(url: &str, services: &[corre_sdk::manifest::ServiceDeclaratio
     result
 }
 
-/// Build a list of config editor entries for capabilities that declare a `config_path`
+/// Build a list of config editor entries for apps that declare a `config_path`
 /// and a `config_schema` in their plugin manifest. The returned JSON includes the
 /// serialised schema so the dashboard JS can build a form dynamically.
 fn collect_config_editors(config: &CorreConfig, plugins: &[DiscoveredPlugin]) -> Vec<serde_json::Value> {
@@ -152,17 +154,17 @@ fn collect_config_editors(config: &CorreConfig, plugins: &[DiscoveredPlugin]) ->
     let plugin_map: std::collections::HashMap<&str, &DiscoveredPlugin> =
         plugins.iter().map(|p| (p.manifest.plugin.name.as_str(), p)).collect();
     config
-        .capabilities
+        .apps
         .iter()
         .filter_map(|c| {
             let plugin = plugin_map.get(c.name.as_str())?;
             let defaults = &plugin.manifest.plugin.defaults;
-            // Only include capabilities that have both a config_path and a config_schema.
+            // Only include apps that have both a config_path and a config_schema.
             let _config_path = defaults.config_path.as_ref().or(c.config_path.as_ref())?;
             let schema = defaults.config_schema.as_ref()?;
             Some(serde_json::json!({
                 "name": c.name,
-                "cap": c.name,
+                "app": c.name,
                 "schema": schema,
             }))
         })
@@ -246,10 +248,10 @@ async fn status_handler(State(state): State<Arc<DashboardState>>, headers: Heade
     if let Err(resp) = require_auth(&state, &headers, &query).await {
         return resp;
     }
-    let capabilities = state.tracker.snapshot().await;
+    let apps = state.tracker.snapshot().await;
     let metrics = state.tracker.system_metrics();
     let body = serde_json::json!({
-        "capabilities": capabilities,
+        "apps": apps,
         "metrics": metrics,
     });
     axum::Json(body).into_response()
@@ -266,11 +268,11 @@ async fn run_now_handler(
     }
 
     if state.tracker.is_running(&name).await {
-        return (StatusCode::CONFLICT, format!("Capability `{name}` is already running")).into_response();
+        return (StatusCode::CONFLICT, format!("App `{name}` is already running")).into_response();
     }
 
     match state.run_trigger.try_send(name.clone()) {
-        Ok(()) => (StatusCode::ACCEPTED, format!("Capability `{name}` triggered")).into_response(),
+        Ok(()) => (StatusCode::ACCEPTED, format!("App `{name}` triggered")).into_response(),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Run queue is full, try again later").into_response(),
     }
 }
@@ -281,14 +283,14 @@ async fn sse_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMa
     }
 
     // Send initial snapshot, then stream incremental events
-    let initial_capabilities = state.tracker.snapshot().await;
+    let initial_apps = state.tracker.snapshot().await;
     let initial_metrics = state.tracker.system_metrics();
     let mut rx = state.tracker.subscribe();
 
     let stream = async_stream::stream! {
         // Send initial snapshot as individual events
-        for cap in initial_capabilities {
-            let event = DashboardEvent::CapabilityUpdate(cap);
+        for cap in initial_apps {
+            let event = DashboardEvent::AppUpdate(cap);
             if let Ok(data) = serde_json::to_string(&event) {
                 yield Ok::<_, Infallible>(Event::default().event("message").data(data));
             }
@@ -341,7 +343,7 @@ async fn historical_logs_handler(
         return (StatusCode::BAD_REQUEST, "Invalid date format, expected YYYY-MM-DD").into_response();
     }
 
-    let log_path = state.config.read().await.data_dir().join("capabilities_logs").join(format!("capability.log.{date}"));
+    let log_path = state.config.read().await.data_dir().join("app_logs").join(format!("app.log.{date}"));
 
     let contents = match tokio::fs::read_to_string(&log_path).await {
         Ok(c) => c,
@@ -362,7 +364,7 @@ async fn historical_logs_handler(
             let message = obj.get("fields").and_then(|f| f.get("message")).and_then(|m| m.as_str()).unwrap_or("").to_string();
             let target = obj.get("target").and_then(|t| t.as_str()).unwrap_or("unknown").to_string();
             Some(serde_json::json!({
-                "capability": target,
+                "app": target,
                 "entry": {
                     "timestamp": timestamp,
                     "level": level,
@@ -702,11 +704,11 @@ async fn mcp_configure_handler(
 }
 
 // =========================================================================
-// Capability install/uninstall endpoints
+// App install/uninstall endpoints
 // =========================================================================
 
-/// GET /api/capabilities/installed — list installed plugin capabilities.
-async fn capabilities_installed_handler(
+/// GET /api/apps/installed — list installed plugin apps.
+async fn apps_installed_handler(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
     Query(query): Query<TokenQuery>,
@@ -732,12 +734,12 @@ async fn capabilities_installed_handler(
 }
 
 #[derive(serde::Deserialize)]
-struct CapabilityInstallRequest {
+struct AppInstallRequest {
     id: String,
 }
 
-/// POST /api/capabilities/install — install a capability from the registry.
-async fn capability_install_handler(
+/// POST /api/apps/install — install an app from the registry.
+async fn app_install_handler(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
     Query(query): Query<TokenQuery>,
@@ -747,15 +749,15 @@ async fn capability_install_handler(
         return resp;
     }
 
-    let req: CapabilityInstallRequest = match serde_json::from_str(&body) {
+    let req: AppInstallRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid request: {e}")).into_response(),
     };
 
-    // Look up the capability in the registry
-    let entry = match state.registry_client.lookup_capability(&req.id).await {
+    // Look up the app in the registry
+    let entry = match state.registry_client.lookup_app(&req.id).await {
         Ok(Some(e)) => e,
-        Ok(None) => return (StatusCode::NOT_FOUND, format!("Capability `{}` not found in registry", req.id)).into_response(),
+        Ok(None) => return (StatusCode::NOT_FOUND, format!("App `{}` not found in registry", req.id)).into_response(),
         Err(e) => {
             return (StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR), e.to_string()).into_response();
         }
@@ -768,11 +770,11 @@ async fn capability_install_handler(
 
     let plugin_dir = data_dir.join("plugins").join(&req.id);
     if plugin_dir.join("manifest.toml").exists() {
-        return (StatusCode::CONFLICT, format!("Capability `{}` is already installed", req.id)).into_response();
+        return (StatusCode::CONFLICT, format!("App `{}` is already installed", req.id)).into_response();
     }
 
-    // Install the capability binary + manifest
-    let (_, mcp_deps) = match state.installer.install_capability(&entry).await {
+    // Install the app binary + manifest
+    let (_, mcp_deps) = match state.installer.install_app(&entry).await {
         Ok(result) => result,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Install failed: {e}")).into_response(),
     };
@@ -808,7 +810,7 @@ async fn capability_install_handler(
     }
 
     // Add to tracker so it appears in the dashboard immediately
-    let cap_config = corre_core::config::CapabilityConfig {
+    let cap_config = corre_core::config::AppConfig {
         name: entry.id.clone(),
         description: entry.description.clone(),
         schedule: entry.manifest.defaults.schedule.clone().unwrap_or_default(),
@@ -819,7 +821,7 @@ async fn capability_install_handler(
         plugin: Some(plugin_dir.to_string_lossy().into_owned()),
         log_level: None,
     };
-    state.tracker.add_capability(&cap_config).await;
+    state.tracker.add_app(&cap_config).await;
 
     axum::Json(serde_json::json!({
         "ok": true,
@@ -831,8 +833,8 @@ async fn capability_install_handler(
     .into_response()
 }
 
-/// POST /api/capabilities/uninstall/{name} — uninstall a capability plugin.
-async fn capability_uninstall_handler(
+/// POST /api/apps/uninstall/{name} — uninstall an app plugin.
+async fn app_uninstall_handler(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
     Query(query): Query<TokenQuery>,
@@ -842,13 +844,13 @@ async fn capability_uninstall_handler(
         return resp;
     }
 
-    let orphaned_deps = match state.installer.uninstall_capability(&name).await {
+    let orphaned_deps = match state.installer.uninstall_app(&name).await {
         Ok(deps) => deps,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Uninstall failed: {e}")).into_response(),
     };
 
     // Remove from tracker
-    state.tracker.remove_capability(&name).await;
+    state.tracker.remove_app(&name).await;
 
     axum::Json(serde_json::json!({
         "ok": true,
@@ -947,17 +949,17 @@ async fn service_stop_handler(
 }
 
 // =========================================================================
-// Per-capability config editor endpoints
+// Per-app config editor endpoints
 // =========================================================================
 
-/// Resolve the config file read path for a capability.
+/// Resolve the config file read path for an app.
 ///
 /// Checks `{data_dir}/{cap_name}/{config_path}` first, falls back to the legacy
 /// root location `{data_dir}/{config_path}`. Returns the scoped path when neither
 /// exists so that writes create the file in the right place.
 fn resolve_config_read_path(config: &CorreConfig, cap_name: &str) -> Option<std::path::PathBuf> {
     let data_dir = config.data_dir();
-    let cap = config.capabilities.iter().find(|c| c.name == cap_name)?;
+    let cap = config.apps.iter().find(|c| c.name == cap_name)?;
     let config_path = cap.config_path.as_ref()?;
     let scoped = data_dir.join(&cap.name).join(config_path);
     if scoped.exists() {
@@ -970,12 +972,12 @@ fn resolve_config_read_path(config: &CorreConfig, cap_name: &str) -> Option<std:
 /// Resolve the config file write path — always targets the scoped location.
 fn resolve_config_write_path(config: &CorreConfig, cap_name: &str) -> Option<std::path::PathBuf> {
     let data_dir = config.data_dir();
-    let cap = config.capabilities.iter().find(|c| c.name == cap_name)?;
+    let cap = config.apps.iter().find(|c| c.name == cap_name)?;
     let config_path = cap.config_path.as_ref()?;
     Some(data_dir.join(&cap.name).join(config_path))
 }
 
-/// GET /api/config/{name} — return the raw config file content for a capability.
+/// GET /api/config/{name} — return the raw config file content for an app.
 async fn get_config_handler(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
@@ -987,7 +989,7 @@ async fn get_config_handler(
     }
     let config = state.config.read().await;
     let Some(config_path) = resolve_config_read_path(&config, &name) else {
-        return (StatusCode::NOT_FOUND, "Capability not found or has no config_path").into_response();
+        return (StatusCode::NOT_FOUND, "App not found or has no config_path").into_response();
     };
     drop(config);
     match std::fs::read_to_string(&config_path) {
@@ -997,7 +999,7 @@ async fn get_config_handler(
     }
 }
 
-/// PUT /api/config/{name} — write config file content to disk for a capability.
+/// PUT /api/config/{name} — write config file content to disk for an app.
 async fn put_config_handler(
     State(state): State<Arc<DashboardState>>,
     headers: HeaderMap,
@@ -1010,7 +1012,7 @@ async fn put_config_handler(
     }
     let config = state.config.read().await;
     let Some(config_path) = resolve_config_write_path(&config, &name) else {
-        return (StatusCode::NOT_FOUND, "Capability not found or has no config_path").into_response();
+        return (StatusCode::NOT_FOUND, "App not found or has no config_path").into_response();
     };
     drop(config);
     if let Some(parent) = config_path.parent() {

@@ -15,7 +15,7 @@ pub struct DiscoveredPlugin {
 }
 
 /// Scan `{data_dir}/plugins/` for directories containing a `manifest.toml`
-/// and a `bin/capability` executable. Returns all successfully loaded plugins.
+/// and a binary executable. Returns all successfully loaded plugins.
 pub fn discover_plugins(data_dir: &Path) -> Vec<DiscoveredPlugin> {
     let plugins_dir = data_dir.join("plugins");
     if !plugins_dir.is_dir() {
@@ -57,7 +57,7 @@ pub fn load_plugin(dir: &Path) -> anyhow::Result<DiscoveredPlugin> {
 
     let manifest = PluginManifest::load(&manifest_path)?;
 
-    let bin_name = manifest.plugin.binary_name.as_deref().unwrap_or("capability");
+    let bin_name = manifest.plugin.binary_name.as_deref().unwrap_or(&manifest.plugin.name);
     let binary = dir.join(format!("bin/{bin_name}"));
     if !binary.exists() {
         anyhow::bail!("no bin/{bin_name} executable found");
@@ -66,11 +66,11 @@ pub fn load_plugin(dir: &Path) -> anyhow::Result<DiscoveredPlugin> {
     Ok(DiscoveredPlugin { manifest, dir: dir.to_path_buf(), binary })
 }
 
-/// Convert a discovered plugin into a `CapabilityConfig` entry, using
+/// Convert a discovered plugin into an `AppConfig` entry, using
 /// manifest defaults for any fields not already in the user's config.
-pub fn plugin_to_capability_config(plugin: &DiscoveredPlugin) -> crate::config::CapabilityConfig {
+pub fn plugin_to_app_config(plugin: &DiscoveredPlugin) -> crate::config::AppConfig {
     let meta = &plugin.manifest.plugin;
-    crate::config::CapabilityConfig {
+    crate::config::AppConfig {
         name: meta.name.clone(),
         description: meta.description.clone(),
         schedule: meta.defaults.schedule.clone().unwrap_or_else(|| "0 0 5 * * *".into()),
@@ -116,7 +116,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        fs::write(plugin_dir.join("bin/capability"), "#!/bin/sh\necho hello").unwrap();
+        fs::write(plugin_dir.join("bin/test-plugin"), "#!/bin/sh\necho hello").unwrap();
 
         let plugins = discover_plugins(tmp.path());
         assert_eq!(plugins.len(), 1);

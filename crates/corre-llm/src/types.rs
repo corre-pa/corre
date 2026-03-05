@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use corre_core::capability::LlmRole;
+use corre_core::app::LlmRole;
 use serde::{Deserialize, Serialize};
 
 /// Wire format types for the OpenAI-compatible API.
@@ -53,18 +53,15 @@ mod tests {
         let mut extra = std::collections::HashMap::new();
         extra.insert("stream".into(), serde_json::Value::Bool(false));
         extra.insert("reasoning_effort".into(), serde_json::json!("minimal"));
-        extra.insert("venice_parameters".into(), serde_json::json!({
-            "include_venice_system_prompt": false,
-            "strip_thinking_response": true
-        }));
+        extra.insert(
+            "venice_parameters".into(),
+            serde_json::json!({
+                "include_venice_system_prompt": false,
+                "strip_thinking_response": true
+            }),
+        );
 
-        let req = ApiRequest {
-            model: "test-model".into(),
-            messages: vec![],
-            temperature: Some(0.3),
-            max_completion_tokens: None,
-            extra,
-        };
+        let req = ApiRequest { model: "test-model".into(), messages: vec![], temperature: Some(0.3), max_completion_tokens: None, extra };
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "test-model");
         assert!(json["temperature"].as_f64().unwrap() - 0.3 < 0.001);

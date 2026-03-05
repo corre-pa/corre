@@ -1,26 +1,26 @@
-//! Core output types shared between the host and capability plugins.
+//! Core output types shared between the host and app plugins.
 //!
-//! Defines [`CapabilityOutput`], [`Section`], [`Article`], [`Source`], and [`ContentType`] —
-//! the data structures that a plugin serialises into a `capability/result` notification and
+//! Defines [`AppOutput`], [`Section`], [`Article`], [`Source`], and [`ContentType`] —
+//! the data structures that a plugin serialises into an `app/result` notification and
 //! that the host stores as an edition in CorreNews.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Metadata describing a capability's identity, schedule, and dependencies.
+/// Metadata describing an app's identity, schedule, and dependencies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityManifest {
+pub struct AppManifest {
     pub name: String,
     pub description: String,
     /// Cron expression with seconds field (e.g. "0 0 5 * * *" for 05:00 daily).
     pub schedule: String,
-    /// Names of MCP servers this capability requires (references `[mcp.servers.*]` in config).
+    /// Names of MCP servers this app requires (references `[mcp.servers.*]` in config).
     pub mcp_servers: Vec<String>,
     /// Optional path to a user-editable config file (relative to project root).
     pub config_path: Option<String>,
 }
 
-/// A single news article produced by a capability.
+/// A single news article produced by an app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Article {
     pub title: String,
@@ -45,10 +45,10 @@ pub struct Section {
     pub articles: Vec<Article>,
 }
 
-/// The output produced by a capability after execution.
+/// The output produced by an app after execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityOutput {
-    pub capability_name: String,
+pub struct AppOutput {
+    pub app_name: String,
     pub produced_at: DateTime<Utc>,
     pub sections: Vec<Section>,
     #[serde(default)]
@@ -57,14 +57,14 @@ pub struct CapabilityOutput {
     pub custom_content: Option<CustomContent>,
 }
 
-impl CapabilityOutput {
+impl AppOutput {
     /// Total number of articles across all sections.
     pub fn article_count(&self) -> usize {
         self.sections.iter().map(|s| s.articles.len()).sum()
     }
 }
 
-/// The type of content a capability produces.
+/// The type of content an app produces.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {

@@ -1,16 +1,16 @@
-//! Subprocess-based capability that implements the CCPP v1/v2 protocol.
+//! Subprocess-based app that implements the CCPP v1/v2 protocol.
 //!
 //! Spawns a child process, sends `initialize`, then serves `mcp/callTool`,
 //! `mcp/listTools`, `llm/complete`, and `output/*` requests from the plugin
 //! using the host's safety-wrapped MCP and LLM providers.
 
-use corre_core::capability::{Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, ProgressEvent, ProgressStatus};
+use corre_core::app::{App, AppContext, AppManifest, AppOutput, ProgressEvent, ProgressStatus};
 use corre_core::sandbox::LandlockSandbox;
 use corre_sdk::manifest::{OutputDeclaration, OutputType, SandboxPermissions};
 use corre_sdk::protocol::{
-    self, CapabilityErrorParams, CapabilityResultParams, ErrorCode, InitializeParams, LogParams, McpCallToolParams, McpListToolsParams,
-    Message, Notification, OutputRestParams, OutputStreamParams, OutputWebhookParams, OutputWriteParams, PROTOCOL_VERSION, ProgressParams,
-    Request, Response,
+    self, AppErrorParams, AppResultParams, ErrorCode, InitializeParams, LogParams, McpCallToolParams, McpListToolsParams, Message,
+    Notification, OutputRestParams, OutputStreamParams, OutputWebhookParams, OutputWriteParams, PROTOCOL_VERSION, ProgressParams, Request,
+    Response,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -51,9 +51,9 @@ fn redact_secrets(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// A capability backed by an external subprocess speaking CCPP v1/v2.
-pub struct SubprocessCapability {
-    manifest: CapabilityManifest,
+/// An app backed by an external subprocess speaking CCPP v1/v2.
+pub struct SubprocessApp {
+    manifest: AppManifest,
     binary: PathBuf,
     plugin_dir: PathBuf,
     /// Declared output destinations from the plugin manifest.
@@ -70,7 +70,7 @@ pub struct SubprocessCapability {
 struct SubprocessProgress {
     phase: String,
     percent: Option<u8>,
-    output: Option<CapabilityOutput>,
+    output: Option<AppOutput>,
     error: Option<String>,
 }
 
@@ -84,8 +84,8 @@ async fn write_msg(stdin: &tokio::sync::Mutex<tokio::process::ChildStdin>, value
     Ok(())
 }
 
-impl SubprocessCapability {
-    pub fn new(manifest: CapabilityManifest, binary: PathBuf, plugin_dir: PathBuf) -> Self {
+impl SubprocessApp {
+    pub fn new(manifest: AppManifest, binary: PathBuf, plugin_dir: PathBuf) -> Self {
         Self {
             manifest,
             binary,
@@ -177,7 +177,7 @@ impl SubprocessCapability {
     }
 
     /// Dispatch a single request from the plugin.
-    async fn dispatch_request(ctx: &CapabilityContext, req: &Request, outputs: &[OutputDeclaration], data_dir: &Path) -> Response {
+    async fn dispatch_request(ctx: &AppContext, req: &Request, outputs: &[OutputDeclaration], data_dir: &Path) -> Response {
         match req.method.as_str() {
             "mcp/callTool" => Self::handle_mcp_call_tool(ctx, req).await,
             "mcp/listTools" => Self::handle_mcp_list_tools(ctx, req).await,
@@ -189,7 +189,7 @@ impl SubprocessCapability {
         }
     }
 
-    async fn handle_mcp_call_tool(ctx: &CapabilityContext, req: &Request) -> Response {
+    async fn handle_mcp_call_tool(ctx: &AppContext, req: &Request) -> Response {
         let params: McpCallToolParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
             Some(p) => p,
             None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid mcp/callTool params"),
@@ -201,7 +201,7 @@ impl SubprocessCapability {
         }
     }
 
-    async fn handle_mcp_list_tools(ctx: &CapabilityContext, req: &Request) -> Response {
+    async fn handle_mcp_list_tools(ctx: &AppContext, req: &Request) -> Response {
         let params: McpListToolsParams = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
             Some(p) => p,
             None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid mcp/listTools params"),
@@ -213,9 +213,9 @@ impl SubprocessCapability {
         }
     }
 
-    async fn handle_llm_complete(ctx: &CapabilityContext, req: &Request) -> Response {
+    async fn handle_llm_complete(ctx: &AppContext, req: &Request) -> Response {
         // SDK and core LLM types are identical (core re-exports from SDK).
-        let llm_req: corre_core::capability::LlmRequest = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
+        let llm_req: corre_core::app::LlmRequest = match req.params.as_ref().and_then(|p| serde_json::from_value(p.clone()).ok()) {
             Some(r) => r,
             None => return Response::err(req.id, ErrorCode::INVALID_PARAMS, "invalid llm/complete params"),
         };
@@ -314,7 +314,7 @@ impl SubprocessCapability {
         }
     }
 
-    /// Compute the per-capability scoped data directory.
+    /// Compute the per-app scoped data directory.
     fn scoped_data_dir(&self) -> PathBuf {
         self.data_dir.join(&self.manifest.name)
     }
@@ -351,12 +351,12 @@ fn target_matches_declaration(target: &str, pattern: &str) -> bool {
 }
 
 #[async_trait::async_trait]
-impl Capability for SubprocessCapability {
-    fn manifest(&self) -> &CapabilityManifest {
+impl App for SubprocessApp {
+    fn manifest(&self) -> &AppManifest {
         &self.manifest
     }
 
-    async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput> {
+    async fn execute(&self, ctx: &AppContext) -> anyhow::Result<AppOutput> {
         // Reset progress state
         {
             let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
@@ -366,15 +366,13 @@ impl Capability for SubprocessCapability {
             progress.error = None;
         }
 
-        // Per-capability scoped directory — create it, config/ and logs/ subdirs before spawning
+        // Per-app scoped directory — create it, config/ and logs/ subdirs before spawning
         let scoped_data_dir = self.scoped_data_dir();
         let log_dir = scoped_data_dir.join("logs");
         tokio::fs::create_dir_all(scoped_data_dir.join("config"))
             .await
-            .map_err(|e| anyhow::anyhow!("failed to create capability dir {}: {e}", scoped_data_dir.display()))?;
-        tokio::fs::create_dir_all(&log_dir)
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to create log dir {}: {e}", log_dir.display()))?;
+            .map_err(|e| anyhow::anyhow!("failed to create app dir {}: {e}", scoped_data_dir.display()))?;
+        tokio::fs::create_dir_all(&log_dir).await.map_err(|e| anyhow::anyhow!("failed to create log dir {}: {e}", log_dir.display()))?;
 
         let mut child = self
             .build_spawn_command()
@@ -436,10 +434,10 @@ impl Capability for SubprocessCapability {
             }
         });
 
-        // Send initialize — config_dir points at the capability's scoped directory
+        // Send initialize — config_dir points at the app's scoped directory
         let init_params = InitializeParams {
             protocol_version: PROTOCOL_VERSION.into(),
-            capability_name: self.manifest.name.clone(),
+            app_name: self.manifest.name.clone(),
             config_dir: scoped_data_dir.to_string_lossy().into_owned(),
             config_path: self.manifest.config_path.clone(),
             seen_urls: ctx.seen_urls.iter().cloned().collect(),
@@ -454,7 +452,7 @@ impl Capability for SubprocessCapability {
 
         // SAFETY: all spawned request tasks are joined before this function returns,
         // so the references remain valid for the duration of every task.
-        let ctx: &'static CapabilityContext = unsafe { std::mem::transmute(ctx) };
+        let ctx: &'static AppContext = unsafe { std::mem::transmute(ctx) };
         let output_declarations: &'static [OutputDeclaration] = unsafe { std::mem::transmute(self.output_declarations.as_slice()) };
         let scoped_data_dir: &'static Path = unsafe { std::mem::transmute(scoped_data_dir.as_path()) };
 
@@ -514,8 +512,12 @@ impl Capability for SubprocessCapability {
                         let resp = Self::dispatch_request(ctx, &req, output_declarations, scoped_data_dir).await;
                         let elapsed = start.elapsed();
                         let is_err = resp.error.is_some();
-                        tracing::debug!("Completed {} (id={}) in {elapsed:.1?}{}", req.method, req.id, if is_err { " [error]" } else { ""
-                        });
+                        tracing::debug!(
+                            "Completed {} (id={}) in {elapsed:.1?}{}",
+                            req.method,
+                            req.id,
+                            if is_err { " [error]" } else { "" }
+                        );
 
                         // If the response carries a fatal error, record it for the main loop
                         if let Some(ref err) = resp.error {
@@ -543,9 +545,9 @@ impl Capability for SubprocessCapability {
                     }));
                 }
                 Message::Notification(notif) => match notif.method.as_str() {
-                    "capability/result" => {
+                    "app/result" => {
                         if let Some(params) = notif.params
-                            && let Ok(result) = serde_json::from_value::<CapabilityResultParams>(params)
+                            && let Ok(result) = serde_json::from_value::<AppResultParams>(params)
                         {
                             let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
                             progress.output = Some(result.output);
@@ -558,9 +560,9 @@ impl Capability for SubprocessCapability {
                         Self::shutdown(&stdin, &mut child).await;
                         break;
                     }
-                    "capability/error" => {
+                    "app/error" => {
                         if let Some(params) = notif.params
-                            && let Ok(err_params) = serde_json::from_value::<CapabilityErrorParams>(params)
+                            && let Ok(err_params) = serde_json::from_value::<AppErrorParams>(params)
                         {
                             let mut progress = self.progress.write().unwrap_or_else(|e| e.into_inner());
                             progress.error = Some(err_params.message.clone());
@@ -632,7 +634,7 @@ impl Capability for SubprocessCapability {
             anyhow::bail!("plugin error: {error}");
         }
 
-        progress.output.clone().ok_or_else(|| anyhow::anyhow!("plugin exited without sending capability/result"))
+        progress.output.clone().ok_or_else(|| anyhow::anyhow!("plugin exited without sending app/result"))
     }
 
     async fn in_progress(&self) -> ProgressStatus {

@@ -1,8 +1,8 @@
 //! Prompt injection defense middleware for Corre.
 //!
-//! Wraps [`McpCaller`](corre_core::capability::McpCaller) and
-//! [`LlmProvider`](corre_core::capability::LlmProvider) transparently with two decorator
-//! types — [`SafeMcpCaller`] and [`SafeLlmProvider`] — so capability code requires no
+//! Wraps [`McpCaller`](corre_core::app::McpCaller) and
+//! [`LlmProvider`](corre_core::app::LlmProvider) transparently with two decorator
+//! types — [`SafeMcpCaller`] and [`SafeLlmProvider`] — so app code requires no
 //! modification. Safety is enabled by default and configured via the `[safety]` section
 //! in `corre.toml`.
 //!

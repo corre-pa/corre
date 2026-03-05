@@ -18,7 +18,7 @@ Options:
 
 Commands:
   run           Start the full daemon (scheduler + web server)
-  run-now       Run a single capability immediately and exit
+  run-now       Run a single app immediately and exit
   serve         Start only the CorreNews web server
   setup         Launch the interactive first-run wizard
   install-deps  Check and install required external dependencies
@@ -26,12 +26,12 @@ Commands:
 
 ### `corre run`
 
-Starts both the cron scheduler and the web server. Capabilities run in isolated tokio tasks
+Starts both the cron scheduler and the web server. Apps run in isolated tokio tasks
 with a 10-minute timeout and progress polling.
 
-### `corre run-now <capability>`
+### `corre run-now <app>`
 
-Runs a single capability synchronously using the same pipeline as `run`.
+Runs a single app synchronously using the same pipeline as `run`.
 
 ### `corre serve`
 
@@ -39,15 +39,15 @@ Starts only the web server and dashboard (no scheduler).
 
 ### `corre setup`
 
-Nine-step interactive wizard: dependency checks, LLM provider, Brave Search, capability
-selection, per-capability LLM overrides, topics, preferences, config writing, and start options.
+Nine-step interactive wizard: dependency checks, LLM provider, Brave Search, app
+selection, per-app LLM overrides, topics, preferences, config writing, and start options.
 State persists to `{data_dir}/.setup-state.json` for resumption.
 
 ## Module layout
 
 ```
 src/
-  main.rs              CLI parsing, command dispatch, capability pipeline
+  main.rs              CLI parsing, command dispatch, app pipeline
   setup/
     mod.rs             Wizard entry point and step sequencing
     deps.rs            Dependency detection and auto-installation

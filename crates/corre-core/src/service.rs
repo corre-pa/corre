@@ -1,7 +1,7 @@
 //! Docker-based service lifecycle manager.
 //!
 //! [`ServiceManager`] starts, stops, and monitors Docker containers declared by
-//! capability manifests (e.g. corre-news as a presentation layer). Containers
+//! app manifests (e.g. corre-news as a presentation layer). Containers
 //! are labeled with `corre.service={name}` for identification.
 
 use corre_sdk::manifest::ServiceDeclaration;
@@ -31,7 +31,7 @@ fn container_name(service: &str) -> String {
     format!("corre-{service}")
 }
 
-/// Manages Docker-based services declared by capabilities.
+/// Manages Docker-based services declared by apps.
 pub struct ServiceManager {
     services: tokio::sync::RwLock<HashMap<String, RunningService>>,
 }

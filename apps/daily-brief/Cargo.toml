@@ -2,7 +2,7 @@
 name = "daily-brief"
 version.workspace = true
 edition.workspace = true
-description = "Standalone daily research brief capability binary"
+description = "Standalone daily research brief app binary"
 
 [lib]
 path = "src/lib.rs"

@@ -25,7 +25,7 @@ done
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REGISTRY_DIR="${REPO_DIR}/corre-registry"
 MCP_REGISTERED_DIR="${REGISTRY_DIR}/registered"
-CAP_REGISTERED_DIR="${REGISTRY_DIR}/capabilities/registered"
+CAP_REGISTERED_DIR="${REGISTRY_DIR}/apps/registered"
 SITE_DIR="${REGISTRY_DIR}/site"
 OUTPUT="${SITE_DIR}/mcp/registry.json"
 VERSION="$(grep -m1 '^version' "${REPO_DIR}/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
@@ -69,7 +69,7 @@ for f in "${MCP_REGISTERED_DIR}"/*.json; do
     fi
 done
 
-# ── Discover binary capabilities from registered definitions ──────────────
+# ── Discover binary apps from registered definitions ─────────────────────
 
 CAP_BINARIES=()
 CAP_PACKAGES=""
@@ -114,7 +114,7 @@ sha256_hex() {
 
 rm -rf "${SITE_DIR}"
 mkdir -p "${SITE_DIR}/mcp/bin"
-mkdir -p "${SITE_DIR}/capabilities/bin"
+mkdir -p "${SITE_DIR}/apps/bin"
 
 # ── Build binaries per target ────────────────────────────────────────────────
 
@@ -197,15 +197,15 @@ if [[ ${#ALL_BINARIES[@]} -gt 0 ]]; then
             ok "Staged MCP binary ${staged_name}"
         done
 
-        # Stage capability binaries into site/capabilities/bin/
+        # Stage app binaries into site/apps/bin/
         for bin in "${CAP_BINARIES[@]}"; do
             staged_name="${bin}-${PLATFORM_KEY}"
             if [[ "${TRIPLE}" == *"-windows-"* ]]; then
-                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}.exe" "${SITE_DIR}/capabilities/bin/${staged_name}"
+                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}.exe" "${SITE_DIR}/apps/bin/${staged_name}"
             else
-                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}" "${SITE_DIR}/capabilities/bin/${staged_name}"
+                cp "${TARGET_DIR}/${TRIPLE}/release/${bin}" "${SITE_DIR}/apps/bin/${staged_name}"
             fi
-            ok "Staged capability binary ${staged_name}"
+            ok "Staged app binary ${staged_name}"
         done
 
         BUILT_KEYS+=("${PLATFORM_KEY}")
@@ -216,7 +216,7 @@ if [[ ${#ALL_BINARIES[@]} -gt 0 ]]; then
         exit 1
     fi
 else
-    info "No binary servers or capabilities to build — skipping compilation"
+    info "No binary servers or apps to build — skipping compilation"
 fi
 
 # ── Helper: emit sha256 JSON object for a binary ────────────────────────────
@@ -285,11 +285,11 @@ if [[ "$(echo "${SERVERS}" | jq 'length')" -eq 0 ]]; then
     exit 1
 fi
 
-# ── Assemble capability entries ──────────────────────────────────────────────
+# ── Assemble app entries ─────────────────────────────────────────────────────
 
-CAPABILITIES="[]"
+APPS="[]"
 if [[ -d "${CAP_REGISTERED_DIR}" ]]; then
-    info "Assembling capabilities from ${CAP_REGISTERED_DIR}/*.json ..."
+    info "Assembling apps from ${CAP_REGISTERED_DIR}/*.json ..."
 
     for cap_file in "${CAP_REGISTERED_DIR}"/*.json; do
         [[ -f "${cap_file}" ]] || continue
@@ -300,14 +300,14 @@ if [[ -d "${CAP_REGISTERED_DIR}" ]]; then
             exit 1
         }
 
-        CAPABILITIES="$(echo "${CAPABILITIES}" | jq --argjson entry "${cap_json}" '. + [$entry]')"
-        ok "Added capability: ${id}"
+        APPS="$(echo "${APPS}" | jq --argjson entry "${cap_json}" '. + [$entry]')"
+        ok "Added app: ${id}"
     done
 fi
 
 # ── Determine registry version ──────────────────────────────────────────────
 
-if [[ "$(echo "${CAPABILITIES}" | jq 'length')" -gt 0 ]]; then
+if [[ "$(echo "${APPS}" | jq 'length')" -gt 0 ]]; then
     REGISTRY_VERSION=2
 else
     REGISTRY_VERSION=1
@@ -321,8 +321,8 @@ jq -n \
     --argjson version "${REGISTRY_VERSION}" \
     --arg updated_at "${TODAY}" \
     --argjson servers "${SERVERS}" \
-    --argjson capabilities "${CAPABILITIES}" \
-    '{ version: $version, updated_at: $updated_at, servers: $servers, capabilities: $capabilities }' \
+    --argjson apps "${APPS}" \
+    '{ version: $version, updated_at: $updated_at, servers: $servers, apps: $apps }' \
     > "${OUTPUT}"
 
 ok "Registry written to ${OUTPUT}"
@@ -342,10 +342,10 @@ echo ""
 echo -e "${BOLD}Registry summary:${NC}"
 echo -e "  Version: ${REGISTRY_VERSION}"
 jq -r '.servers[] | "  [mcp] \(.id) (v\(.version)) — \(.description)"' "${OUTPUT}"
-jq -r '.capabilities[] | "  [cap] \(.id) (v\(.version)) — \(.description)"' "${OUTPUT}" 2>/dev/null || true
+jq -r '.apps[] | "  [app] \(.id) (v\(.version)) — \(.description)"' "${OUTPUT}" 2>/dev/null || true
 echo ""
 echo -e "${BOLD}Staged files:${NC}"
 echo "  MCP binaries:"
 ls -lh "${SITE_DIR}/mcp/bin/" 2>/dev/null || echo "    (none)"
-echo "  Capability binaries:"
-ls -lh "${SITE_DIR}/capabilities/bin/" 2>/dev/null || echo "    (none)"
+echo "  App binaries:"
+ls -lh "${SITE_DIR}/apps/bin/" 2>/dev/null || echo "    (none)"

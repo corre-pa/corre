@@ -4,7 +4,7 @@ use crate::types::ContentType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Top-level manifest file for a capability plugin.
+/// Top-level manifest file for an app plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub plugin: PluginMeta,
@@ -24,8 +24,8 @@ pub struct PluginMeta {
     pub min_host_version: Option<String>,
     #[serde(default = "default_protocol_version")]
     pub protocol_version: String,
-    /// Name of the executable inside `bin/`. Defaults to `"capability"` for
-    /// backward compatibility, but registry-installed plugins use their own name.
+    /// Name of the executable inside `bin/`. Defaults to the plugin name for
+    /// registry-installed plugins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary_name: Option<String>,
     #[serde(default)]
@@ -62,7 +62,7 @@ pub struct PluginDefaults {
     pub config_schema: Option<ConfigSchema>,
 }
 
-/// Schema describing the structure of a capability's config file, used by the
+/// Schema describing the structure of an app's config file, used by the
 /// dashboard to render a form dynamically.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigSchema {
@@ -134,7 +134,7 @@ impl Default for PluginPermissions {
     }
 }
 
-/// Declares an output destination that the capability is permitted to use.
+/// Declares an output destination that the app is permitted to use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputDeclaration {
     pub output_type: OutputType,
@@ -178,7 +178,7 @@ pub struct SandboxPermissions {
     pub max_cpu_secs: Option<u64>,
 }
 
-/// A service that the capability depends on or bundles (e.g. a web UI container).
+/// A service that the app depends on or bundles (e.g. a web UI container).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceDeclaration {
     pub name: String,
@@ -202,7 +202,7 @@ pub struct ServiceDeclaration {
     pub health_check: Option<String>,
 }
 
-/// Execution mode for a capability.
+/// Execution mode for an app.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ExecutionMode {

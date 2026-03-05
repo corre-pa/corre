@@ -1,10 +1,10 @@
 //! Binary entry point for Corre. Parses CLI arguments, wires every workspace crate together,
 //! and dispatches to the runtime modes: `run` (scheduler + dashboard), `run-now`
-//! (one-shot capability execution), and `setup` (interactive wizard).
+//! (one-shot app execution), and `setup` (interactive wizard).
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use corre_core::capability::{CapabilityContext, ProgressEvent, ProgressStatus};
+use corre_core::app::{AppContext, ProgressEvent, ProgressStatus};
 use corre_core::tracker::ExecutionTracker;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,10 +42,10 @@ enum Commands {
         #[arg(long, default_value = "0.0.0.0:5500")]
         dashboard_bind: String,
     },
-    /// Run a single capability immediately and exit
+    /// Run a single app immediately and exit
     RunNow {
-        /// Name of the capability to run
-        capability: String,
+        /// Name of the app to run
+        app: String,
     },
     /// Interactive setup wizard — configure LLM, API keys, topics, and systemd
     Setup,
@@ -94,10 +94,10 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = config.data_dir();
     std::fs::create_dir_all(&data_dir).with_context(|| format!("failed to create data directory {}", data_dir.display()))?;
 
-    let log_dir = data_dir.join("capabilities_logs");
+    let log_dir = data_dir.join("app_logs");
     std::fs::create_dir_all(&log_dir).with_context(|| format!("failed to create log directory {}", log_dir.display()))?;
 
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "capability.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "app.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     let stderr_filter =
@@ -120,22 +120,22 @@ async fn main() -> anyhow::Result<()> {
 
     match command {
         Commands::Run { dashboard_bind } => cmd_run(config, config_path, plugins, dashboard_bind).await,
-        Commands::RunNow { capability } => cmd_run_now(config, &capability, plugins).await,
+        Commands::RunNow { app } => cmd_run_now(config, &app, plugins).await,
         Commands::Setup | Commands::InstallDeps | Commands::Health => unreachable!(),
     }
 }
 
 /// Merge discovered plugins into the config: for each plugin not already in
-/// the config's capabilities list, add a default entry.
+/// the config's apps list, add a default entry.
 fn merge_discovered_plugins(config: &mut corre_core::config::CorreConfig, plugins: &[corre_core::plugin::DiscoveredPlugin]) {
-    let existing_names: std::collections::HashSet<String> = config.capabilities.iter().map(|c| c.name.clone()).collect();
+    let existing_names: std::collections::HashSet<String> = config.apps.iter().map(|c| c.name.clone()).collect();
     for plugin in plugins {
         if existing_names.contains(&plugin.manifest.plugin.name) {
             continue;
         }
-        let cap_config = corre_core::plugin::plugin_to_capability_config(plugin);
-        tracing::info!("Auto-discovered plugin `{}` at {}", cap_config.name, plugin.dir.display());
-        config.capabilities.push(cap_config);
+        let app_config = corre_core::plugin::plugin_to_app_config(plugin);
+        tracing::info!("Auto-discovered plugin `{}` at {}", app_config.name, plugin.dir.display());
+        config.apps.push(app_config);
     }
 }
 
@@ -147,18 +147,13 @@ async fn cmd_run(
 ) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
 
-    // Build capability registry first, then filter config to only capabilities
+    // Build app registry first, then filter config to only apps
     // that have a backing implementation (built-in or installed plugin).
-    let registry = Arc::new(corre_host::registry::CapabilityRegistry::from_config(
-        &config.capabilities,
-        &plugins,
-        &data_dir,
-        &config.general.log_level,
-    ));
-    config.capabilities.retain(|c| registry.get(&c.name).is_some());
+    let registry = Arc::new(corre_host::registry::AppRegistry::from_config(&config.apps, &plugins, &data_dir, &config.general.log_level));
+    config.apps.retain(|c| registry.get(&c.name).is_some());
 
-    // Create execution tracker for dashboard (only contains real capabilities)
-    let tracker = ExecutionTracker::new(&config.capabilities);
+    // Create execution tracker for dashboard (only contains real apps)
+    let tracker = ExecutionTracker::new(&config.apps);
 
     // Create run-now channel for dashboard triggers
     let (run_tx, mut run_rx) = tokio::sync::mpsc::channel::<String>(8);
@@ -203,14 +198,14 @@ async fn cmd_run(
     // Start scheduler
     let mut scheduler = corre_core::scheduler::Scheduler::new().await?;
 
-    for cap_config in config.capabilities.iter().filter(|c| c.enabled) {
+    for cap_config in config.apps.iter().filter(|c| c.enabled) {
         let cap_name = cap_config.name.clone();
         let schedule = cap_config.schedule.clone();
         let shared_config = shared_config.clone();
         let registry = registry.clone();
         let tracker = tracker.clone();
 
-        tracing::info!("Scheduling capability `{cap_name}` with cron `{schedule}`");
+        tracing::info!("Scheduling app `{cap_name}` with cron `{schedule}`");
 
         let callback: Box<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> =
             Box::new(move || {
@@ -220,7 +215,7 @@ async fn cmd_run(
                 let tracker = tracker.clone();
                 Box::pin(async move {
                     let config = shared_config.read().await.clone();
-                    execute_capability_tracked(&config, &registry, &cap_name, tracker.clone()).await;
+                    execute_app_tracked(&config, &registry, &cap_name, tracker.clone()).await;
                 })
             });
 
@@ -238,7 +233,7 @@ async fn cmd_run(
             let tracker = run_tracker.clone();
             tokio::spawn(async move {
                 let config = shared_config.read().await.clone();
-                execute_capability_tracked(&config, &registry, &cap_name, tracker).await;
+                execute_app_tracked(&config, &registry, &cap_name, tracker).await;
             });
         }
     });
@@ -260,17 +255,17 @@ async fn cmd_run(
     Ok(())
 }
 
-/// Execute a capability with tracker integration (mark running/completed/failed, push logs).
-async fn execute_capability_tracked(
+/// Execute an app with tracker integration (mark running/completed/failed, push logs).
+async fn execute_app_tracked(
     config: &corre_core::config::CorreConfig,
-    registry: &corre_host::registry::CapabilityRegistry,
+    registry: &corre_host::registry::AppRegistry,
     cap_name: &str,
     tracker: Arc<ExecutionTracker>,
 ) {
     tracker.mark_running(cap_name).await;
-    tracker.push_log(cap_name, "INFO", "Capability execution started").await;
+    tracker.push_log(cap_name, "INFO", "App execution started").await;
 
-    match run_capability_pipeline(config, registry, cap_name, Some(tracker.clone())).await {
+    match run_app_pipeline(config, registry, cap_name, Some(tracker.clone())).await {
         Ok((output, mcp_pool)) => {
             let article_count = output.article_count();
             mcp_pool.shutdown().await;
@@ -279,7 +274,7 @@ async fn execute_capability_tracked(
         }
         Err(e) => {
             let error_msg = format!("{e:#}");
-            tracing::error!("Capability `{cap_name}` failed: {error_msg}");
+            tracing::error!("App `{cap_name}` failed: {error_msg}");
             tracker.mark_failed(cap_name, &error_msg).await;
             tracker.push_log(cap_name, "ERROR", &format!("Failed: {error_msg}")).await;
         }
@@ -288,14 +283,13 @@ async fn execute_capability_tracked(
 
 async fn cmd_run_now(
     config: corre_core::config::CorreConfig,
-    capability_name: &str,
+    app_name: &str,
     plugins: Vec<corre_core::plugin::DiscoveredPlugin>,
 ) -> anyhow::Result<()> {
     let data_dir = config.data_dir();
-    let registry =
-        corre_host::registry::CapabilityRegistry::from_config(&config.capabilities, &plugins, &data_dir, &config.general.log_level);
+    let registry = corre_host::registry::AppRegistry::from_config(&config.apps, &plugins, &data_dir, &config.general.log_level);
 
-    let (output, mcp_pool) = run_capability_pipeline(&config, &registry, capability_name, None).await?;
+    let (output, mcp_pool) = run_app_pipeline(&config, &registry, app_name, None).await?;
 
     mcp_pool.shutdown().await;
     let article_count = output.article_count();
@@ -303,17 +297,17 @@ async fn cmd_run_now(
     Ok(())
 }
 
-/// Shared pipeline: build MCP pool, run capability. Returns the output and pool.
-async fn run_capability_pipeline(
+/// Shared pipeline: build MCP pool, run app. Returns the output and pool.
+async fn run_app_pipeline(
     config: &corre_core::config::CorreConfig,
-    registry: &corre_host::registry::CapabilityRegistry,
+    registry: &corre_host::registry::AppRegistry,
     cap_name: &str,
     tracker: Option<Arc<ExecutionTracker>>,
-) -> anyhow::Result<(corre_core::capability::CapabilityOutput, corre_mcp::McpPool)> {
-    let capability = registry.get(cap_name).with_context(|| format!("Unknown capability: `{cap_name}`"))?.clone();
+) -> anyhow::Result<(corre_core::app::AppOutput, corre_mcp::McpPool)> {
+    let app = registry.get(cap_name).with_context(|| format!("Unknown app: `{cap_name}`"))?.clone();
 
     let mcp_servers = config.resolved_mcp_servers()?;
-    let required = &capability.manifest().mcp_servers;
+    let required = &app.manifest().mcp_servers;
     let missing: Vec<_> = required.iter().filter(|name| !mcp_servers.contains_key(name.as_str())).collect();
     if !missing.is_empty() {
         let names = missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
@@ -328,8 +322,8 @@ async fn run_capability_pipeline(
 
     let mcp_pool = corre_mcp::McpPool::new(mcp_defs);
 
-    // Resolve per-capability LLM overrides, falling back to the global config
-    let cap_config = config.capabilities.iter().find(|c| c.name == cap_name);
+    // Resolve per-app LLM overrides, falling back to the global config
+    let cap_config = config.apps.iter().find(|c| c.name == cap_name);
     let effective_llm = match cap_config.and_then(|c| c.llm.as_ref()) {
         Some(overrides) => config.llm.with_overrides(overrides),
         None => config.llm.clone(),
@@ -339,18 +333,18 @@ async fn run_capability_pipeline(
         cap = cap_name,
         model = %effective_llm.model,
         extra_body_keys = ?effective_llm.extra_body.keys().collect::<Vec<_>>(),
-        "Effective LLM config for capability"
+        "Effective LLM config for app"
     );
-    let raw_llm: Box<dyn corre_core::capability::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&effective_llm)?);
+    let raw_llm: Box<dyn corre_core::app::LlmProvider> = Box::new(corre_llm::OpenAiCompatProvider::from_config(&effective_llm)?);
 
     // Conditionally wrap MCP and LLM with safety middleware
-    let mcp: Box<dyn corre_core::capability::McpCaller> = if config.safety.enabled {
+    let mcp: Box<dyn corre_core::app::McpCaller> = if config.safety.enabled {
         tracing::info!("Safety layer enabled — wrapping MCP caller and LLM provider");
         Box::new(corre_safety::SafeMcpCaller::new(Box::new(mcp_pool.clone()), &config.safety))
     } else {
         Box::new(mcp_pool.clone())
     };
-    let llm: Box<dyn corre_core::capability::LlmProvider> =
+    let llm: Box<dyn corre_core::app::LlmProvider> =
         if config.safety.enabled { Box::new(corre_safety::SafeLlmProvider::new(raw_llm, &config.safety)) } else { raw_llm };
 
     // Spawn a bridge task that forwards ProgressEvents to the ExecutionTracker.
@@ -375,7 +369,7 @@ async fn run_capability_pipeline(
     });
 
     let config_dir = config.data_dir().join(cap_name);
-    let ctx = CapabilityContext {
+    let ctx = AppContext {
         mcp,
         llm,
         config_dir,
@@ -384,19 +378,19 @@ async fn run_capability_pipeline(
         progress_tx,
     };
 
-    tracing::info!("Running capability `{cap_name}`");
+    tracing::info!("Running app `{cap_name}`");
     if let Some(ref t) = tracker {
         t.push_log(cap_name, "INFO", "Building MCP pool and LLM provider").await;
     }
 
     let poll_interval = std::time::Duration::from_secs(1);
     let poll_deadline = std::time::Duration::from_secs(5);
-    let mut execute_fut = std::pin::pin!(capability.execute(&ctx));
+    let mut execute_fut = std::pin::pin!(app.execute(&ctx));
 
     let output = loop {
         match tokio::time::timeout(poll_interval, &mut execute_fut).await {
             Ok(result) => break result,
-            Err(_) => match tokio::time::timeout(poll_deadline, capability.in_progress()).await {
+            Err(_) => match tokio::time::timeout(poll_deadline, app.in_progress()).await {
                 Ok(ProgressStatus::StillBusy(hint)) => {
                     if let Some(pct) = hint
                         && pct > 0
@@ -410,17 +404,17 @@ async fn run_capability_pipeline(
                 }
                 Ok(ProgressStatus::Done(partial)) => {
                     let n = partial.article_count();
-                    tracing::warn!("Capability `{cap_name}` returning partial results ({n} articles)");
+                    tracing::warn!("App `{cap_name}` returning partial results ({n} articles)");
                     if let Some(ref t) = tracker {
                         t.push_log(cap_name, "WARN", &format!("Returning partial results ({n} articles)")).await;
                     }
                     break Ok(partial);
                 }
                 Ok(ProgressStatus::Stuck) => {
-                    break Err(anyhow::anyhow!("Capability `{cap_name}` is stuck"));
+                    break Err(anyhow::anyhow!("App `{cap_name}` is stuck"));
                 }
                 Err(_) => {
-                    break Err(anyhow::anyhow!("Capability `{cap_name}` in_progress poll unresponsive"));
+                    break Err(anyhow::anyhow!("App `{cap_name}` in_progress poll unresponsive"));
                 }
             },
         }

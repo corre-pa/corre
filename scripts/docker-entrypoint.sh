@@ -16,7 +16,7 @@ if [ -f /app/corre.toml ] && [ ! -e /data/corre.toml ]; then
     echo "Seeded default corre.toml into /data"
 fi
 
-# Seed per-capability config files into the data volume.
+# Seed per-app config files into the data volume.
 if [ -d /app/config ] && [ -d /data ]; then
     mkdir -p /data/config
     chown corre:corre /data/config

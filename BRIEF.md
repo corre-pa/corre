@@ -1,11 +1,11 @@
 # Overall goal
 
-* An AI environment that lets users schedule complex tasks/capabilities and have the output served up in a "newspaper" type format
+* An AI environment that lets users schedule complex tasks/apps and have the output served up in a "newspaper" type format
   (CorreNews).
 * CorreNews is served locally, but accessible remotely via a secure NAT punching method. So users can access their CorreNews from anywhere,
   but the data is stored locally and not shared with 3rd parties.
 * Corre management is done via a TUI (via ssh or local terminal)
-* Writing new capabilities is done using a separate, but integrated tool.
+* Writing new apps is done using a separate, but integrated tool.
 * Archive daily news editions so that the user can look back on them.
 * Index content for search and retrieval later.
 
@@ -16,7 +16,7 @@
   for search, etc.
 * Flexibility and modularity. Not tied to a single platform / LLM. Allow multiple APIs, models etc. Let people do what they want to do.
 * Security. Only perform actions explicitly authorized by the user. Look out for and prevent prompt injection and other attacks.
-* Complex capabilities are similar to Skills in Claude Code. A natural-language description offloads tasks to MCP servers, and
+* Complex apps are similar to Skills in Claude Code. A natural-language description offloads tasks to MCP servers, and
   then the output is sent to a publishing pipeline that converts the output into beautifully rendered newspaper style HTML for
   CorreNews.
 * The heartbeat and scheduling should NOT be done through LLM calls. CronJobs or similar scheduling tools should be used.
@@ -30,9 +30,9 @@
 
 ## Examples
 
-Here are some of the tasks Corre might be able to do. Each capability should be completely modular and installable / removable.
-Each task might have several MCP dependencies. Only install MCP servers once. If removing a capability, only remove an MCP server if no
-other capability depends on it.
+Here are some of the tasks Corre might be able to do. Each app should be completely modular and installable / removable.
+Each task might have several MCP dependencies. Only install MCP servers once. If removing an app, only remove an MCP server if no
+other app depends on it.
 
 ## Daily research brief:
 
@@ -69,4 +69,4 @@ other capability depends on it.
 
 ## Import existing MCP servers
 
-Adding a capability from an existing MCP server should be as easy as appending the MCP details to the corre.toml config file.
+Adding an app from an existing MCP server should be as easy as appending the MCP details to the corre.toml config file.

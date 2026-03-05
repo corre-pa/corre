@@ -1,13 +1,13 @@
 //! OpenAI-compatible chat completions provider.
 //!
-//! Implements `corre_core::capability::LlmProvider` by POSTing to any `/chat/completions`
+//! Implements `corre_core::app::LlmProvider` by POSTing to any `/chat/completions`
 //! endpoint that speaks the OpenAI wire format.
 
 use std::collections::HashMap;
 
 use crate::types::*;
 use anyhow::Context;
-use corre_core::capability::{LlmProvider, LlmRequest, LlmResponse};
+use corre_core::app::{LlmProvider, LlmRequest, LlmResponse};
 
 /// An LLM provider that speaks the OpenAI-compatible chat completions API.
 /// Works with Venice.ai, OpenAI, Ollama, LM Studio, and others.

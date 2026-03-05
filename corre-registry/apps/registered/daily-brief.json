@@ -6,7 +6,7 @@
   "protocol_version": "1.0",
   "install": {
     "method": "binary",
-    "download_url_template": "/capabilities/bin/daily-brief-{platform}-{arch}",
+    "download_url_template": "/apps/bin/daily-brief-{platform}-{arch}",
     "binary_name": "daily-brief",
     "sha256": "${SHA256:daily-brief}",
     "command": "daily-brief",

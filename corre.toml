@@ -24,7 +24,7 @@ editor_token = "edit"   # set to enable /settings and /settings/topics
 # high_severity_action = "sanitize" # "warn", "sanitize", or "block"
 # custom_block_patterns = []        # additional regex patterns that trigger a block
 
-[[capabilities]]
+[[apps]]
 name = "daily-brief"
 description = "Researches topics and produces a daily news briefing"
 schedule = "0 0 5 * * *"
@@ -32,15 +32,15 @@ mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
 
-[capabilities.llm]
-# model = "gpt-4o"              # override the global model for this capability
+[apps.llm]
+# model = "gpt-4o"              # override the global model for this app
 # temperature = 0.7             # override temperature
 # max_concurrent = 5
 
-[capabilities.llm.extra_body]
+[apps.llm.extra_body]
 stream = false
 reasoning_effort = "minimal"
 
-[capabilities.llm.extra_body.venice_parameters]
+[apps.llm.extra_body.venice_parameters]
 strip_thinking_reposne = true
 include_venice_system_prompt = false

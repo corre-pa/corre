@@ -508,7 +508,7 @@ body.xp-desktop {
     gap: 4px 12px;
 }
 
-/* Dynamic rows for MCP/capabilities in settings */
+/* Dynamic rows for MCP/apps in settings */
 .xp-dynamic-row {
     border: 1px solid #D6D2C2;
     padding: 6px 8px;
@@ -636,7 +636,7 @@ body.xp-desktop {
 
 mark { background: #FFE566; padding: 0; }
 
-/* === Capability row details === */
+/* === App row details === */
 .cap-name { font-weight: bold; }
 .cap-error { color: #CC2200; font-size: 11px; margin-top: 2px; }
 .cap-phase { color: #666; font-size: 11px; }

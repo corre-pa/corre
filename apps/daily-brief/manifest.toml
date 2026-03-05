@@ -68,7 +68,7 @@ content_type = "application/json"
 
 [plugin.permissions.sandbox]
 network = ["api.venice.ai:443"]
-# r/w to {data_dir}/daily-brief/ is automatic via the per-capability home grant
+# r/w to {data_dir}/daily-brief/ is automatic via the per-app home grant
 
 [[plugin.services]]
 name = "corre-news"

@@ -5,7 +5,7 @@
     var TOKEN = window.__DASHBOARD_TOKEN || "";
     var CONFIG = window.__CONFIG || {};
     var MAX_LOG_ROWS = 500;
-    var capabilities = {};       // name -> state object
+    var apps = {};               // name -> state object
     var knownCapNames = [];
     var levelFilters = { DEBUG: true, INFO: true, WARN: true, ERROR: true };
     var capFilter = "";
@@ -14,7 +14,7 @@
     var historicalMode = false;
     var logContainer = document.getElementById("log-container");
     var logTbody = document.getElementById("log-tbody");
-    var capTbody = document.getElementById("capabilities-tbody");
+    var appTbody = document.getElementById("apps-tbody");
     var jumpBtn = document.getElementById("log-jump");
 
     // --- SSE Connection ---
@@ -39,12 +39,12 @@
 
     function handleEvent(event) {
         switch (event.type) {
-            case "CapabilityUpdate":
-                updateCapability(event);
+            case "AppUpdate":
+                updateApp(event);
                 break;
             case "LogLine":
                 if (!historicalMode) {
-                    appendLog(event.capability, event.entry);
+                    appendLog(event.app, event.entry);
                 }
                 break;
             case "SystemMetrics":
@@ -53,30 +53,30 @@
         }
     }
 
-    // --- Capabilities Table ---
-    function updateCapability(state) {
-        capabilities[state.name] = state;
+    // --- Apps Table ---
+    function updateApp(state) {
+        apps[state.name] = state;
         if (knownCapNames.indexOf(state.name) === -1) {
             knownCapNames.push(state.name);
             updateCapFilter();
         }
-        renderCapabilities();
+        renderApps();
     }
 
-    function renderCapabilities() {
+    function renderApps() {
         var html = "";
-        var names = Object.keys(capabilities).sort();
+        var names = Object.keys(apps).sort();
         for (var i = 0; i < names.length; i++) {
-            var s = capabilities[names[i]];
+            var s = apps[names[i]];
             html += renderCapRow(s);
         }
         if (names.length === 0) {
-            html = '<tr><td colspan="7" class="loading-cell">No capabilities configured</td></tr>';
+            html = '<tr><td colspan="7" class="loading-cell">No apps configured</td></tr>';
         }
-        capTbody.innerHTML = html;
+        appTbody.innerHTML = html;
 
         // Bind run-now buttons
-        var btns = capTbody.querySelectorAll(".run-now-btn");
+        var btns = appTbody.querySelectorAll(".run-now-btn");
         for (var j = 0; j < btns.length; j++) {
             btns[j].addEventListener("click", onRunNow);
         }
@@ -149,11 +149,11 @@
     }
 
     // --- Log Viewer ---
-    function appendLog(capability, entry) {
+    function appendLog(app, entry) {
         var row = document.createElement("tr");
         row.className = "log-row log-row-" + entry.level;
         row.setAttribute("data-level", entry.level);
-        row.setAttribute("data-cap", capability);
+        row.setAttribute("data-app", app);
 
         var ts = formatTimestamp(entry.timestamp);
         var fullTs = entry.timestamp;
@@ -161,7 +161,7 @@
         row.innerHTML =
             '<td class="col-ts" title="' + escapeAttr(fullTs) + '">' + ts + '</td>' +
             '<td><span class="level-badge level-' + entry.level + '">' + entry.level + '</span></td>' +
-            '<td class="col-cap">' + escapeHtml(capability) + '</td>' +
+            '<td class="col-cap">' + escapeHtml(app) + '</td>' +
             '<td class="col-msg">' + escapeHtml(entry.message) + '</td>';
 
         logTbody.appendChild(row);
@@ -180,7 +180,7 @@
 
     function applyRowFilter(row) {
         var level = row.getAttribute("data-level");
-        var cap = row.getAttribute("data-cap");
+        var cap = row.getAttribute("data-app");
         var msgCell = row.querySelector(".col-msg");
         var text = msgCell ? msgCell.textContent : "";
 
@@ -247,7 +247,7 @@
         applyAllFilters();
     });
 
-    // Capability filter
+    // App filter
     document.getElementById("log-cap-filter").addEventListener("change", function (e) {
         capFilter = e.target.value;
         applyAllFilters();
@@ -256,7 +256,7 @@
     function updateCapFilter() {
         var sel = document.getElementById("log-cap-filter");
         var current = sel.value;
-        sel.innerHTML = '<option value="">All capabilities</option>';
+        sel.innerHTML = '<option value="">All apps</option>';
         for (var i = 0; i < knownCapNames.length; i++) {
             var opt = document.createElement("option");
             opt.value = knownCapNames[i];
@@ -290,7 +290,7 @@
             })
             .then(function (entries) {
                 for (var i = 0; i < entries.length; i++) {
-                    appendLog(entries[i].capability, entries[i].entry);
+                    appendLog(entries[i].app, entries[i].entry);
                 }
             })
             .catch(function (err) {
@@ -454,11 +454,11 @@
         setChecked("safety_boundary_wrap", config.safety.boundary_wrap);
         setVal("safety_high_severity_action", config.safety.high_severity_action);
 
-        // Capabilities
-        var capContainer = document.getElementById("capabilitiesConfig");
+        // Apps
+        var capContainer = document.getElementById("appsConfig");
         capContainer.innerHTML = "";
-        (config.capabilities || []).forEach(function (cap) {
-            addCapabilityRow(cap);
+        (config.apps || []).forEach(function (cap) {
+            addAppRow(cap);
         });
     }
 
@@ -494,15 +494,15 @@
                 custom_block_patterns: CONFIG.safety.custom_block_patterns || [],
             },
             mcp: { servers: {} },
-            capabilities: [],
+            apps: [],
         };
 
         var token = getVal("news_editor_token");
         if (token) config.news.editor_token = token;
 
-        // Gather capabilities
+        // Gather apps
         var capValid = true;
-        document.querySelectorAll("#capabilitiesConfig .xp-dynamic-row").forEach(function (row) {
+        document.querySelectorAll("#appsConfig .xp-dynamic-row").forEach(function (row) {
             var cap = {
                 name: row.querySelector(".cap-cfg-name").value.trim(),
                 description: row.querySelector(".cap-cfg-description").value.trim(),
@@ -527,7 +527,7 @@
                 cap.llm = llmOverrides;
             }
 
-            if (cap.name) config.capabilities.push(cap);
+            if (cap.name) config.apps.push(cap);
         });
 
         if (!capValid) return null;
@@ -570,8 +570,8 @@
         return Object.keys(llm).length > 0 ? llm : null;
     }
 
-    function addCapabilityRow(cap) {
-        var container = document.getElementById("capabilitiesConfig");
+    function addAppRow(cap) {
+        var container = document.getElementById("appsConfig");
         var row = document.createElement("div");
         row.className = "xp-dynamic-row";
         cap = cap || {};
@@ -668,8 +668,8 @@
         saveSettings();
     });
 
-    document.getElementById("add-cap-btn").addEventListener("click", function () {
-        addCapabilityRow({});
+    document.getElementById("add-app-btn").addEventListener("click", function () {
+        addAppRow({});
     });
 
     // Load settings form with initial config
@@ -916,13 +916,13 @@
     };
 
     // =========================================================================
-    // Unified Store (table layout) — MCP Servers + Capabilities tabs
+    // Unified Store (table layout) — MCP Servers + Apps tabs
     // =========================================================================
     var storeTbody = document.getElementById("store-tbody");
-    var capStoreTbody = document.getElementById("cap-store-tbody");
+    var appStoreTbody = document.getElementById("app-store-tbody");
     var storeCatalog = null;        // cached RegistryManifest
     var installedMcps = [];         // array from /api/mcp/installed
-    var installedCaps = [];         // array from /api/capabilities/installed
+    var installedApps = [];         // array from /api/apps/installed
     var storeSearchText = "";
     var mcpTestResults = {};        // name -> { ok, tools, error }
     var activeStoreTab = "mcp";
@@ -934,28 +934,28 @@
             tab.classList.add("active");
             activeStoreTab = tab.getAttribute("data-tab");
             document.getElementById("store-tab-mcp").style.display = activeStoreTab === "mcp" ? "" : "none";
-            document.getElementById("store-tab-capabilities").style.display = activeStoreTab === "capabilities" ? "" : "none";
+            document.getElementById("store-tab-apps").style.display = activeStoreTab === "apps" ? "" : "none";
         });
     });
 
     function loadUnifiedStore() {
         storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading...</td></tr>';
-        capStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Loading...</td></tr>';
+        appStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Loading...</td></tr>';
 
         Promise.all([
             apiFetch("/api/registry/catalog"),
             apiFetch("/api/mcp/installed"),
-            apiFetch("/api/capabilities/installed"),
+            apiFetch("/api/apps/installed"),
         ]).then(function (results) {
             storeCatalog = results[0];
             installedMcps = results[1];
-            installedCaps = results[2];
+            installedApps = results[2];
             renderStoreTable();
-            renderCapStoreTable();
+            renderAppStoreTable();
         }).catch(function (err) {
             storeTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Failed to load: ' +
                 escapeHtml(String(err)) + '</td></tr>';
-            capStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Failed to load: ' +
+            appStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">Failed to load: ' +
                 escapeHtml(String(err)) + '</td></tr>';
         });
     }
@@ -1097,11 +1097,11 @@
             });
     }
 
-    // ── Capabilities Store Tab ──────────────────────────────────────────────
+    // ── Apps Store Tab ──────────────────────────────────────────────────────
 
-    function renderCapStoreTable() {
+    function renderAppStoreTable() {
         if (!storeCatalog) return;
-        var caps = storeCatalog.capabilities || [];
+        var caps = storeCatalog.apps || [];
         var filtered = caps;
 
         if (storeSearchText) {
@@ -1114,13 +1114,13 @@
         }
 
         if (filtered.length === 0) {
-            capStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">No capabilities found</td></tr>';
+            appStoreTbody.innerHTML = '<tr><td colspan="6" class="loading-cell">No apps found</td></tr>';
             return;
         }
 
         // Build installed lookup
         var installedNames = {};
-        installedCaps.forEach(function (c) { installedNames[c.name] = true; });
+        installedApps.forEach(function (c) { installedNames[c.name] = true; });
 
         var html = "";
         for (var i = 0; i < filtered.length; i++) {
@@ -1133,10 +1133,10 @@
 
             var actionHtml;
             if (isInstalled) {
-                actionHtml = '<button class="xp-button xp-button-remove cap-store-remove-btn" data-name="' +
+                actionHtml = '<button class="xp-button xp-button-remove app-store-remove-btn" data-name="' +
                     escapeAttr(c.id) + '">Remove</button>';
             } else {
-                actionHtml = '<button class="xp-button xp-button-primary cap-store-install-btn" data-id="' +
+                actionHtml = '<button class="xp-button xp-button-primary app-store-install-btn" data-id="' +
                     escapeAttr(c.id) + '">Install</button>';
             }
 
@@ -1149,21 +1149,21 @@
                 '<td>' + actionHtml + '</td>' +
                 '</tr>';
         }
-        capStoreTbody.innerHTML = html;
+        appStoreTbody.innerHTML = html;
 
         // Bind install buttons
-        capStoreTbody.querySelectorAll(".cap-store-install-btn").forEach(function (btn) {
+        appStoreTbody.querySelectorAll(".app-store-install-btn").forEach(function (btn) {
             btn.addEventListener("click", function () {
                 var id = btn.getAttribute("data-id");
-                onCapInstall(id, btn);
+                onAppInstall(id, btn);
             });
         });
 
         // Bind remove buttons
-        capStoreTbody.querySelectorAll(".cap-store-remove-btn").forEach(function (btn) {
+        appStoreTbody.querySelectorAll(".app-store-remove-btn").forEach(function (btn) {
             btn.addEventListener("click", function () {
                 var name = btn.getAttribute("data-name");
-                onCapRemove(name, btn);
+                onAppRemove(name, btn);
             });
         });
     }
@@ -1185,10 +1185,10 @@
         }, 2000);
     }
 
-    function onCapInstall(id, btn) {
+    function onAppInstall(id, btn) {
         btn.disabled = true;
         btn.textContent = "Installing...";
-        apiFetch("/api/capabilities/install", {
+        apiFetch("/api/apps/install", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id: id }),
@@ -1201,10 +1201,10 @@
         });
     }
 
-    function onCapRemove(name, btn) {
-        if (!confirm('Remove capability "' + name + '"?')) return;
+    function onAppRemove(name, btn) {
+        if (!confirm('Remove app "' + name + '"?')) return;
         btn.disabled = true;
-        apiFetch("/api/capabilities/uninstall/" + encodeURIComponent(name), { method: "POST" })
+        apiFetch("/api/apps/uninstall/" + encodeURIComponent(name), { method: "POST" })
             .then(function () {
                 triggerRestart();
             })
@@ -1218,7 +1218,7 @@
     document.getElementById("store-search").addEventListener("input", function (e) {
         storeSearchText = e.target.value;
         renderStoreTable();
-        renderCapStoreTable();
+        renderAppStoreTable();
     });
 
     // Store refresh

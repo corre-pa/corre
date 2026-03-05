@@ -2,7 +2,7 @@
 name = "corre-sdk"
 version.workspace = true
 edition.workspace = true
-description = "SDK for building Corre capability plugins"
+description = "SDK for building Corre app plugins"
 
 [dependencies]
 serde = { workspace = true }

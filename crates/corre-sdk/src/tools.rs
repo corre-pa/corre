@@ -1,10 +1,10 @@
-//! Shared utility functions for capability plugin authors.
+//! Shared utility functions for app plugin authors.
 //!
 //! Covers search result parsing from MCP tool outputs, JSON extraction from LLM responses
 //! that may include markdown fencing or prose, Brave Search freshness value normalisation,
 //! and LLM error classification helpers (retryable overload detection, context-length parsing).
 
-/// Shared search helpers used by multiple capabilities.
+/// Shared search helpers used by multiple apps.
 
 /// A single search result item from an MCP search tool.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]

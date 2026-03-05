@@ -1,13 +1,18 @@
 [package]
-name = "corre-capabilities"
+name = "rolodex"
 version.workspace = true
 edition.workspace = true
+description = "Automated personal contact engagement app for Corre"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rolodex"
+path = "src/main.rs"
 
 [dependencies]
 corre-sdk = { workspace = true }
-corre-core = { workspace = true }
-corre-mcp = { workspace = true }
-corre-llm = { workspace = true }
 rusqlite = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -16,7 +21,6 @@ serde_yaml_ng = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-async-trait = { workspace = true }
 futures = { workspace = true }
 csv = { workspace = true }
 uuid = { workspace = true }

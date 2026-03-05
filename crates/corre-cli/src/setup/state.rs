@@ -6,9 +6,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Per-capability LLM override state collected during the wizard.
+/// Per-app LLM override state collected during the wizard.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CapabilityLlmState {
+pub struct AppLlmState {
     pub provider: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
@@ -24,10 +24,10 @@ pub struct SetupState {
     pub llm_model: Option<String>,
     pub llm_api_key: Option<String>,
     pub brave_api_key_env: Option<String>,
-    pub enabled_capabilities: Vec<String>,
-    /// Per-capability LLM overrides keyed by capability name.
+    pub enabled_apps: Vec<String>,
+    /// Per-app LLM overrides keyed by app name.
     #[serde(default)]
-    pub capability_llm_overrides: std::collections::HashMap<String, CapabilityLlmState>,
+    pub app_llm_overrides: std::collections::HashMap<String, AppLlmState>,
     pub topics_yml: Option<String>,
     pub schedule_hour: Option<u8>,
     pub news_port: Option<u16>,
@@ -46,8 +46,8 @@ impl Default for SetupState {
             llm_model: None,
             llm_api_key: None,
             brave_api_key_env: None,
-            enabled_capabilities: Vec::new(),
-            capability_llm_overrides: std::collections::HashMap::new(),
+            enabled_apps: Vec::new(),
+            app_llm_overrides: std::collections::HashMap::new(),
             topics_yml: None,
             schedule_hour: None,
             news_port: None,

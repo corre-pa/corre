@@ -55,8 +55,8 @@ pub fn welcome(term: &console::Term) -> anyhow::Result<()> {
     println!();
     println!("  1. Choosing a default LLM provider (Venice.ai, Ollama, OpenAI, or custom)");
     println!("  2. Setting up Brave Search for web queries");
-    println!("  3. Selecting capabilities to enable");
-    println!("  4. Optionally choosing a different LLM per capability");
+    println!("  3. Selecting apps to enable");
+    println!("  4. Optionally choosing a different LLM per app");
     println!("  5. Configuring your topics and preferences");
     println!("  6. Writing corre.toml and starting the service");
     println!();
@@ -165,15 +165,15 @@ pub fn brave_search(state: &mut SetupState, term: &console::Term) -> anyhow::Res
     Ok(())
 }
 
-/// Step 4: Capability selection.
-pub fn capabilities(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
+/// Step 4: App selection.
+pub fn apps(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
     let heading = Style::new().bold();
 
     term.clear_screen()?;
     println!();
-    println!("{}", heading.apply_to("Step 4: Capabilities"));
+    println!("{}", heading.apply_to("Step 4: Apps"));
     println!();
-    println!("Capabilities are modular tasks that run on a schedule. Select which to enable.");
+    println!("Apps are modular tasks that run on a schedule. Select which to enable.");
     println!();
 
     // For now, only daily-brief exists. The UI supports future additions.
@@ -182,17 +182,14 @@ pub fn capabilities(state: &mut SetupState, term: &console::Term) -> anyhow::Res
     let labels: Vec<String> = catalog.iter().map(|(name, desc)| format!("{name} — {desc}")).collect();
     let defaults: Vec<bool> = vec![true; catalog.len()];
 
-    let selected = MultiSelect::new()
-        .with_prompt("Enable capabilities (space to toggle, enter to confirm)")
-        .items(&labels)
-        .defaults(&defaults)
-        .interact()?;
+    let selected =
+        MultiSelect::new().with_prompt("Enable apps (space to toggle, enter to confirm)").items(&labels).defaults(&defaults).interact()?;
 
-    state.enabled_capabilities = selected.iter().map(|&i| catalog[i].0.into()).collect();
+    state.enabled_apps = selected.iter().map(|&i| catalog[i].0.into()).collect();
 
-    if state.enabled_capabilities.is_empty() {
+    if state.enabled_apps.is_empty() {
         println!();
-        println!("No capabilities selected. You can enable them later in corre.toml.");
+        println!("No apps selected. You can enable them later in corre.toml.");
     }
 
     state.completed_step = 4;
@@ -201,9 +198,9 @@ pub fn capabilities(state: &mut SetupState, term: &console::Term) -> anyhow::Res
     Ok(())
 }
 
-/// Step 5: Per-capability LLM overrides.
-pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
-    if state.enabled_capabilities.is_empty() {
+/// Step 5: Per-app LLM overrides.
+pub fn app_llm(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
+    if state.enabled_apps.is_empty() {
         state.completed_step = 5;
         state.save()?;
         return Ok(());
@@ -214,10 +211,10 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
 
     term.clear_screen()?;
     println!();
-    println!("{}", heading.apply_to("Step 5: Per-Capability LLM Settings"));
+    println!("{}", heading.apply_to("Step 5: Per-App LLM Settings"));
     println!();
-    println!("Each capability uses the global LLM provider by default. You can override");
-    println!("the model, provider, or other settings for individual capabilities.");
+    println!("Each app uses the global LLM provider by default. You can override");
+    println!("the model, provider, or other settings for individual apps.");
     println!();
 
     let global_model = state.llm_model.as_deref().unwrap_or("(default)");
@@ -225,26 +222,26 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
     println!("{}", dim.apply_to(format!("Global default: {global_model} via {global_provider}")));
     println!();
 
-    for cap_name in state.enabled_capabilities.clone() {
+    for cap_name in state.enabled_apps.clone() {
         let customize = Confirm::new().with_prompt(format!("Use a different model for \"{cap_name}\"?")).default(false).interact()?;
 
         if !customize {
-            state.capability_llm_overrides.remove(&cap_name);
+            state.app_llm_overrides.remove(&cap_name);
             continue;
         }
 
         println!();
-        // Only the model name can be overridden per-capability (provider/base_url/api_key
+        // Only the model name can be overridden per-app (provider/base_url/api_key
         // come from the global [llm] section). Asking for those fields here would be
-        // misleading because CapabilityLlmConfig only supports model/temperature/tokens.
+        // misleading because AppLlmConfig only supports model/temperature/tokens.
         let model: String = Input::new()
             .with_prompt(format!("Model name for \"{cap_name}\""))
             .validate_with(|input: &String| validate::non_empty(input))
             .interact_text()?;
 
         state
-            .capability_llm_overrides
-            .insert(cap_name, super::state::CapabilityLlmState { provider: None, base_url: None, model: Some(model), api_key: None });
+            .app_llm_overrides
+            .insert(cap_name, super::state::AppLlmState { provider: None, base_url: None, model: Some(model), api_key: None });
 
         println!();
     }
@@ -257,7 +254,7 @@ pub fn capability_llm(state: &mut SetupState, term: &console::Term) -> anyhow::R
 
 /// Step 6: Topics configuration (only if daily-brief is enabled).
 pub fn topics(state: &mut SetupState, term: &console::Term) -> anyhow::Result<()> {
-    if !state.enabled_capabilities.iter().any(|c| c == "daily-brief") {
+    if !state.enabled_apps.iter().any(|c| c == "daily-brief") {
         state.completed_step = 6;
         state.save()?;
         return Ok(());

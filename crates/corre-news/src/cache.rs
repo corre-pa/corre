@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 /// In-memory cache of all editions, backed by the filesystem archive.
 ///
 /// Keeps a sorted map of editions and a set of all source URLs ever published,
-/// enabling cross-edition URL deduplication for capabilities.
+/// enabling cross-edition URL deduplication for apps.
 pub struct EditionCache {
     inner: RwLock<CacheInner>,
     archive: Archive,

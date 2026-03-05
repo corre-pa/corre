@@ -1,6 +1,6 @@
 //! Real-time execution state tracking for the Corre dashboard.
 //!
-//! `ExecutionTracker` maintains a per-capability `CapabilityState` map and broadcasts
+//! `ExecutionTracker` maintains a per-app `AppState` map and broadcasts
 //! `DashboardEvent` updates over a `tokio::broadcast` channel. `SystemMetrics` reports
 //! host-level and Corre process-tree CPU and memory usage.
 
@@ -24,7 +24,7 @@ pub enum RunStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityState {
+pub struct AppState {
     pub name: String,
     pub description: String,
     pub schedule: String,
@@ -52,8 +52,8 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DashboardEvent {
-    CapabilityUpdate(CapabilityState),
-    LogLine { capability: String, entry: LogEntry },
+    AppUpdate(AppState),
+    LogLine { app: String, entry: LogEntry },
     SystemMetrics(SystemMetrics),
 }
 
@@ -69,8 +69,8 @@ pub struct SystemMetrics {
     pub process_memory_mb: u64,
 }
 
-impl From<&crate::config::CapabilityConfig> for CapabilityState {
-    fn from(c: &crate::config::CapabilityConfig) -> Self {
+impl From<&crate::config::AppConfig> for AppState {
+    fn from(c: &crate::config::AppConfig) -> Self {
         Self {
             name: c.name.clone(),
             description: c.description.clone(),
@@ -90,14 +90,14 @@ impl From<&crate::config::CapabilityConfig> for CapabilityState {
 }
 
 pub struct ExecutionTracker {
-    states: RwLock<HashMap<String, CapabilityState>>,
+    states: RwLock<HashMap<String, AppState>>,
     event_tx: broadcast::Sender<DashboardEvent>,
     start_time: Instant,
 }
 
 impl ExecutionTracker {
-    pub fn new(capabilities: &[crate::config::CapabilityConfig]) -> Arc<Self> {
-        let states: HashMap<String, CapabilityState> = capabilities.iter().map(|c| (c.name.clone(), CapabilityState::from(c))).collect();
+    pub fn new(apps: &[crate::config::AppConfig]) -> Arc<Self> {
+        let states: HashMap<String, AppState> = apps.iter().map(|c| (c.name.clone(), AppState::from(c))).collect();
 
         let (event_tx, _) = broadcast::channel(256);
 
@@ -113,7 +113,7 @@ impl ExecutionTracker {
             state.progress_pct = Some(0);
             state.phase = "starting".into();
             state.articles_produced = None;
-            let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
+            let _ = self.event_tx.send(DashboardEvent::AppUpdate(state.clone()));
         }
     }
 
@@ -128,7 +128,7 @@ impl ExecutionTracker {
             state.articles_produced = Some(articles);
             state.progress_pct = Some(100);
             state.phase = "done".into();
-            let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
+            let _ = self.event_tx.send(DashboardEvent::AppUpdate(state.clone()));
         }
     }
 
@@ -143,7 +143,7 @@ impl ExecutionTracker {
             state.last_error = Some(error.to_string());
             state.progress_pct = None;
             state.phase = "failed".into();
-            let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
+            let _ = self.event_tx.send(DashboardEvent::AppUpdate(state.clone()));
         }
     }
 
@@ -152,7 +152,7 @@ impl ExecutionTracker {
         if let Some(state) = states.get_mut(name) {
             state.progress_pct = Some(pct);
             state.phase = phase.to_string();
-            let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
+            let _ = self.event_tx.send(DashboardEvent::AppUpdate(state.clone()));
         }
     }
 
@@ -165,10 +165,10 @@ impl ExecutionTracker {
             }
             state.recent_logs.push_back(entry.clone());
         }
-        let _ = self.event_tx.send(DashboardEvent::LogLine { capability: name.to_string(), entry });
+        let _ = self.event_tx.send(DashboardEvent::LogLine { app: name.to_string(), entry });
     }
 
-    pub async fn snapshot(&self) -> Vec<CapabilityState> {
+    pub async fn snapshot(&self) -> Vec<AppState> {
         self.states.read().await.values().cloned().collect()
     }
 
@@ -180,15 +180,15 @@ impl ExecutionTracker {
         self.states.read().await.get(name).is_some_and(|s| s.status == RunStatus::Running)
     }
 
-    /// Insert a new capability into the tracked set (e.g. after install from the Store).
-    pub async fn add_capability(&self, config: &crate::config::CapabilityConfig) {
-        let state = CapabilityState::from(config);
-        let _ = self.event_tx.send(DashboardEvent::CapabilityUpdate(state.clone()));
+    /// Insert a new app into the tracked set (e.g. after install from the Store).
+    pub async fn add_app(&self, config: &crate::config::AppConfig) {
+        let state = AppState::from(config);
+        let _ = self.event_tx.send(DashboardEvent::AppUpdate(state.clone()));
         self.states.write().await.insert(config.name.clone(), state);
     }
 
-    /// Remove a capability from the tracked set (e.g. after uninstall from the Store).
-    pub async fn remove_capability(&self, name: &str) {
+    /// Remove an app from the tracked set (e.g. after uninstall from the Store).
+    pub async fn remove_app(&self, name: &str) {
         self.states.write().await.remove(name);
     }
 

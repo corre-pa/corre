@@ -1,9 +1,9 @@
 //! Serde-serialisable types that mirror the registry JSON manifest format.
 //!
 //! [`RegistryManifest`] is the top-level document (V1 or V2). V1 contains only MCP servers.
-//! V2 extends it with capability entries. The [`McpRegistryEntry`] type describes an MCP server
-//! with its [`InstallMethod`] and required [`EnvVarSpec`] entries. [`CapabilityEntry`] describes
-//! a capability with its inline manifest, install method, and metadata.
+//! V2 extends it with app entries. The [`McpRegistryEntry`] type describes an MCP server
+//! with its [`InstallMethod`] and required [`EnvVarSpec`] entries. [`AppEntry`] describes
+//! an app with its inline manifest, install method, and metadata.
 
 use corre_sdk::manifest::{ExecutionMode, OutputDeclaration, PluginLink, SandboxPermissions, ServiceDeclaration};
 use serde::{Deserialize, Serialize};
@@ -11,15 +11,15 @@ use std::collections::HashMap;
 
 /// Top-level registry manifest fetched from a remote URL.
 ///
-/// Supports both V1 (servers only) and V2 (servers + capabilities) formats.
-/// When deserializing a V1 manifest, `capabilities` defaults to an empty vec.
+/// Supports both V1 (servers only) and V2 (servers + apps) formats.
+/// When deserializing a V1 manifest, `apps` defaults to an empty vec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryManifest {
     pub version: u32,
     pub updated_at: String,
     pub servers: Vec<McpRegistryEntry>,
-    #[serde(default)]
-    pub capabilities: Vec<CapabilityEntry>,
+    #[serde(default, alias = "capabilities")]
+    pub apps: Vec<AppEntry>,
 }
 
 /// A single MCP server entry in the registry.
@@ -40,9 +40,9 @@ pub struct McpRegistryEntry {
     pub verified: bool,
 }
 
-/// A capability entry in the registry.
+/// An app entry in the registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityEntry {
+pub struct AppEntry {
     pub id: String,
     pub name: String,
     pub description: String,
@@ -50,7 +50,7 @@ pub struct CapabilityEntry {
     #[serde(default = "default_protocol_version")]
     pub protocol_version: String,
     pub install: InstallMethod,
-    pub manifest: CapabilityManifestInline,
+    pub manifest: AppManifestInline,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -61,17 +61,17 @@ fn default_protocol_version() -> String {
     "1.0".into()
 }
 
-/// Inline manifest data embedded in a capability registry entry.
+/// Inline manifest data embedded in an app registry entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilityManifestInline {
+pub struct AppManifestInline {
     #[serde(default)]
     pub content_type: String,
     #[serde(default)]
     pub execution_mode: ExecutionMode,
     #[serde(default)]
-    pub defaults: CapabilityDefaults,
+    pub defaults: AppDefaults,
     #[serde(default)]
-    pub permissions: CapabilityPermissions,
+    pub permissions: AppPermissions,
     /// References to MCP server IDs in the same registry.
     #[serde(default)]
     pub mcp_dependencies: Vec<String>,
@@ -81,9 +81,9 @@ pub struct CapabilityManifestInline {
     pub links: Vec<PluginLink>,
 }
 
-/// Default config values for a registry-hosted capability.
+/// Default config values for a registry-hosted app.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CapabilityDefaults {
+pub struct AppDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,9 +92,9 @@ pub struct CapabilityDefaults {
     pub config_schema: Option<corre_sdk::manifest::ConfigSchema>,
 }
 
-/// Extended permissions for a registry-hosted capability.
+/// Extended permissions for a registry-hosted app.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CapabilityPermissions {
+pub struct AppPermissions {
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default = "default_true")]
@@ -115,7 +115,7 @@ fn default_max_concurrent_llm() -> usize {
     10
 }
 
-/// How to install an MCP server or capability binary. The `method` field is the serde tag.
+/// How to install an MCP server or app binary. The `method` field is the serde tag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "lowercase")]
 pub enum InstallMethod {
@@ -154,7 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v1_manifest_parses_without_capabilities() {
+    fn v1_manifest_parses_without_apps() {
         let json = r#"{
             "version": 1,
             "updated_at": "2026-02-26T00:00:00Z",
@@ -162,16 +162,16 @@ mod tests {
         }"#;
         let manifest: RegistryManifest = serde_json::from_str(json).unwrap();
         assert_eq!(manifest.version, 1);
-        assert!(manifest.capabilities.is_empty());
+        assert!(manifest.apps.is_empty());
     }
 
     #[test]
-    fn v2_manifest_parses_with_capabilities() {
+    fn v2_manifest_parses_with_apps() {
         let json = r#"{
             "version": 2,
             "updated_at": "2026-02-26T00:00:00Z",
             "servers": [],
-            "capabilities": [{
+            "apps": [{
                 "id": "daily-brief",
                 "name": "Daily Brief",
                 "description": "Web search + LLM scoring",
@@ -191,8 +191,8 @@ mod tests {
         }"#;
         let manifest: RegistryManifest = serde_json::from_str(json).unwrap();
         assert_eq!(manifest.version, 2);
-        assert_eq!(manifest.capabilities.len(), 1);
-        assert_eq!(manifest.capabilities[0].id, "daily-brief");
-        assert_eq!(manifest.capabilities[0].manifest.mcp_dependencies, vec!["brave-search"]);
+        assert_eq!(manifest.apps.len(), 1);
+        assert_eq!(manifest.apps[0].id, "daily-brief");
+        assert_eq!(manifest.apps[0].manifest.mcp_dependencies, vec!["brave-search"]);
     }
 }

@@ -1,7 +1,7 @@
 //! Standalone `corre-news` binary -- serves only the newspaper web interface.
 //!
 //! Designed for the Docker `news` container: no dashboard, no scheduler, no
-//! capability execution. Just the newspaper, archive, and search.
+//! app execution. Just the newspaper, archive, and search.
 
 use std::path::PathBuf;
 use std::sync::Arc;

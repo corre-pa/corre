@@ -1,12 +1,12 @@
 # corre-news
 
-The web server and edition storage layer for Corre. Exposes archived capability output as a
+The web server and edition storage layer for Corre. Exposes archived app output as a
 newspaper-style HTML interface (CorreNews), provides Tantivy full-text search over all indexed
-articles, and serves a token-protected settings page for editing capability topics.
+articles, and serves a token-protected settings page for editing app topics.
 
 ## Role in the Corre project
 
-`corre-news` sits between the capability pipeline and the end user. After a capability produces
+`corre-news` sits between the app pipeline and the end user. After an app produces
 output, the CLI calls `corre-news` to persist the resulting `Edition` to disk and make it
 visible on the web interface. The crate has no knowledge of how editions are produced.
 

@@ -2,29 +2,29 @@
 
 > Last updated at v0.17.0
 
-A personal AI task scheduler that runs modular *capabilities* on cron schedules and publishes
+A personal AI task scheduler that runs modular *apps* on cron schedules and publishes
 their output as a newspaper-style web interface called **CorreNews**.
 
 ## Goals
 
 - **Privacy-centric**: All data stays local. Use whichever LLM provider you like, but Corre defaults to privacy-centric services that 
   use open-source models and don't log your sessions (Venice.ai, Brave Search, Kagi etc.).
-- **Modular capabilities**: Each task (daily news brief, assistant, birthday reminders, ...) is a self-contained capability that can be 
+- **Modular apps**: Each task (daily news brief, assistant, birthday reminders, ...) is a self-contained app that can be
   installed, configured, and removed independently.
-- **MCP-native**: Capabilities interact with the outside world through
+- **MCP-native**: Apps interact with the outside world through
   [Model Context Protocol](https://modelcontextprotocol.io/) servers. We've curated a pool of MCP servers for web search, calendar 
   access, email sending, and more, and you can add your own.
 - **Deterministic orchestration**: Scheduling is done with cron expressions, not open-ended LLM agent loops. We don't use LLMs to solve 
   problems that Unix solved 60 years ago.
 - **Accessible anywhere**: CorreNews binds to `127.0.0.1` by default and is designed to sit behind a NAT-punching solution (Headscale, 
   WireGuard, Tor hidden service) so you can read your personal newspaper from any device without exposing it to the public internet.
-- **Security-minded**: MCP servers and capabilities each run in their own sandbox. Capabilities have to provide a manifest of every MCP  
-  server they use, and you _can_ configure fine-grained permissions for file access, network access and more. However, the capability 
-  registry has pre-configured permissions to the absolute minimum so that you don't have to fiddle with manifests. 
+- **Security-minded**: MCP servers and apps each run in their own sandbox. Apps have to provide a manifest of every MCP
+  server they use, and you _can_ configure fine-grained permissions for file access, network access and more. However, the app
+  registry has pre-configured permissions to the absolute minimum so that you don't have to fiddle with manifests.
 
-### Included capability: Daily Research Brief
+### Included app: Daily Research Brief
 
-The first end-to-end capability ships with the MVP. Each morning it:
+The first end-to-end app ships with the MVP. Each morning it:
 
 1. Reads topics from `config/topics.yml`
 2. Searches the web for each topic via the Brave Search MCP server
@@ -59,7 +59,7 @@ are resolved from the environment at runtime. Set the actual values in your shel
 # LLM provider (Venice.ai by default, or any OpenAI-compatible API)
 export VENICE_API_KEY="your-venice-api-key"
 
-# Brave Search (used by the daily-brief capability)
+# Brave Search (used by the daily-brief app)
 export BRAVE_API_KEY="your-brave-api-key"
 ```
 
@@ -92,7 +92,7 @@ Edit `~/.local/share/corre/config/topics.yml` to choose your daily brief topics:
 - Geopolitics and international relations
 ```
 
-### 4. Run a capability manually
+### 4. Run an app manually
 
 ```sh
 # One-shot run -- executes the daily brief immediately and exits
@@ -107,7 +107,7 @@ The edition is written to `~/.local/share/corre/editions/YYYY-MM-DD/edition.json
 corre run
 ```
 
-This starts the cron scheduler and the operator dashboard. Capabilities fire on their configured
+This starts the cron scheduler and the operator dashboard. Apps fire on their configured
 schedules (the daily brief defaults to `0 0 5 * * *` -- 05:00 every day). The CorreNews web
 server runs as a separate service (see `corre-news`).
 
@@ -118,7 +118,7 @@ corre [OPTIONS] <COMMAND>
 
 Commands:
   run           Start the full daemon (scheduler + dashboard)
-  run-now       Run a single capability immediately and exit
+  run-now       Run a single app immediately and exit
   setup         Interactive setup wizard — configure LLM, API keys, topics, and systemd
   install-deps  Check and install required external dependencies
   health        Health check: verify data dir and config are accessible (exit 0/1)
@@ -261,33 +261,34 @@ corre/                              # source repository
     settings.css                    # settings/topics page CSS
     topics.js                       # topics editor JS
   crates/
-    corre-sdk/                      # types + protocol for subprocess capabilities
+    corre-sdk/                      # types + protocol for subprocess apps
     corre-core/                     # shared types, traits, config, scheduler
-    corre-host/                     # subprocess capability host (CCPP protocol)
+    corre-host/                     # subprocess app host (CCPP protocol)
     corre-mcp/                      # MCP server pool
     corre-llm/                      # LLM provider (OpenAI-compatible)
     corre-news/                     # CorreNews web server + archive + search
     corre-dashboard/                # operator dashboard web UI + API
-    corre-capabilities/             # built-in capability implementations
+    corre-plugin/                   # built-in app implementations
     corre-safety/                   # prompt injection defense middleware
-    corre-registry/                 # MCP server + capability registry client
+    corre-registry/                 # MCP server + app registry client
     corre-cli/                      # binary entry point
-    daily-brief/                    # daily research brief (subprocess capability)
     mcp-smtp/                       # SMTP email MCP server
     mcp-telegram/                   # Telegram messaging MCP server
+  apps/
+    daily-brief/                    # daily research brief (subprocess app)
 
 ~/.local/share/corre/               # runtime data directory
   corre.toml                        # main config file
   .env                              # API keys (created by `corre setup`)
   config/
-    topics.yml                      # user-editable per-capability config
+    topics.yml                      # user-editable per-app config
     mcp/                            # per-MCP server config files (*.toml)
   editions/
     YYYY-MM-DD/edition.json         # archived editions
-  plugins/                          # installed capability plugins
+  plugins/                          # installed app plugins
   bin/                              # locally installed MCP server binaries
   search_index/                     # Tantivy full-text search index
-  capabilities_logs/                # daily-rotating capability log files
+  app_logs/                         # daily-rotating app log files
 ```
 
 ### Crate dependency graph
@@ -299,34 +300,34 @@ corre-cli
   |-- corre-mcp        --> corre-core
   |-- corre-llm        --> corre-core
   |-- corre-safety     --> corre-core
-  |-- corre-capabilities --> corre-core, corre-mcp, corre-llm
+  |-- corre-plugin      --> corre-core, corre-mcp, corre-llm
   |-- corre-dashboard  --> corre-core, corre-sdk, corre-registry
   |-- corre-registry
 
 corre-news (standalone binary)
   |-- corre-core
 
-daily-brief (subprocess capability)
+daily-brief (subprocess app)
   |-- corre-sdk
 ```
 
 `corre-sdk` sits at the very bottom with zero internal dependencies — it defines the types and
-protocol that subprocess capabilities use to communicate with the host. `corre-core` depends
+protocol that subprocess apps use to communicate with the host. `corre-core` depends
 only on `corre-sdk` and defines the trait abstractions that the host-side crates implement.
 
 ### Key abstractions (`corre-core`)
 
-**`Capability`** -- the unit of work. Each capability declares a manifest (name, cron schedule,
+**`App`** -- the unit of work. Each app declares a manifest (name, cron schedule,
 required MCP servers) and an `execute` method that receives a context and returns articles.
-Capabilities can be built-in (compiled into the host binary) or subprocess plugins that
+Apps can be built-in (compiled into the host binary) or subprocess plugins that
 communicate over stdin/stdout using the CCPP (Corre Capability Plugin Protocol) JSON-RPC
-protocol — see `CAPABILITY_GUIDE.md` for details.
+protocol — see `APP_GUIDE.md` for details.
 
 ```rust
 #[async_trait]
-pub trait Capability: Send + Sync {
-    fn manifest(&self) -> &CapabilityManifest;
-    async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput>;
+pub trait App: Send + Sync {
+    fn manifest(&self) -> &AppManifest;
+    async fn execute(&self, ctx: &AppContext) -> anyhow::Result<AppOutput>;
 }
 ```
 
@@ -334,12 +335,13 @@ pub trait Capability: Send + Sync {
 (`OpenAiCompatProvider` in `corre-llm`) speaks the OpenAI wire format, which Venice.ai, Ollama,
 and many others support.
 
-**`McpCaller`** -- abstracts over MCP tool invocation, allowing capabilities to call MCP tools
+**`McpCaller`** -- abstracts over MCP tool invocation, allowing apps to call MCP tools
 without depending on `corre-mcp` directly.
 
 **Publishing types** -- `Edition` > `Section` > `Article`. An edition is a dated collection of
 sections, each containing scored articles with sources. The highest-scoring article title becomes
 the edition headline.
+
 
 ### MCP server pool (`corre-mcp`)
 
@@ -358,7 +360,7 @@ BRAVE_API_KEY = "${BRAVE_API_KEY}"
 ```
 
 MCP servers are started lazily as stdio child processes on first use, cached for the duration
-of a capability run, and shut down afterward. Environment variable references (`${VAR}` syntax)
+of an app run, and shut down afterward. Environment variable references (`${VAR}` syntax)
 in the `env` table are resolved at spawn time from the host environment.
 
 ### CorreNews web server (`corre-news`)
@@ -386,39 +388,39 @@ must include `?token=<value>` to authenticate.
 ### Operator dashboard (`corre-dashboard`)
 
 Embedded in the `corre run` process (port 5500 by default). Provides a web UI and REST API
-for monitoring and managing capabilities at runtime.
+for monitoring and managing apps at runtime.
 
 Key API routes:
 
 | Path | Description |
 |------|-------------|
 | `GET /` | Dashboard web UI |
-| `GET /api/dashboard/status` | Capability execution status (JSON) |
-| `POST /api/dashboard/run/{name}` | Trigger a capability run immediately |
+| `GET /api/dashboard/status` | App execution status (JSON) |
+| `POST /api/dashboard/run/{name}` | Trigger an app run immediately |
 | `GET /api/dashboard/events` | SSE stream of real-time progress and log events |
 | `GET,PUT /api/settings` | Read/update `corre.toml` settings |
 | `GET /api/registry/catalog` | Browse the MCP server registry |
 | `POST /api/mcp/install` | Install an MCP server from the registry |
-| `POST /api/capabilities/install` | Install a capability plugin |
+| `POST /api/apps/install` | Install an app plugin |
 | `POST /api/system/restart` | Graceful restart |
 
 ### Scheduler (`corre-core` + `corre-cli`)
 
-The scheduler wraps `tokio-cron-scheduler`. For each enabled capability in config, the CLI
+The scheduler wraps `tokio-cron-scheduler`. For each enabled app in config, the CLI
 registers an async callback that:
 
-1. Builds an MCP pool with the capability's declared servers
-2. Initializes the LLM provider (with per-capability model/temperature overrides if configured)
+1. Builds an MCP pool with the app's declared servers
+2. Initializes the LLM provider (with per-app model/temperature overrides if configured)
 3. Wraps MCP and LLM with the safety layer (if enabled)
-4. Runs the capability in an isolated `tokio` task
+4. Runs the app in an isolated `tokio` task
 5. Forwards real-time progress events to the dashboard via SSE
 
-The dashboard can also trigger capabilities on demand via `POST /api/dashboard/run/{name}`.
-A panic or timeout in one capability does not affect the scheduler or other capabilities.
+The dashboard can also trigger apps on demand via `POST /api/dashboard/run/{name}`.
+A panic or timeout in one app does not affect the scheduler or other apps.
 
 ### Daily Brief pipeline (`daily-brief`)
 
-The daily brief runs as a subprocess capability (its own binary communicating via CCPP).
+The daily brief runs as a subprocess app (its own binary communicating via CCPP).
 A deterministic, multi-step pipeline with LLM calls at specific points:
 
 1. **Parse** `config/topics.yml` into sections and search queries
@@ -427,7 +429,7 @@ A deterministic, multi-step pipeline with LLM calls at specific points:
 4. **Score** results for newsworthiness (LLM call, structured JSON output)
 5. **Filter** to top results per section above the score threshold
 6. **Summarise** each top result in 2-3 paragraphs (LLM call)
-7. **Emit** `CapabilityOutput` with articles grouped by section
+7. **Emit** `AppOutput` with articles grouped by section
 
 ### Safety layer (`corre-safety`)
 
@@ -438,7 +440,7 @@ payloads — and the LLM might comply. The safety layer sits between MCP tool ou
 prompts to neutralize these attacks.
 
 Safety is **enabled by default**. It wraps `McpCaller` and `LlmProvider` transparently, so
-capabilities require no code changes.
+apps require no code changes.
 
 The pipeline applies four stages to every MCP tool output:
 
@@ -517,7 +519,7 @@ bind = "127.0.0.1:5510"
 title = "Corre News"
 # editor_token = "your-secret"      # set to enable /settings/topics page
 
-[[capabilities]]
+[[apps]]
 name = "daily-brief"
 description = "Researches topics and produces a daily news briefing"
 schedule = "0 0 5 * * *"
@@ -525,16 +527,16 @@ mcp_servers = ["brave-search"]
 config_path = "config/topics.yml"
 enabled = true
 
-# Per-capability LLM overrides (model selection and generation params only):
-# [capabilities.llm]
+# Per-app LLM overrides (model selection and generation params only):
+# [apps.llm]
 # model = "gpt-4o"
 # temperature = 0.7
 # max_concurrent = 5
 ```
 
 MCP servers are configured as individual files under `config/mcp/` (see the MCP server pool
-section above). To add a new capability, either install a plugin through the dashboard or append
-a `[[capabilities]]` entry referencing the MCP servers it needs.
+section above). To add a new app, either install a plugin through the dashboard or append
+an `[[apps]]` entry referencing the MCP servers it needs.
 
 ## License
 

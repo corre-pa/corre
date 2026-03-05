@@ -1,17 +1,17 @@
-//! MCP server and capability installer/uninstaller.
+//! MCP server and app installer/uninstaller.
 //!
 //! [`McpInstaller`] handles MCP servers (converting [`McpRegistryEntry`] into `McpServerConfig`)
-//! and capabilities (downloading binaries to `{data_dir}/plugins/{id}/bin/`, generating
+//! and apps (downloading binaries to `{data_dir}/plugins/{id}/bin/`, generating
 //! `manifest.toml`, and auto-installing MCP dependencies).
 
-use crate::manifest::{CapabilityEntry, InstallMethod, McpRegistryEntry};
+use crate::manifest::{AppEntry, InstallMethod, McpRegistryEntry};
 use corre_core::config::McpServerConfig;
 use corre_sdk::manifest::{PluginDefaults, PluginManifest, PluginMeta, PluginPermissions};
 use corre_sdk::types::ContentType;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Handles installing and uninstalling MCP servers and capabilities from registry entries.
+/// Handles installing and uninstalling MCP servers and apps from registry entries.
 pub struct McpInstaller {
     data_dir: PathBuf,
     registry_base_url: String,
@@ -104,19 +104,19 @@ impl McpInstaller {
     }
 
     // =========================================================================
-    // Capability install/uninstall
+    // App install/uninstall
     // =========================================================================
 
-    /// Install a capability from a registry entry.
+    /// Install an app from a registry entry.
     ///
     /// 1. Downloads the binary using the existing `InstallMethod` logic
-    /// 2. Places it at `{data_dir}/plugins/{id}/bin/capability`
+    /// 2. Places it at `{data_dir}/plugins/{id}/bin/app`
     /// 3. Generates `manifest.toml` from the inline manifest
-    /// 4. Writes per-capability config at `{data_dir}/config/capabilities/{id}.toml`
+    /// 4. Writes per-app config at `{data_dir}/config/apps/{id}.toml`
     ///
     /// Returns `(plugin_dir, mcp_deps)` where `mcp_deps` is the list of MCP server IDs
-    /// that this capability depends on. The caller should install any that are missing.
-    pub async fn install_capability(&self, entry: &CapabilityEntry) -> Result<(PathBuf, Vec<String>), InstallError> {
+    /// that this app depends on. The caller should install any that are missing.
+    pub async fn install_app(&self, entry: &AppEntry) -> Result<(PathBuf, Vec<String>), InstallError> {
         let plugin_dir = self.data_dir.join("plugins").join(&entry.id);
         let bin_dir = plugin_dir.join("bin");
         tokio::fs::create_dir_all(&bin_dir).await?;
@@ -126,17 +126,17 @@ impl McpInstaller {
                 self.download_and_verify(download_url_template, sha256, &entry.version, &bin_dir, binary_name).await?;
             }
             _ => {
-                return Err(InstallError::Io("only binary install method is supported for capabilities".into()));
+                return Err(InstallError::Io("only binary install method is supported for apps".into()));
             }
         }
 
         // Generate manifest.toml from the inline manifest
-        let manifest_toml = self.generate_capability_manifest(entry);
+        let manifest_toml = self.generate_app_manifest(entry);
         let manifest_path = plugin_dir.join("manifest.toml");
         tokio::fs::write(&manifest_path, manifest_toml).await?;
 
-        // Write per-capability config file
-        let config_dir = self.data_dir.join("config").join("capabilities");
+        // Write per-app config file
+        let config_dir = self.data_dir.join("config").join("apps");
         tokio::fs::create_dir_all(&config_dir).await?;
 
         let cap_config = format!("installed = true\nregistry_id = \"{}\"\nversion = \"{}\"\n", entry.id, entry.version);
@@ -144,29 +144,29 @@ impl McpInstaller {
         tokio::fs::write(&config_path, cap_config).await?;
 
         let mcp_deps = entry.manifest.mcp_dependencies.clone();
-        tracing::info!("Installed capability `{}` v{}", entry.id, entry.version);
+        tracing::info!("Installed app `{}` v{}", entry.id, entry.version);
         Ok((plugin_dir, mcp_deps))
     }
 
-    /// Uninstall a capability: remove its plugin directory and config.
+    /// Uninstall an app: remove its plugin directory and config.
     ///
     /// Returns a list of MCP server IDs that were dependencies and may now be unused.
-    pub async fn uninstall_capability(&self, id: &str) -> Result<Vec<String>, InstallError> {
+    pub async fn uninstall_app(&self, id: &str) -> Result<Vec<String>, InstallError> {
         let plugin_dir = self.data_dir.join("plugins").join(id);
 
         // Read the manifest before deleting so we can report MCP dependencies
-        let mcp_deps = self.read_capability_mcp_deps(&plugin_dir).await;
+        let mcp_deps = self.read_app_mcp_deps(&plugin_dir).await;
 
         if plugin_dir.exists() {
             tokio::fs::remove_dir_all(&plugin_dir).await?;
         }
 
-        let config_path = self.data_dir.join("config").join("capabilities").join(format!("{id}.toml"));
+        let config_path = self.data_dir.join("config").join("apps").join(format!("{id}.toml"));
         if config_path.exists() {
             tokio::fs::remove_file(&config_path).await?;
         }
 
-        tracing::info!("Uninstalled capability `{id}`");
+        tracing::info!("Uninstalled app `{id}`");
         Ok(mcp_deps)
     }
 
@@ -228,11 +228,11 @@ impl McpInstaller {
         Ok(())
     }
 
-    /// Generate a `manifest.toml` string from a capability's inline manifest.
+    /// Generate a `manifest.toml` string from an app's inline manifest.
     ///
     /// Builds a [`PluginManifest`] and serializes it with `toml::to_string_pretty`
     /// so that all field values (descriptions, paths, URLs) are properly escaped.
-    fn generate_capability_manifest(&self, entry: &CapabilityEntry) -> String {
+    fn generate_app_manifest(&self, entry: &AppEntry) -> String {
         let m = &entry.manifest;
         let binary_name = match &entry.install {
             InstallMethod::Binary { binary_name, .. } => binary_name.clone(),
@@ -272,8 +272,8 @@ impl McpInstaller {
         toml::to_string_pretty(&manifest).expect("PluginManifest serialization should not fail")
     }
 
-    /// Read MCP dependency IDs from a capability's manifest.toml (best-effort).
-    async fn read_capability_mcp_deps(&self, plugin_dir: &Path) -> Vec<String> {
+    /// Read MCP dependency IDs from an app's manifest.toml (best-effort).
+    async fn read_app_mcp_deps(&self, plugin_dir: &Path) -> Vec<String> {
         let manifest_path = plugin_dir.join("manifest.toml");
         let Ok(content) = tokio::fs::read_to_string(&manifest_path).await else { return Vec::new() };
         let Ok(manifest) = toml::from_str::<corre_sdk::manifest::PluginManifest>(&content) else { return Vec::new() };
@@ -320,14 +320,14 @@ impl From<std::io::Error> for InstallError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::{CapabilityDefaults, CapabilityManifestInline, CapabilityPermissions};
+    use crate::manifest::{AppDefaults, AppManifestInline, AppPermissions};
     use corre_sdk::manifest::{
         ConfigField, ConfigFieldType, ConfigSchema, OutputDeclaration, OutputType, PluginLink, SandboxPermissions, ServiceDeclaration,
     };
 
-    /// Helper: build a minimal `CapabilityEntry` with an optional config_schema.
-    fn entry_with_schema(schema: Option<ConfigSchema>) -> CapabilityEntry {
-        CapabilityEntry {
+    /// Helper: build a minimal [`AppEntry`] with an optional config_schema.
+    fn entry_with_schema(schema: Option<ConfigSchema>) -> AppEntry {
+        AppEntry {
             id: "daily-brief".into(),
             name: "Daily Brief".into(),
             description: "test".into(),
@@ -340,15 +340,15 @@ mod tests {
                 command: "daily-brief".into(),
                 args: vec![],
             },
-            manifest: CapabilityManifestInline {
+            manifest: AppManifestInline {
                 content_type: "newspaper".into(),
                 execution_mode: Default::default(),
-                defaults: CapabilityDefaults {
+                defaults: AppDefaults {
                     schedule: Some("0 0 5 * * *".into()),
                     config_path: Some("config/topics.yml".into()),
                     config_schema: schema,
                 },
-                permissions: CapabilityPermissions::default(),
+                permissions: AppPermissions::default(),
                 mcp_dependencies: vec![],
                 services: vec![],
                 links: vec![],
@@ -400,7 +400,7 @@ mod tests {
         let data_dir = std::path::Path::new("/tmp/test-installer");
         let installer = McpInstaller::new(data_dir.to_path_buf(), "https://example.com".into());
         let entry = entry_with_schema(Some(schema));
-        let manifest_toml = installer.generate_capability_manifest(&entry);
+        let manifest_toml = installer.generate_app_manifest(&entry);
 
         // Must parse back as a valid PluginManifest
         let parsed: corre_sdk::manifest::PluginManifest =
@@ -421,7 +421,7 @@ mod tests {
         let data_dir = std::path::Path::new("/tmp/test-installer");
         let installer = McpInstaller::new(data_dir.to_path_buf(), "https://example.com".into());
         let entry = entry_with_schema(None);
-        let manifest_toml = installer.generate_capability_manifest(&entry);
+        let manifest_toml = installer.generate_app_manifest(&entry);
 
         let parsed: corre_sdk::manifest::PluginManifest =
             toml::from_str(&manifest_toml).unwrap_or_else(|e| panic!("generated manifest is invalid TOML:\n{manifest_toml}\nerror: {e}"));
@@ -435,7 +435,7 @@ mod tests {
         let mut entry = entry_with_schema(None);
         entry.description = "A \"quoted\" description with \\ backslashes\nand newlines".into();
 
-        let manifest_toml = installer.generate_capability_manifest(&entry);
+        let manifest_toml = installer.generate_app_manifest(&entry);
         let parsed: corre_sdk::manifest::PluginManifest =
             toml::from_str(&manifest_toml).unwrap_or_else(|e| panic!("generated manifest is invalid TOML:\n{manifest_toml}\nerror: {e}"));
         assert_eq!(parsed.plugin.description, "A \"quoted\" description with \\ backslashes\nand newlines");
@@ -446,7 +446,7 @@ mod tests {
         let data_dir = std::path::Path::new("/tmp/test-installer");
         let installer = McpInstaller::new(data_dir.to_path_buf(), "https://example.com".into());
         let mut entry = entry_with_schema(None);
-        entry.manifest.permissions = CapabilityPermissions {
+        entry.manifest.permissions = AppPermissions {
             mcp_servers: vec!["brave-search".into()],
             llm_access: true,
             max_concurrent_llm: 5,
@@ -476,7 +476,7 @@ mod tests {
             health_check: None,
         }];
 
-        let manifest_toml = installer.generate_capability_manifest(&entry);
+        let manifest_toml = installer.generate_app_manifest(&entry);
         let parsed: corre_sdk::manifest::PluginManifest =
             toml::from_str(&manifest_toml).unwrap_or_else(|e| panic!("generated manifest is invalid TOML:\n{manifest_toml}\nerror: {e}"));
 

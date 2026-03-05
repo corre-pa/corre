@@ -1,13 +1,13 @@
 # corre-mcp
 
 MCP server pool management for Corre. Starts, caches, and shuts down MCP server child processes
-on behalf of capabilities.
+on behalf of apps.
 
 ## Role in the Corre project
 
-Capabilities interact with external services through MCP servers. `corre-mcp` manages the
-server lifecycle: servers are spawned lazily on first use, cached for the duration of a
-capability run, and shut down afterward. `McpPool` implements the `McpCaller` trait from
+Apps interact with external services through MCP servers. `corre-mcp` manages the
+server lifecycle: servers are spawned lazily on first use, cached for the duration of an
+app run, and shut down afterward. `McpPool` implements the `McpCaller` trait from
 `corre-core`, so the rest of the system depends only on that abstraction.
 
 ## Key types

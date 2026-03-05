@@ -6,7 +6,7 @@ and the LLM, neutralizing adversarial content before it can influence model beha
 ## Role in the Corre project
 
 The safety layer wraps the `McpCaller` and `LlmProvider` traits transparently with two
-decorator types -- `SafeMcpCaller` and `SafeLlmProvider` -- so no capability code requires
+decorator types -- `SafeMcpCaller` and `SafeLlmProvider` -- so no app code requires
 modification. Safety is enabled by default.
 
 ## Safety pipeline stages

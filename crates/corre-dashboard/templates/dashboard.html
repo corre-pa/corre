@@ -9,19 +9,19 @@
 </head>
 <body class="xp-desktop">
 
-    <!-- Capabilities Manager Window -->
-    <div class="xp-window" id="capabilities-window" style="top:20px;left:20px;width:58%;min-height:300px;">
+    <!-- Apps Manager Window -->
+    <div class="xp-window" id="apps-window" style="top:20px;left:20px;width:58%;min-height:300px;">
         <div class="xp-titlebar">
             <span class="xp-titlebar-icon">&#128187;</span>
-            <span class="xp-titlebar-text">Capabilities Manager</span>
+            <span class="xp-titlebar-text">Apps Manager</span>
             <div class="xp-titlebar-buttons">
-                <button class="xp-btn-minimize" data-window="capabilities-window">_</button>
+                <button class="xp-btn-minimize" data-window="apps-window">_</button>
                 <button class="xp-btn-maximize">&#9633;</button>
-                <button class="xp-btn-close" data-window="capabilities-window">X</button>
+                <button class="xp-btn-close" data-window="apps-window">X</button>
             </div>
         </div>
         <div class="xp-window-body">
-            <table class="xp-table" id="capabilities-table">
+            <table class="xp-table" id="apps-table">
                 <thead>
                     <tr>
                         <th style="width:30px;"></th>
@@ -33,7 +33,7 @@
                         <th style="width:120px;">Action</th>
                     </tr>
                 </thead>
-                <tbody id="capabilities-tbody">
+                <tbody id="apps-tbody">
                     <tr><td colspan="7" class="loading-cell">Connecting...</td></tr>
                 </tbody>
             </table>
@@ -203,9 +203,9 @@
                 </div>
 
                 <div class="xp-fieldset">
-                    <div class="xp-fieldset-legend">Capabilities</div>
-                    <div id="capabilitiesConfig"></div>
-                    <button type="button" class="xp-button" id="add-cap-btn">+ Add capability</button>
+                    <div class="xp-fieldset-legend">Apps</div>
+                    <div id="appsConfig"></div>
+                    <button type="button" class="xp-button" id="add-app-btn">+ Add app</button>
                 </div>
 
                 <div class="settings-actions">
@@ -230,7 +230,7 @@
         <div class="xp-toolbar">
             <div class="store-tabs">
                 <button class="xp-button store-tab active" data-tab="mcp">MCP Servers</button>
-                <button class="xp-button store-tab" data-tab="capabilities">Capabilities</button>
+                <button class="xp-button store-tab" data-tab="apps">Apps</button>
             </div>
             <input type="text" id="store-search" placeholder="Search..." class="xp-input xp-input-wide">
             <button class="xp-button" id="store-refresh-btn" title="Refresh catalog">Refresh</button>
@@ -258,9 +258,9 @@
                     </tbody>
                 </table>
             </div>
-            <!-- Capabilities tab -->
-            <div id="store-tab-capabilities" class="store-tab-content" style="display:none;">
-                <table class="xp-table" id="cap-store-table">
+            <!-- Apps tab -->
+            <div id="store-tab-apps" class="store-tab-content" style="display:none;">
+                <table class="xp-table" id="app-store-table">
                     <thead>
                         <tr>
                             <th style="width:24px;"></th>
@@ -271,7 +271,7 @@
                             <th style="width:100px;">Action</th>
                         </tr>
                     </thead>
-                    <tbody id="cap-store-tbody">
+                    <tbody id="app-store-tbody">
                         <tr><td colspan="6" class="loading-cell">Loading catalog...</td></tr>
                     </tbody>
                 </table>
@@ -371,7 +371,7 @@
         <div class="xp-toolbar">
             <input type="text" id="log-search" placeholder="Search logs..." class="xp-input">
             <select id="log-cap-filter" class="xp-select">
-                <option value="">All capabilities</option>
+                <option value="">All apps</option>
             </select>
             <div class="level-filters">
                 <button class="xp-btn-level active" data-level="DEBUG">DEBUG</button>
@@ -388,7 +388,7 @@
                     <tr>
                         <th style="width:100px;">Timestamp</th>
                         <th style="width:60px;">Level</th>
-                        <th style="width:120px;">Capability</th>
+                        <th style="width:120px;">App</th>
                         <th>Message</th>
                     </tr>
                 </thead>
@@ -406,7 +406,7 @@
             <span class="start-icon">&#9776;</span> <b><i>Start</i></b>
         </button>
         <div class="taskbar-windows">
-            <button class="taskbar-item active" data-window="capabilities-window">Capabilities Manager</button>
+            <button class="taskbar-item active" data-window="apps-window">Apps Manager</button>
             <button class="taskbar-item active" data-window="system-window">System Monitor</button>
             <button class="taskbar-item active" data-window="mcp-store-window">MCP Store</button>
             <button class="taskbar-item" data-window="settings-window">Settings</button>
@@ -469,7 +469,7 @@
                 link.addEventListener('click', function(e) {
                     e.preventDefault();
                     document.getElementById('start-menu').style.display = 'none';
-                    if (window.__openConfigEditor) window.__openConfigEditor(ed.cap, ed.schema);
+                    if (window.__openConfigEditor) window.__openConfigEditor(ed.app, ed.schema);
                 });
                 submenu.appendChild(link);
                 wrapper.appendChild(trigger);

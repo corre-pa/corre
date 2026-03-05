@@ -1,9 +1,9 @@
 //! MCP server pool management for Corre.
 //!
-//! Manages the lifecycle of MCP server child processes on behalf of capabilities.
-//! Servers are spawned lazily on first tool call, cached for the duration of a capability
+//! Manages the lifecycle of MCP server child processes on behalf of apps.
+//! Servers are spawned lazily on first tool call, cached for the duration of an app
 //! run, and shut down afterward. The pool implements
-//! [`McpCaller`](corre_core::capability::McpCaller) from `corre-core`, so the rest of the
+//! [`McpCaller`](corre_core::app::McpCaller) from `corre-core`, so the rest of the
 //! system depends only on that abstraction.
 //!
 //! # Modules

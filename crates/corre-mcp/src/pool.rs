@@ -5,7 +5,7 @@
 
 use crate::server_def::McpServerDef;
 use anyhow::Context;
-use corre_core::capability::{McpCallError, McpCaller};
+use corre_core::app::{McpCallError, McpCaller};
 use rmcp::service::Peer;
 use rmcp::{RoleClient, ServiceExt, model::CallToolRequestParam, transport::child_process::TokioChildProcess};
 use std::collections::HashMap;

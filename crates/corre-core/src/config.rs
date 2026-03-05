@@ -17,7 +17,8 @@ pub struct CorreConfig {
     #[serde(default = "default_empty_table")]
     pub news: toml::Value,
     #[serde(default)]
-    pub capabilities: Vec<CapabilityConfig>,
+    #[serde(alias = "capabilities")]
+    pub apps: Vec<AppConfig>,
     #[serde(default)]
     pub safety: SafetyConfig,
     #[serde(default)]
@@ -96,7 +97,7 @@ pub struct RegistryConfig {
     pub url: String,
     #[serde(default = "default_cache_ttl_secs")]
     pub cache_ttl_secs: u64,
-    /// Docker registry prefix for capability images (default: `ghcr.io/tree-corre`).
+    /// Docker registry prefix for app images (default: `ghcr.io/tree-corre`).
     #[serde(default = "default_docker_registry")]
     pub docker_registry: String,
 }
@@ -157,20 +158,20 @@ fn default_max_concurrent() -> usize {
     10
 }
 
-/// Per-capability LLM overrides. Every field is optional — only specified
+/// Per-app LLM overrides. Every field is optional — only specified
 /// fields replace the corresponding global `[llm]` value.
 ///
-/// Capabilities must not control provider URL or credentials — those are
+/// Apps must not control provider URL or credentials — those are
 /// host-level concerns. Only model selection and generation parameters
 /// can be overridden.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
-pub struct CapabilityLlmConfig {
+pub struct AppLlmConfig {
     pub model: Option<String>,
     pub temperature: Option<f32>,
     pub max_completion_tokens: Option<u32>,
     pub max_concurrent: Option<usize>,
-    /// Per-capability extra body fields. Merged on top of the global
-    /// `extra_body` so capabilities can add or override provider-specific params.
+    /// Per-app extra body fields. Merged on top of the global
+    /// `extra_body` so apps can add or override provider-specific params.
     #[serde(default)]
     pub extra_body: Option<HashMap<String, serde_json::Value>>,
 }
@@ -179,7 +180,7 @@ impl LlmConfig {
     /// Return a new `LlmConfig` where any `Some` field in `overrides` replaces
     /// the corresponding field in `self`. Connection params (provider, base_url,
     /// api_key) are always inherited from the host config.
-    pub fn with_overrides(&self, overrides: &CapabilityLlmConfig) -> LlmConfig {
+    pub fn with_overrides(&self, overrides: &AppLlmConfig) -> LlmConfig {
         let extra_body = match &overrides.extra_body {
             Some(cap_extra) => {
                 let mut merged = self.extra_body.clone();
@@ -201,7 +202,7 @@ impl LlmConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct CapabilityConfig {
+pub struct AppConfig {
     pub name: String,
     pub description: String,
     pub schedule: String,
@@ -211,12 +212,12 @@ pub struct CapabilityConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
-    pub llm: Option<CapabilityLlmConfig>,
+    pub llm: Option<AppLlmConfig>,
     /// Path to a plugin directory (relative to data_dir/plugins/). When set, this
-    /// capability is backed by a subprocess plugin instead of a built-in implementation.
+    /// app is backed by a subprocess plugin instead of a built-in implementation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
-    /// Per-capability log level override (e.g. "debug", "info"). Falls back to
+    /// Per-app log level override (e.g. "debug", "info"). Falls back to
     /// `[general] log_level` when not set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<String>,
@@ -385,12 +386,12 @@ mod tests {
         let news_table = config.news.as_table().expect("[news] should be a table");
         assert_eq!(news_table.get("bind").and_then(|v| v.as_str()), Some("192.168.1.101:5510"));
         assert_eq!(config.llm.model, "nvidia-nemotron-3-nano-30b-a3b");
-        assert_eq!(config.capabilities.len(), 1);
-        assert_eq!(config.capabilities[0].name, "daily-brief");
+        assert_eq!(config.apps.len(), 1);
+        assert_eq!(config.apps[0].name, "daily-brief");
     }
 
     #[test]
-    fn parse_capability_llm_overrides() {
+    fn parse_app_llm_overrides() {
         let toml_str = r#"
             [general]
             data_dir = "/tmp/corre"
@@ -409,9 +410,9 @@ mod tests {
             model = "override-model"
             temperature = 0.9
         "#;
-        let config: CorreConfig = toml::from_str(toml_str).expect("Failed to parse config with capability LLM overrides");
-        let cap = &config.capabilities[0];
-        let overrides = cap.llm.as_ref().expect("capability llm overrides should be present");
+        let config: CorreConfig = toml::from_str(toml_str).expect("Failed to parse config with app LLM overrides");
+        let cap = &config.apps[0];
+        let overrides = cap.llm.as_ref().expect("app llm overrides should be present");
         assert_eq!(overrides.model.as_deref(), Some("override-model"));
         assert_eq!(overrides.temperature, Some(0.9));
 
@@ -465,13 +466,13 @@ mod tests {
             }
         }"#;
         let config: CorreConfig = serde_json::from_str(json).expect("parse JSON");
-        let overrides = config.capabilities[0].llm.as_ref().expect("cap llm overrides present");
+        let overrides = config.apps[0].llm.as_ref().expect("app llm overrides present");
         assert_eq!(overrides.model.as_deref(), Some("override-model"));
         assert_eq!(overrides.temperature, Some(0.9));
 
         let toml_str = toml::to_string_pretty(&config).expect("serialize to TOML");
         let config2: CorreConfig = toml::from_str(&toml_str).expect("re-parse from TOML");
-        let overrides2 = config2.capabilities[0].llm.as_ref().expect("cap llm overrides survive round-trip");
+        let overrides2 = config2.apps[0].llm.as_ref().expect("app llm overrides survive round-trip");
         assert_eq!(overrides2.model.as_deref(), Some("override-model"));
         assert_eq!(overrides2.temperature, Some(0.9));
 

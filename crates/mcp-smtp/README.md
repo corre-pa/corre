@@ -1,12 +1,12 @@
 # mcp-smtp
 
 An MCP server that exposes SMTP email functionality as callable tools. Runs as a stdio child
-process and is consumed by the Corre capability runner like any other MCP server.
+process and is consumed by the Corre app runner like any other MCP server.
 
 ## Role in the Corre project
 
-Capabilities that need to send email declare `mcp-smtp` in their `mcp_servers` list. The server
-is started lazily by `corre-mcp`, lives for the duration of a capability run, and is shut down
+Apps that need to send email declare `mcp-smtp` in their `mcp_servers` list. The server
+is started lazily by `corre-mcp`, lives for the duration of an app run, and is shut down
 once complete.
 
 The binary has no dependency on any `corre-*` crate and can be used with any MCP-compatible host.

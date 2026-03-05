@@ -1,12 +1,12 @@
-//! Core traits and execution context for the Corre capability system.
+//! Core traits and execution context for the Corre app system.
 //!
-//! Defines `Capability`, `McpCaller`, `LlmProvider`, `CapabilityContext`, and `ProgressTracker`.
-//! These abstractions decouple capability implementations from the concrete MCP and LLM crates,
-//! allowing the safety layer to wrap both without changes to capability code.
+//! Defines `App`, `McpCaller`, `LlmProvider`, `AppContext`, and `ProgressTracker`.
+//! These abstractions decouple app implementations from the concrete MCP and LLM crates,
+//! allowing the safety layer to wrap both without changes to app code.
 
 // Re-export types from corre-sdk so downstream crates keep their imports.
 pub use corre_sdk::llm::{LlmMessage, LlmRequest, LlmResponse, LlmRole};
-pub use corre_sdk::types::{CapabilityManifest, CapabilityOutput, ContentType, CustomContent};
+pub use corre_sdk::types::{AppManifest, AppOutput, ContentType, CustomContent};
 
 use chrono::{DateTime, Utc};
 use corre_sdk::types::{Article, Section};
@@ -37,17 +37,17 @@ pub trait LlmProvider: Send + Sync {
     async fn complete(&self, request: LlmRequest) -> anyhow::Result<LlmResponse>;
 }
 
-/// A progress or log event emitted by a capability during execution.
+/// A progress or log event emitted by an app during execution.
 ///
-/// Sent through `CapabilityContext::progress_tx` so the orchestrator can
+/// Sent through `AppContext::progress_tx` so the orchestrator can
 /// forward real-time updates to the dashboard.
 pub enum ProgressEvent {
     Progress { pct: Option<u8>, phase: String },
     Log { level: String, message: String },
 }
 
-/// Runtime context provided to a capability during execution.
-pub struct CapabilityContext {
+/// Runtime context provided to an app during execution.
+pub struct AppContext {
     pub mcp: Box<dyn McpCaller>,
     pub llm: Box<dyn LlmProvider>,
     pub config_dir: PathBuf,
@@ -59,20 +59,20 @@ pub struct CapabilityContext {
     pub progress_tx: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 }
 
-/// Result of polling a capability after its initial timeout elapses.
+/// Result of polling an app after its initial timeout elapses.
 pub enum ProgressStatus {
     /// Still working. Optional hint: percentage complete (0-100).
     StillBusy(Option<u8>),
     /// Finished (or has enough partial data). Contains the output to publish.
-    Done(CapabilityOutput),
-    /// Stuck with no useful output. Kill the capability.
+    Done(AppOutput),
+    /// Stuck with no useful output. Kill the app.
     Stuck,
 }
 
-/// Thread-safe progress tracker that capabilities update as they work.
+/// Thread-safe progress tracker that apps update as they work.
 ///
-/// The orchestrator calls [`ProgressTracker::evaluate`] to decide whether a
-/// capability that has exceeded its timeout is still making progress, has
+/// The orchestrator calls [`ProgressTracker::evaluate`] to decide whether an
+/// app that has exceeded its timeout is still making progress, has
 /// partial results worth publishing, or is stuck.
 pub struct ProgressTracker {
     inner: std::sync::Mutex<ProgressState>,
@@ -83,18 +83,18 @@ struct ProgressState {
     phase: &'static str,
     completed_articles: Vec<(String, Article)>,
     total_expected: usize,
-    capability_name: String,
+    app_name: String,
 }
 
 impl ProgressTracker {
-    pub fn new(capability_name: &str) -> Self {
+    pub fn new(app_name: &str) -> Self {
         Self {
             inner: std::sync::Mutex::new(ProgressState {
                 last_activity: Utc::now(),
                 phase: "init",
                 completed_articles: Vec::new(),
                 total_expected: 0,
-                capability_name: capability_name.to_string(),
+                app_name: app_name.to_string(),
             }),
         }
     }
@@ -129,7 +129,7 @@ impl ProgressTracker {
         state.last_activity = Utc::now();
     }
 
-    /// Evaluate whether the capability is still making progress.
+    /// Evaluate whether the app is still making progress.
     ///
     /// - If `last_activity` is within `staleness_threshold` → [`ProgressStatus::StillBusy`]
     /// - If stale but has articles → [`ProgressStatus::Done`] with partial output
@@ -147,7 +147,7 @@ impl ProgressTracker {
             };
             tracing::info!(
                 "ProgressTracker[{}]: phase={}, {}/{} articles, last activity {elapsed} ago — still busy",
-                state.capability_name,
+                state.app_name,
                 state.phase,
                 state.completed_articles.len(),
                 state.total_expected,
@@ -158,7 +158,7 @@ impl ProgressTracker {
         if !state.completed_articles.is_empty() {
             tracing::info!(
                 "ProgressTracker[{}]: stale ({elapsed} ago) but has {} articles — returning partial results",
-                state.capability_name,
+                state.app_name,
                 state.completed_articles.len(),
             );
             let mut article_map: std::collections::HashMap<String, Vec<Article>> = std::collections::HashMap::new();
@@ -166,8 +166,8 @@ impl ProgressTracker {
                 article_map.entry(section.clone()).or_default().push(article.clone());
             }
             let sections: Vec<Section> = article_map.into_iter().map(|(title, articles)| Section { title, articles }).collect();
-            return ProgressStatus::Done(CapabilityOutput {
-                capability_name: state.capability_name.clone(),
+            return ProgressStatus::Done(AppOutput {
+                app_name: state.app_name.clone(),
                 produced_at: Utc::now(),
                 sections,
                 content_type: ContentType::default(),
@@ -175,13 +175,13 @@ impl ProgressTracker {
             });
         }
 
-        tracing::warn!("ProgressTracker[{}]: stale ({elapsed} ago) with no articles — stuck", state.capability_name,);
+        tracing::warn!("ProgressTracker[{}]: stale ({elapsed} ago) with no articles — stuck", state.app_name,);
         ProgressStatus::Stuck
     }
 }
 
-impl From<&crate::config::CapabilityConfig> for CapabilityManifest {
-    fn from(c: &crate::config::CapabilityConfig) -> Self {
+impl From<&crate::config::AppConfig> for AppManifest {
+    fn from(c: &crate::config::AppConfig) -> Self {
         Self {
             name: c.name.clone(),
             description: c.description.clone(),
@@ -192,11 +192,11 @@ impl From<&crate::config::CapabilityConfig> for CapabilityManifest {
     }
 }
 
-/// Trait implemented by each capability (daily brief, stock review, etc.).
+/// Trait implemented by each app (daily brief, rolodex, etc.).
 #[async_trait::async_trait]
-pub trait Capability: Send + Sync {
-    fn manifest(&self) -> &CapabilityManifest;
-    async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput>;
+pub trait App: Send + Sync {
+    fn manifest(&self) -> &AppManifest;
+    async fn execute(&self, ctx: &AppContext) -> anyhow::Result<AppOutput>;
 
     /// Called by the orchestrator after the initial timeout elapses.
     /// The default returns `StillBusy(None)`, granting another full timeout period.

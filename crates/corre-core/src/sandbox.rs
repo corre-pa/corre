@@ -1,4 +1,4 @@
-//! Landlock + seccomp sandbox for capability subprocesses.
+//! Landlock + seccomp sandbox for app subprocesses.
 //!
 //! Applies filesystem and network restrictions via a `pre_exec` hook on the
 //! child process `Command`. The parent process is unaffected. Works as an
@@ -22,12 +22,12 @@ impl LandlockSandbox {
     /// Template variables `{data_dir}`, `{config_dir}`, and `{plugin_dir}` in
     /// the permission paths are expanded to their actual values.
     ///
-    /// - `{config_dir}` expands to `{data_dir}/{capability_name}/config/`
-    /// - The capability's home dir (`{data_dir}/{capability_name}/`) is
+    /// - `{config_dir}` expands to `{data_dir}/{app_name}/config/`
+    /// - The app's home dir (`{data_dir}/{app_name}/`) is
     ///   automatically granted read-write access.
-    pub fn from_permissions(perms: &SandboxPermissions, plugin_dir: &Path, data_dir: &Path, capability_name: &str) -> Self {
-        let capability_home = data_dir.join(capability_name);
-        let config_dir = capability_home.join("config");
+    pub fn from_permissions(perms: &SandboxPermissions, plugin_dir: &Path, data_dir: &Path, app_name: &str) -> Self {
+        let app_home = data_dir.join(app_name);
+        let config_dir = app_home.join("config");
         let data_dir_str = data_dir.to_string_lossy();
         let config_dir_str = config_dir.to_string_lossy();
         let plugin_dir_str = plugin_dir.to_string_lossy();
@@ -42,7 +42,7 @@ impl LandlockSandbox {
             ro_paths.push(PathBuf::from(expand(path)));
         }
 
-        let mut rw_paths = vec![plugin_dir.to_path_buf(), capability_home];
+        let mut rw_paths = vec![plugin_dir.to_path_buf(), app_home];
 
         for path in &perms.filesystem_write {
             rw_paths.push(PathBuf::from(expand(path)));
@@ -61,7 +61,7 @@ impl LandlockSandbox {
     /// Apply sandbox restrictions to a [`Command`] via `env_clear` and `pre_exec`.
     ///
     /// The `pre_exec` closure runs in the forked child before `exec`, so
-    /// restrictions apply only to the capability binary and its children.
+    /// restrictions apply only to the app binary and its children.
     pub fn apply_to_command(&self, cmd: &mut Command) {
         cmd.env_clear();
 
@@ -275,7 +275,7 @@ mod tests {
         // ro_paths: /usr, /lib, /lib64, config path, resolv.conf, nsswitch.conf
         assert!(sandbox.ro_paths.len() >= 5);
         assert!(sandbox.ro_paths.iter().any(|p| p.ends_with("daily-brief/config")));
-        // rw_paths: plugin_dir + capability home
+        // rw_paths: plugin_dir + app home
         assert!(sandbox.rw_paths.len() >= 2);
         assert!(sandbox.rw_paths.iter().any(|p| p.ends_with("daily-brief")));
     }

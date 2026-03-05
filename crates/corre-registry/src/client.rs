@@ -3,7 +3,7 @@
 //! [`RegistryClient`] fetches `{url}/mcp/registry.json`, caches the result in memory
 //! for a configurable TTL, and exposes search and single-entry lookup helpers.
 
-use crate::manifest::{CapabilityEntry, McpRegistryEntry, RegistryManifest};
+use crate::manifest::{AppEntry, McpRegistryEntry, RegistryManifest};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -89,10 +89,10 @@ impl RegistryClient {
         Ok(manifest.servers.into_iter().find(|e| e.id == id))
     }
 
-    /// Look up a single capability entry by ID.
-    pub async fn lookup_capability(&self, id: &str) -> Result<Option<CapabilityEntry>, RegistryError> {
+    /// Look up a single app entry by ID.
+    pub async fn lookup_app(&self, id: &str) -> Result<Option<AppEntry>, RegistryError> {
         let manifest = self.get_manifest().await?;
-        Ok(manifest.capabilities.into_iter().find(|e| e.id == id))
+        Ok(manifest.apps.into_iter().find(|e| e.id == id))
     }
 }
 

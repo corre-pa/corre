@@ -1,4 +1,4 @@
-//! Shared types for the `daily-brief` capability.
+//! Shared types for the `daily-brief` app.
 //!
 //! The [`Edition`] struct lives here so that both the `daily-brief` binary (which writes
 //! editions) and `corre-news` (which reads and serves them) can share the same serialisation

@@ -1,24 +1,22 @@
-//! Daily Research Brief capability.
+//! Daily Research Brief app.
 //!
 //! A multi-step pipeline that reads topics, searches the web via the Brave Search MCP
 //! server, deduplicates and scores results for newsworthiness, summarises the top stories,
-//! and emits a `CapabilityOutput` grouped by section.
+//! and emits an `AppOutput` grouped by section.
 
 use crate::tools::{
     SearchResultItem, extract_json, is_retryable_overload, normalize_freshness, parse_context_length_limit, parse_search_results,
 };
 use anyhow::Context as _;
-use corre_core::capability::{
-    Capability, CapabilityContext, CapabilityManifest, CapabilityOutput, LlmMessage, LlmRequest, LlmRole, ProgressStatus, ProgressTracker,
-};
-use corre_core::config::CapabilityConfig;
+use corre_core::app::{App, AppContext, AppManifest, AppOutput, LlmMessage, LlmRequest, LlmRole, ProgressStatus, ProgressTracker};
+use corre_core::config::AppConfig;
 use corre_sdk::html::{sanitize_html, sanitize_url};
 use corre_sdk::types::{Article, Section, Source};
 use std::fmt::Write;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-/// Daily Research Brief capability.
+/// Daily Research Brief app.
 ///
 /// Pipeline:
 /// 1. Parse topics.yml -> sections of sources with per-source search config
@@ -27,15 +25,15 @@ use tokio::sync::Semaphore;
 /// 4. Deduplicate results by URL within each source, then cross-edition dedup
 /// 5. Score and summarise results in a single LLM call per source (parallel, semaphore-bounded)
 /// 6. Keep top 10 per source by score
-/// 7. Group into sections -> CapabilityOutput
+/// 7. Group into sections -> AppOutput
 pub struct DailyBrief {
-    manifest: CapabilityManifest,
+    manifest: AppManifest,
     tracker: ProgressTracker,
 }
 
 impl DailyBrief {
-    pub fn from_config(config: &CapabilityConfig) -> Self {
-        Self { tracker: ProgressTracker::new(&config.name), manifest: CapabilityManifest::from(config) }
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self { tracker: ProgressTracker::new(&config.name), manifest: AppManifest::from(config) }
     }
 }
 
@@ -96,16 +94,16 @@ fn build_query(source: &TopicSource) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Capability implementation
+// App implementation
 // ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
-impl Capability for DailyBrief {
-    fn manifest(&self) -> &CapabilityManifest {
+impl App for DailyBrief {
+    fn manifest(&self) -> &AppManifest {
         &self.manifest
     }
 
-    async fn execute(&self, ctx: &CapabilityContext) -> anyhow::Result<CapabilityOutput> {
+    async fn execute(&self, ctx: &AppContext) -> anyhow::Result<AppOutput> {
         self.tracker.reset();
 
         let config_path = self
@@ -243,8 +241,8 @@ impl Capability for DailyBrief {
             .filter_map(|s| article_map.remove(&s.title).map(|articles| Section { title: s.title.clone(), articles }))
             .collect();
 
-        Ok(CapabilityOutput {
-            capability_name: self.manifest.name.clone(),
+        Ok(AppOutput {
+            app_name: self.manifest.name.clone(),
             produced_at: chrono::Utc::now(),
             sections: output_sections,
             content_type: Default::default(),
@@ -262,7 +260,7 @@ impl Capability for DailyBrief {
 /// Score and summarise a source's search results in a single LLM call.
 /// Returns the top 10 results as fully-built Articles.
 async fn score_and_summarize_source(
-    llm: &dyn corre_core::capability::LlmProvider,
+    llm: &dyn corre_core::app::LlmProvider,
     section_name: &str,
     select_if: &str,
     results: &[SearchResultItem],

@@ -1,4 +1,4 @@
-//! HTML sanitization helpers for capability plugin output.
+//! HTML sanitization helpers for app plugin output.
 //!
 //! [`sanitize_html`] allows only basic inline formatting tags and is used when rendering
 //! article bodies in the newspaper template. [`sanitize_custom_html`] permits a wider set of

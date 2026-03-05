@@ -47,11 +47,11 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
     let hour = state.schedule_hour.unwrap_or(5);
     let port = state.news_port.unwrap_or(5510);
 
-    let capabilities: Vec<CapabilityConfig> = state
-        .enabled_capabilities
+    let apps: Vec<AppConfig> = state
+        .enabled_apps
         .iter()
         .map(|name| {
-            let llm_override = state.capability_llm_overrides.get(name.as_str()).map(|ovr| CapabilityLlmConfig {
+            let llm_override = state.app_llm_overrides.get(name.as_str()).map(|ovr| AppLlmConfig {
                 model: ovr.model.clone(),
                 temperature: None,
                 max_completion_tokens: None,
@@ -60,7 +60,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
             });
 
             match name.as_str() {
-                "daily-brief" => CapabilityConfig {
+                "daily-brief" => AppConfig {
                     name: "daily-brief".into(),
                     description: "Researches topics and produces a daily news briefing".into(),
                     schedule: format!("0 0 {hour} * * *"),
@@ -71,7 +71,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
                     plugin: None,
                     log_level: None,
                 },
-                other => CapabilityConfig {
+                other => AppConfig {
                     name: other.into(),
                     description: String::new(),
                     schedule: format!("0 0 {hour} * * *"),
@@ -103,7 +103,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
             table.insert("title".into(), toml::Value::String(state.news_title.clone().unwrap_or_else(|| "Corre News".into())));
             toml::Value::Table(table)
         },
-        capabilities,
+        apps,
         safety: SafetyConfig::default(),
         registry: RegistryConfig::default(),
     }
@@ -112,7 +112,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
 /// Write per-MCP config files for MCP servers referenced by the setup state.
 pub fn write_mcp_configs(state: &SetupState, data_dir: &std::path::Path) -> anyhow::Result<()> {
     // Always include brave-search if daily-brief is enabled
-    if state.enabled_capabilities.iter().any(|c| c == "daily-brief") {
+    if state.enabled_apps.iter().any(|c| c == "daily-brief") {
         let config = McpServerConfig {
             command: npx_command().into(),
             args: vec!["-y".into(), "@brave/brave-search-mcp-server".into()],

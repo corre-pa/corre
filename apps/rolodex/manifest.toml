@@ -1,0 +1,62 @@
+[plugin]
+name = "rolodex"
+version = "0.1.0"
+description = "Automated personal contact engagement — birthdays, news, check-ins, profile scraping"
+protocol_version = "1.0"
+binary_name = "rolodex"
+content_type = "newspaper"
+
+[plugin.defaults]
+schedule = "0 0 6 * * *"
+config_path = "config/rolodex.yml"
+
+[plugin.defaults.config_schema]
+root_key = "rolodex"
+format = "yaml"
+
+[[plugin.defaults.config_schema.fields]]
+key = "news_search_freshness"
+type = "select"
+label = "News search freshness"
+default = "1w"
+options = ["1d", "1w", "1m"]
+
+[[plugin.defaults.config_schema.fields]]
+key = "max_news_per_contact"
+type = "text"
+label = "Max news results per contact"
+default = "5"
+
+[[plugin.defaults.config_schema.fields]]
+key = "birthday_message_style"
+type = "select"
+label = "Birthday message style"
+default = "warm"
+options = ["warm", "formal", "casual", "humorous"]
+
+[[plugin.defaults.config_schema.fields]]
+key = "checkin_message_style"
+type = "select"
+label = "Check-in message style"
+default = "casual"
+options = ["casual", "formal", "warm"]
+
+[plugin.permissions]
+mcp_servers = ["brave-search"]
+llm_access = true
+max_concurrent_llm = 10
+
+[[plugin.permissions.outputs]]
+output_type = "filesystem"
+target = "editions/{date}/edition.json"
+content_type = "application/json"
+
+[plugin.permissions.sandbox]
+network = []
+filesystem_read = ["{data_dir}/rolodex.db"]
+filesystem_write = ["{data_dir}/rolodex.db"]
+
+[mcp_dependencies.brave-search]
+command = "npx"
+args = ["-y", "@brave/brave-search-mcp-server"]
+env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }

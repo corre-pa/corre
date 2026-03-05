@@ -1,16 +1,16 @@
-# Writing Corre Capabilities
+# Writing Corre Apps
 
-A guide for AI (and human) agents building new Corre capabilities in Rust.
+A guide for AI (and human) agents building new Corre apps in Rust.
 
 ## Architecture overview
 
-A capability is a **standalone Rust binary** that communicates with the Corre host over
+An app is a **standalone Rust binary** that communicates with the Corre host over
 stdin/stdout using **CCPP** (Corre Capability Plugin Protocol), a JSON-RPC 2.0 protocol.
-Capabilities never link against `corre-core` — they depend only on `corre-sdk`.
+Apps never link against `corre-core` — they depend only on `corre-sdk`.
 
 ```
 ┌──────────────┐  stdin/stdout ┌─────────────┐
-│  Corre Host  │◄────CCPP─────►│  Capability │
+│  Corre Host  │◄────CCPP─────►│     App     │
 │  (corre-cli) │   JSON-RPC    │   binary    │
 └──────┬───────┘               └─────────────┘
        │                        depends on:
@@ -21,38 +21,38 @@ Capabilities never link against `corre-core` — they depend only on `corre-sdk`
        └── Sandbox (Landlock)
 ```
 
-The host spawns the capability binary as a child process, sends an `initialize` request with
+The host spawns the app binary as a child process, sends an `initialize` request with
 context parameters, and the binary does its work by calling back into the host for MCP tools
-and LLM completions. When done, it sends a `capability/result` notification and exits.
+and LLM completions. When done, it sends an `app/result` notification and exits.
 
 ## Crate layout
 
-Every capability lives in its own crate and produces both a library (for shared
-types) and a binary (the capability itself):
+Every app lives in its own crate and produces both a library (for shared
+types) and a binary (the app itself):
 
 ```
-projects/my-capability/
+apps/my-app/
 ├── Cargo.toml
 ├── manifest.toml       # plugin metadata, permissions, config schema
 └── src/
     ├── lib.rs          # shared types (used by this binary and any consumer)
-    └── main.rs         # standalone binary — the capability entry point
+    └── main.rs         # standalone binary — the app entry point
 ```
 
 ### Cargo.toml
 
 ```toml
 [package]
-name = "my-capability"
+name = "my-app"
 version.workspace = true
 edition.workspace = true
-description = "Short description of what this capability does"
+description = "Short description of what this app does"
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "my-capability"
+name = "my-app"
 path = "src/main.rs"
 
 [dependencies]
@@ -76,11 +76,11 @@ external dependencies. The host reads this when the plugin is installed.
 
 ```toml
 [plugin]
-name = "my-capability"
+name = "my-app"
 version = "0.1.0"
-description = "What this capability does"
+description = "What this app does"
 protocol_version = "1.0"
-binary_name = "my-capability"
+binary_name = "my-app"
 content_type = "newspaper"          # or "custom" for plugin-rendered HTML
 
 [plugin.defaults]
@@ -89,7 +89,7 @@ config_path = "config/my-cap.yml"  # relative to data_dir
 
 # Optional: define a schema so the dashboard can generate an edit form
 [plugin.defaults.config_schema]
-root_key = "my-capability"
+root_key = "my-app"
 format = "yaml"
 
 [[plugin.defaults.config_schema.fields]]
@@ -99,7 +99,7 @@ label = "A setting"
 default = "hello"
 
 [plugin.permissions]
-mcp_servers = ["brave-search"]      # which MCP servers this capability may call
+mcp_servers = ["brave-search"]      # which MCP servers this app may call
 llm_access = true                   # whether it can make LLM calls
 max_concurrent_llm = 10             # concurrency limit for LLM calls
 
@@ -110,7 +110,7 @@ content_type = "application/json"
 
 [plugin.permissions.sandbox]
 network = ["api.venice.ai:443"]     # host:port allowlist
-# r/w to {data_dir}/{capability_name}/ is granted automatically
+# r/w to {data_dir}/{app_name}/ is granted automatically
 
 # Declare MCP server dependencies (installed if missing)
 [mcp_dependencies.brave-search]
@@ -123,7 +123,7 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 
 | Field                      | Type       | Description                                                                |
 |----------------------------|------------|----------------------------------------------------------------------------|
-| `mcp_servers`              | `[String]` | MCP server names this capability may call                                  |
+| `mcp_servers`              | `[String]` | MCP server names this app may call                                         |
 | `llm_access`               | `bool`     | Whether LLM calls are allowed (default: true)                              |
 | `max_concurrent_llm`       | `usize`    | Max parallel LLM calls (default: 10)                                       |
 | `outputs`                  | `[Output]` | Permitted output destinations                                              |
@@ -157,7 +157,7 @@ env = { BRAVE_API_KEY = "$BRAVE_API_KEY" }
 # Bundle a Docker service (e.g. a web UI)
 [[plugin.services]]
 name = "my-web-ui"
-description = "Web dashboard for my-capability"
+description = "Web dashboard for my-app"
 image = "{docker_registry}/my-web-ui:latest"
 ports = ["8080:8080"]
 volumes = ["{data_dir}:/data:ro"]
@@ -172,10 +172,10 @@ url = "http://{service:my-web-ui}:8080"
 ## The CCPP protocol lifecycle
 
 ```
-Host                          Capability
+Host                          App
   │                               │
   │──── initialize ──────────────►│  (Request: config_dir, config_path, mcp_servers, ...)
-  │◄─── initialize response ──────│  (protocol_version, capabilities)
+  │◄─── initialize response ──────│  (protocol_version, apps)
   │                               │
   │◄─── progress ─────────────────│  (phase, percent, message)
   │◄─── mcp/callTool ─────────────│  (server_name, tool_name, arguments)
@@ -184,42 +184,42 @@ Host                          Capability
   │──── llm/complete response ───►│
   │◄─── output/write ─────────────│  (path, data, content_type)
   │──── output/write response ───►│
-  │◄─── capability/result ────────│  (CapabilityOutput)
+  │◄─── app/result ────────────────│  (AppOutput)
   │                               │
   │──── shutdown ────────────────►│  (optional, host may send at any time)
   │                               │
 ```
 
 - `mcp/callTool`, `llm/complete`, `output/write` are **request-response** (blocking RPC)
-- `progress`, `log`, `capability/result`, `capability/error` are **notifications** (fire-and-forget)
+- `progress`, `log`, `app/result`, `app/error` are **notifications** (fire-and-forget)
 - Multiple RPC calls can be in-flight simultaneously (the SDK handles demultiplexing)
 
 ## src/main.rs — the binary skeleton
 
-Every capability binary follows the same structure:
+Every app binary follows the same structure:
 
 ```rust
 use anyhow::Context as _;
-use corre_sdk::types::{Article, CapabilityOutput, Section, Source};
-use corre_sdk::{CapabilityClient, LlmMessage, LlmRequest, LlmRole};
+use corre_sdk::types::{Article, AppOutput, Section, Source};
+use corre_sdk::{AppClient, LlmMessage, LlmRequest, LlmRole};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("ERROR my-capability failed: {e:#}");
+        eprintln!("ERROR my-app failed: {e:#}");
         std::process::exit(1);
     }
 }
 
 async fn run() -> anyhow::Result<()> {
     // 1. Connect to the host
-    let client = Arc::new(CapabilityClient::from_stdio());
+    let client = Arc::new(AppClient::from_stdio());
     let params = client.accept_initialize().await?;
 
     // 2. Set up tracing (logs to stderr + optional daily-rotating file)
     let _guard = corre_sdk::init_tracing(
-        &params.capability_name,
+        &params.app_name,
         params.log_dir.as_deref(),
         params.log_level.as_deref(),
     );
@@ -242,8 +242,8 @@ async fn run() -> anyhow::Result<()> {
     // ... your pipeline ...
 
     // 6. Build and send the result
-    let output = CapabilityOutput {
-        capability_name: "my-capability".into(),
+    let output = AppOutput {
+        app_name: "my-app".into(),
         produced_at: chrono::Utc::now(),
         sections: vec![],  // fill with your sections
         content_type: Default::default(),
@@ -261,17 +261,17 @@ The `accept_initialize()` call returns these fields from the host:
 
 | Field                | Type             | Description                                 |
 |----------------------|------------------|---------------------------------------------|
-| `capability_name`    | `String`         | Name from manifest                          |
+| `app_name`           | `String`         | Name from manifest                          |
 | `config_dir`         | `String`         | Absolute path to data directory             |
 | `config_path`        | `Option<String>` | Relative path to user config file           |
-| `mcp_servers`        | `Vec<String>`    | MCP servers available to this capability    |
+| `mcp_servers`        | `Vec<String>`    | MCP servers available to this app           |
 | `max_concurrent_llm` | `usize`          | Max parallel LLM calls (default: 10)        |
 | `timeout_secs`       | `u64`            | Execution timeout (default: 600)            |
 | `log_dir`            | `Option<String>` | Path for log files                          |
 | `log_level`          | `Option<String>` | Log verbosity                               |
 | `seen_urls`          | `Vec<String>`    | URLs from previous runs (for deduplication) |
 
-## CapabilityClient API reference
+## AppClient API reference
 
 All methods are `async` and return `anyhow::Result`.
 
@@ -282,7 +282,7 @@ All methods are `async` and return `anyhow::Result`.
 | `accept_initialize()`                        | Wait for host handshake, returns `InitializeParams` |
 | `report_progress(phase, percent, message)`   | Send progress update (notification)                 |
 | `log(level, message)`                        | Send log entry to host dashboard                    |
-| `send_result(output)`                        | Send final `CapabilityOutput` (notification)        |
+| `send_result(output)`                        | Send final `AppOutput` (notification)               |
 | `send_error(message, phase, partial_output)` | Report failure with optional partial results        |
 | `read_message()`                             | Read next host message (shutdown, cancel)           |
 
@@ -311,11 +311,11 @@ All methods are `async` and return `anyhow::Result`.
 ## Core types
 
 
-### CapabilityOutput
+### AppOutput
 
 ```rust
-pub struct CapabilityOutput {
-    pub capability_name: String,
+pub struct AppOutput {
+    pub app_name: String,
     pub produced_at: DateTime<Utc>,
     pub sections: Vec<Section>,
     pub content_type: ContentType,            // Newspaper (default) or Custom
@@ -363,7 +363,7 @@ Import from `corre_sdk::tools` and `corre_sdk::html`:
 
 ## CCPP error codes
 
-Capabilities should handle these error codes when making RPC calls:
+Apps should handle these error codes when making RPC calls:
 
 | Code   | Constant               | Meaning                   | Action                         |
 |--------|------------------------|---------------------------|--------------------------------|
@@ -532,13 +532,13 @@ client.write_file( & output_path, & json, Some("application/json")).await?;
 
 ### Pattern 8: Custom HTML content
 
-For capabilities that render their own HTML instead of articles:
+For apps that render their own HTML instead of articles:
 
 ```rust
-use corre_sdk::types::{CapabilityOutput, ContentType, CustomContent};
+use corre_sdk::types::{AppOutput, ContentType, CustomContent};
 
-let output = CapabilityOutput {
-capability_name: "my-dashboard".into(),
+let output = AppOutput {
+app_name: "my-dashboard".into(),
 produced_at: chrono::Utc::now(),
 sections: vec![],
 content_type: ContentType::Custom,
@@ -551,14 +551,14 @@ searchable_text: Some("plain text for search indexing".into()),
 };
 ```
 
-## Checklist for new capabilities
+## Checklist for new apps
 
-1. **Create crate** under `crates/` with lib + bin targets
+1. **Create crate** under `apps/` with lib + bin targets
 2. **Write `manifest.toml`** with plugin metadata, permissions, and config schema
 3. **Depend only on `corre-sdk`** (plus general-purpose crates like serde, tokio, etc.)
-4. **In `main.rs`**: connect via `CapabilityClient::from_stdio()`, call `accept_initialize()`
+4. **In `main.rs`**: connect via `AppClient::from_stdio()`, call `accept_initialize()`
 5. **Initialize tracing** with `corre_sdk::init_tracing()`
-6. **Load config** from `params.config_path` if your capability is user-configurable
+6. **Load config** from `params.config_path` if your app is user-configurable
 7. **Report progress** at each pipeline stage
 8. **Sanitize** all external content with `sanitize_html()` / `sanitize_url()`
 9. **Handle LLM errors** with retry + backoff (rate limits, context length)
@@ -571,7 +571,7 @@ searchable_text: Some("plain text for search indexing".into()),
 
 ## Reference: daily-brief pipeline
 
-The `daily-brief` capability is the reference implementation. Its 8-step pipeline:
+The `daily-brief` app is the reference implementation. Its 8-step pipeline:
 
 1. **Parse config** — load `topics.yml`, extract sections and search sources
 2. **Search** — parallel Brave web + news searches via `call_tool("brave-search", ...)`
@@ -580,6 +580,6 @@ The `daily-brief` capability is the reference implementation. Its 8-step pipelin
 5. **Filter** — drop scores <= 0.2, keep top 10 per source
 6. **Group** — collect articles into sections preserving YAML ordering
 7. **Build edition** — create Edition, generate tagline via LLM
-8. **Persist** — write `edition.json` via `write_file()`, send `CapabilityOutput`
+8. **Persist** — write `edition.json` via `write_file()`, send `AppOutput`
 
-Study `crates/daily-brief/src/main.rs` for the complete working implementation.
+Study `apps/daily-brief/src/main.rs` for the complete working implementation.

@@ -1,6 +1,6 @@
 //! Interactive first-run wizard for Corre (`corre setup`). Sequences nine setup steps --
-//! dependency checks, LLM provider configuration, Brave Search, capability selection,
-//! per-capability LLM overrides, topics, preferences, config file writing, and start options.
+//! dependency checks, LLM provider configuration, Brave Search, app selection,
+//! per-app LLM overrides, topics, preferences, config file writing, and start options.
 
 pub(crate) mod deps;
 mod providers;
@@ -62,11 +62,11 @@ pub async fn run_setup() -> anyhow::Result<()> {
     }
 
     if start_step <= 4 {
-        steps::capabilities(&mut state, &term)?;
+        steps::apps(&mut state, &term)?;
     }
 
     if start_step <= 5 {
-        steps::capability_llm(&mut state, &term)?;
+        steps::app_llm(&mut state, &term)?;
     }
 
     if start_step <= 6 {

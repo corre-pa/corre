@@ -1,11 +1,11 @@
 # mcp-telegram
 
 An MCP server that exposes the Telegram Bot API as callable tools. Runs as a stdio child
-process and is consumed by the Corre capability runner like any other MCP server.
+process and is consumed by the Corre app runner like any other MCP server.
 
 ## Role in the Corre project
 
-Capabilities that need to send Telegram messages declare `mcp-telegram` in their `mcp_servers`
+Apps that need to send Telegram messages declare `mcp-telegram` in their `mcp_servers`
 list. The binary has no dependency on any `corre-*` crate and can be used with any
 MCP-compatible host.
 
