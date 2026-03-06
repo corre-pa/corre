@@ -3,6 +3,13 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.18.0] - 2026-03-06
+
+### Changed
+- Renamed "Capabilities" to "Apps" across the entire project (types, config,
+  documentation, CLI output, and dashboard UI).
+- Updated README and APP_GUIDE to reflect the new terminology.
+
 ## [0.17.0] - 2026-03-03
 
 ### Added
