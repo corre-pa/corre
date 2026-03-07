@@ -2,8 +2,7 @@
 
 > Last updated at v0.17.0
 
-A personal AI task scheduler that runs modular *apps* on cron schedules and publishes
-their output as a newspaper-style web interface called **CorreNews**.
+A simple, safe, easy-to-use personal AI task scheduler that runs modular *apps* on cron schedules.
 
 ## Goals
 
