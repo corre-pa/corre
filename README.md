@@ -1,6 +1,6 @@
 # Corre
 
-> Last updated at v0.17.0
+> Last updated at v0.19.0
 
 A simple, safe, easy-to-use personal AI task scheduler that runs modular *apps* on cron schedules.
 
@@ -275,6 +275,7 @@ corre/                              # source repository
     mcp-telegram/                   # Telegram messaging MCP server
   apps/
     daily-brief/                    # daily research brief (subprocess app)
+    rolodex/                        # personal contact engagement (subprocess app)
 
 ~/.local/share/corre/               # runtime data directory
   corre.toml                        # main config file
@@ -307,6 +308,9 @@ corre-news (standalone binary)
   |-- corre-core
 
 daily-brief (subprocess app)
+  |-- corre-sdk
+
+rolodex (subprocess app)
   |-- corre-sdk
 ```
 
@@ -397,10 +401,24 @@ Key API routes:
 | `GET /api/dashboard/status` | App execution status (JSON) |
 | `POST /api/dashboard/run/{name}` | Trigger an app run immediately |
 | `GET /api/dashboard/events` | SSE stream of real-time progress and log events |
+| `GET /api/dashboard/logs/{date}` | Historical log entries for a given date |
 | `GET,PUT /api/settings` | Read/update `corre.toml` settings |
+| `GET,PUT /api/config/{name}` | Read/update per-app config files |
 | `GET /api/registry/catalog` | Browse the MCP server registry |
+| `GET /api/registry/search` | Search the registry |
+| `POST /api/registry/refresh` | Force-refresh the registry cache |
+| `GET /api/mcp/installed` | List installed MCP servers |
 | `POST /api/mcp/install` | Install an MCP server from the registry |
+| `POST /api/mcp/uninstall/{name}` | Uninstall an MCP server |
+| `POST /api/mcp/test/{name}` | Test an MCP server connection |
+| `GET /api/mcp/config/{name}` | Read MCP server config |
+| `PUT /api/mcp/configure/{name}` | Update MCP server config |
+| `GET /api/apps/installed` | List installed app plugins |
 | `POST /api/apps/install` | Install an app plugin |
+| `POST /api/apps/uninstall/{name}` | Uninstall an app plugin |
+| `GET /api/services` | List managed services |
+| `POST /api/services/start` | Start a service |
+| `POST /api/services/stop/{name}` | Stop a service |
 | `POST /api/system/restart` | Graceful restart |
 
 ### Scheduler (`corre-core` + `corre-cli`)
@@ -469,6 +487,7 @@ detect_leaks = true               # scan for leaked API keys and credentials
 boundary_wrap = true              # wrap tool outputs in XML delimiters
 high_severity_action = "sanitize" # action for high-severity policy hits
 custom_block_patterns = []        # additional regex patterns that trigger a block
+require_sandbox = false           # require Landlock sandboxing (fail if unavailable)
 ```
 
 | Field | Default | Description |
@@ -480,6 +499,7 @@ custom_block_patterns = []        # additional regex patterns that trigger a blo
 | `boundary_wrap` | `true` | Wrap tool outputs in XML `<tool_output>` delimiters. |
 | `high_severity_action` | `"sanitize"` | What to do when a high-severity policy rule matches: `"warn"` (log only), `"sanitize"` (redact the match), or `"block"` (replace the entire output). |
 | `custom_block_patterns` | `[]` | List of regex patterns. Any match triggers an immediate block regardless of severity. |
+| `require_sandbox` | `false` | If `true`, abort plugin/MCP execution when Landlock sandboxing is unavailable instead of falling back to unsandboxed execution. |
 
 To disable safety entirely:
 
@@ -518,6 +538,11 @@ bind = "127.0.0.1:5510"
 title = "Corre News"
 # editor_token = "your-secret"      # set to enable /settings/topics page
 
+[registry]
+url = "http://localhost:5580"       # registry API endpoint
+cache_ttl_secs = 3600               # how long to cache registry responses
+docker_registry = "ghcr.io/tree-corre"  # Docker image prefix for app containers
+
 [[apps]]
 name = "daily-brief"
 description = "Researches topics and produces a daily news briefing"
@@ -539,4 +564,4 @@ an `[[apps]]` entry referencing the MCP servers it needs.
 
 ## License
 
-LicenseRef-Proprietary
+[MPL-2.0](LICENSE.md)
