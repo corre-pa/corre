@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tantivy::Index;
+use tantivy::schema::*;
 use tokio::sync::Semaphore;
 
 // ---------------------------------------------------------------------------
@@ -297,8 +299,56 @@ async fn run() -> anyhow::Result<()> {
     client.write_file(&edition_path, &edition_json, Some("application/json")).await?;
     tracing::info!("Edition written to {edition_path}");
 
+    // Update the full-text search index (non-critical — warn on failure)
+    if let Err(e) = update_search_index(&config_dir, &edition) {
+        tracing::warn!("Failed to update search index: {e:#}");
+    }
+
     // Still send the AppOutput so the host can track it
     client.send_result(output).await?;
+    Ok(())
+}
+
+/// Write all articles from the edition into a Tantivy full-text search index.
+///
+/// Uses the same schema as `corre-news`'s `SearchIndex` so the reader can open it directly.
+/// Deletes any existing documents for the edition's date before inserting, making re-runs safe.
+fn update_search_index(config_dir: &Path, edition: &Edition) -> anyhow::Result<()> {
+    let index_dir = config_dir.join("search_index");
+    std::fs::create_dir_all(&index_dir)?;
+
+    let mut schema_builder = Schema::builder();
+    let title_field = schema_builder.add_text_field("title", TEXT | STORED);
+    let summary_field = schema_builder.add_text_field("summary", TEXT | STORED);
+    let body_field = schema_builder.add_text_field("body", TEXT);
+    let date_field = schema_builder.add_text_field("date", STRING | STORED);
+    let section_field = schema_builder.add_text_field("section", STRING | STORED);
+    let schema = schema_builder.build();
+
+    let dir = tantivy::directory::MmapDirectory::open(&index_dir)?;
+    let index = Index::open_or_create(dir, schema)?;
+    let mut writer = index.writer(50_000_000)?;
+
+    // Delete existing documents for this date so re-runs don't duplicate
+    let date_str = edition.date.format("%Y-%m-%d").to_string();
+    let date_term = tantivy::Term::from_field_text(date_field, &date_str);
+    writer.delete_term(date_term);
+
+    for section in &edition.sections {
+        for article in &section.articles {
+            let mut doc = tantivy::TantivyDocument::new();
+            doc.add_text(title_field, &article.title);
+            doc.add_text(summary_field, &article.summary);
+            doc.add_text(body_field, &article.body);
+            doc.add_text(date_field, &date_str);
+            doc.add_text(section_field, &section.title);
+            writer.add_document(doc)?;
+        }
+    }
+
+    writer.commit()?;
+    let article_count: usize = edition.sections.iter().map(|s| s.articles.len()).sum();
+    tracing::info!("Indexed {article_count} articles for {date_str} into search index");
     Ok(())
 }
 

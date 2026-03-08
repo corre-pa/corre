@@ -27,7 +27,7 @@ struct Assets;
 
 pub struct AppState {
     pub cache: Arc<EditionCache>,
-    pub search: Option<SearchIndex>,
+    pub search: RwLock<Option<SearchIndex>>,
     pub config_path: PathBuf,
     pub config: Arc<RwLock<CorreConfig>>,
     /// Data directory for resolving plugin static assets.
@@ -277,7 +277,23 @@ fn default_limit() -> usize {
 }
 
 async fn search_handler(State(state): State<Arc<AppState>>, Query(params): Query<SearchQuery>) -> impl IntoResponse {
-    let Some(ref search) = state.search else {
+    // Lazily open the index if it didn't exist at startup but has since been created
+    {
+        let guard = state.search.read().await;
+        if guard.is_none() {
+            drop(guard);
+            let mut guard = state.search.write().await;
+            if guard.is_none() {
+                match SearchIndex::open_readonly(&state.data_dir) {
+                    Ok(idx) => *guard = idx,
+                    Err(e) => tracing::warn!("Failed to open search index: {e}"),
+                }
+            }
+        }
+    }
+
+    let guard = state.search.read().await;
+    let Some(ref search) = *guard else {
         return axum::Json(Vec::<crate::search::SearchResult>::new()).into_response();
     };
     let limit = params.limit.min(100);

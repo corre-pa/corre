@@ -52,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Periodically rescan the filesystem for new editions written by corre-core
     let refresh_cache = cache.clone();
-    let state = Arc::new(AppState { cache, search, config_path: cli.config, config: Arc::new(RwLock::new(config)), data_dir });
+    let state =
+        Arc::new(AppState { cache, search: RwLock::new(search), config_path: cli.config, config: Arc::new(RwLock::new(config)), data_dir });
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         interval.tick().await; // skip the immediate first tick

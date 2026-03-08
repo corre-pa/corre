@@ -34,7 +34,7 @@ services:
     ports:
       - "5510:5510"
     volumes:
-      - ${CORRE_DATA_DIR:-/var/corre}:/data:ro
+      - ${CORRE_DATA_DIR:-/var/corre}:/data
     environment:
       CORRE_DATA_DIR: /data
       CORRE_NEWS_BIND: "0.0.0.0:5510"

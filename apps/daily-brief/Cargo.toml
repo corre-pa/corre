@@ -21,3 +21,4 @@ chrono = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
+tantivy = { workspace = true }

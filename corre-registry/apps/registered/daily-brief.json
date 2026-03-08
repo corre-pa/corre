@@ -93,7 +93,7 @@
         "description": "Newspaper web UI for browsing editions",
         "image": "{docker_registry}/corre-news:latest",
         "ports": ["5510:5510"],
-        "volumes": ["{data_dir}:/data:ro"],
+        "volumes": ["{data_dir}:/data:rw"],
         "optional": true
       }
     ],
