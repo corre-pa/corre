@@ -3,6 +3,15 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.19.0] - 2026-03-08
+
+### Fixed
+- Populate and serve the Tantivy search index end-to-end.
+
+### Changed
+- Added container publish script, removed old deploy/install scripts.
+- Updated README.
+
 ## [0.18.0] - 2026-03-06
 
 ### Changed
