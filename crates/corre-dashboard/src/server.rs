@@ -23,6 +23,9 @@ use corre_registry::RegistryClient;
 use rust_embed::RustEmbed;
 use std::convert::Infallible;
 use std::sync::Arc;
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD_DATE: &str = env!("BUILD_DATE");
 use tokio::sync::{RwLock, mpsc};
 
 #[derive(RustEmbed)]
@@ -37,6 +40,8 @@ struct DashboardTemplate<'a> {
     config_json: &'a str,
     plugin_links_json: &'a str,
     config_editors_json: &'a str,
+    version: &'a str,
+    build_date: &'a str,
 }
 
 pub struct DashboardState {
@@ -237,6 +242,8 @@ async fn dashboard_page_handler(
         config_json: &config_json,
         plugin_links_json: &plugin_links_json,
         config_editors_json: &config_editors_json,
+        version: VERSION,
+        build_date: BUILD_DATE,
     };
     match template.render() {
         Ok(html) => Html(html).into_response(),
@@ -1035,6 +1042,7 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
                 Some("html") => "text/html",
                 Some("svg") => "image/svg+xml",
                 Some("png") => "image/png",
+                Some("webp") => "image/webp",
                 Some("ico") => "image/x-icon",
                 _ => "application/octet-stream",
             };

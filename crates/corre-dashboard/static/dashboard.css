@@ -913,6 +913,37 @@ mark { background: #FFE566; padding: 0; }
 .mcp-test-ok { color: #33AA33; }
 .mcp-test-err { color: #CC2200; }
 
+/* === About Modal === */
+.about-body {
+    text-align: center;
+    padding: 16px;
+}
+
+.about-logo {
+    display: block;
+    margin: 0 auto 12px;
+    max-width: 280px;
+    height: auto;
+}
+
+.about-info h3 {
+    font-size: 18px;
+    margin-bottom: 4px;
+    color: #003399;
+}
+
+.about-info p {
+    font-size: 12px;
+    color: #444;
+    margin: 2px 0;
+}
+
+.about-tagline {
+    margin-top: 8px !important;
+    font-style: italic;
+    color: #888 !important;
+}
+
 /* === Responsive tweaks === */
 @media (max-width: 900px) {
     .xp-window {

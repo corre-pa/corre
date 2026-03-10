@@ -428,6 +428,29 @@
             <a href="#" class="start-menu-item" id="start-mcp-store">&#128722; MCP Store</a>
             <a href="#" class="start-menu-item" id="start-settings">&#9881; Settings</a>
             <div id="start-menu-config-editors"></div>
+            <a href="#" class="start-menu-item" id="start-about">&#8505; About</a>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="xp-modal-overlay" id="about-modal" style="display:none;">
+        <div class="xp-modal" style="width:480px;">
+            <div class="xp-titlebar">
+                <span class="xp-titlebar-icon">&#8505;</span>
+                <span class="xp-titlebar-text">About Corre</span>
+                <div class="xp-titlebar-buttons">
+                    <button class="xp-btn-close" id="about-modal-close">X</button>
+                </div>
+            </div>
+            <div class="xp-window-body about-body">
+                <img src="/dashboard/static/logo.webp" alt="Corre" class="about-logo">
+                <div class="about-info">
+                    <h3>Corre</h3>
+                    <p>Version {{ version }}</p>
+                    <p>Built {{ build_date }}</p>
+                    <p class="about-tagline">Personal AI task scheduler</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -477,6 +500,18 @@
                 container.appendChild(wrapper);
             });
         })();
+        // About modal
+        document.getElementById('start-about').addEventListener('click', function(e) {
+            e.preventDefault();
+            document.getElementById('start-menu').style.display = 'none';
+            document.getElementById('about-modal').style.display = '';
+        });
+        document.getElementById('about-modal-close').addEventListener('click', function() {
+            document.getElementById('about-modal').style.display = 'none';
+        });
+        document.getElementById('about-modal').addEventListener('click', function(e) {
+            if (e.target === this) this.style.display = 'none';
+        });
     </script>
     <script src="/dashboard/static/dashboard.js"></script>
 </body>
