@@ -3,6 +3,15 @@
 All notable changes to Corre are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.0] - 2026-03-10
+
+### Added
+- About modal to the operator dashboard.
+
+### Changed
+- Updated README.
+- Changed project license.
+
 ## [0.19.0] - 2026-03-08
 
 ### Fixed

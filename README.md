@@ -1,4 +1,4 @@
-# Corre
+![Corre](./assets/logo-hires.png)
 
 > Last updated at v0.19.0
 
