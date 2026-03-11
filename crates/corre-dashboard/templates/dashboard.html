@@ -87,6 +87,7 @@
         </div>
     </div>
 
+    {% if authenticated %}
     <!-- Settings Window (initially minimized) -->
     <div class="xp-window minimized" id="settings-window" style="top:60px;left:25%;width:50%;min-height:400px;">
         <div class="xp-titlebar">
@@ -215,7 +216,9 @@
             </form>
         </div>
     </div>
+    {% endif %}
 
+    {% if authenticated %}
     <!-- Unified Store Window -->
     <div class="xp-window" id="mcp-store-window" style="top:340px;left:20px;width:58%;min-height:300px;">
         <div class="xp-titlebar">
@@ -356,6 +359,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     <!-- Log Viewer Window -->
     <div class="xp-window" id="log-window" style="position:absolute;bottom:50px;left:20px;right:20px;height:320px;">
@@ -408,8 +412,8 @@
         <div class="taskbar-windows">
             <button class="taskbar-item active" data-window="apps-window">Apps Manager</button>
             <button class="taskbar-item active" data-window="system-window">System Monitor</button>
-            <button class="taskbar-item active" data-window="mcp-store-window">MCP Store</button>
-            <button class="taskbar-item" data-window="settings-window">Settings</button>
+            {% if authenticated %}<button class="taskbar-item active" data-window="mcp-store-window">MCP Store</button>{% endif %}
+            {% if authenticated %}<button class="taskbar-item" data-window="settings-window">Settings</button>{% endif %}
             <button class="taskbar-item active" data-window="log-window">Event Viewer</button>
         </div>
         <div class="system-tray">
@@ -425,9 +429,9 @@
         </div>
         <div class="start-menu-body">
             <div id="start-menu-plugin-links"></div>
-            <a href="#" class="start-menu-item" id="start-mcp-store">&#128722; MCP Store</a>
-            <a href="#" class="start-menu-item" id="start-settings">&#9881; Settings</a>
-            <div id="start-menu-config-editors"></div>
+            {% if authenticated %}<a href="#" class="start-menu-item" id="start-mcp-store">&#128722; MCP Store</a>{% endif %}
+            {% if authenticated %}<a href="#" class="start-menu-item" id="start-settings">&#9881; Settings</a>{% endif %}
+            {% if authenticated %}<div id="start-menu-config-editors"></div>{% endif %}
             <a href="#" class="start-menu-item" id="start-about">ℹ️ About</a>
         </div>
     </div>
@@ -456,6 +460,7 @@
 
     <script>
         window.__DASHBOARD_TOKEN = "{{ token }}";
+        window.__AUTHENTICATED = {{ authenticated }};
         window.__CONFIG = {{ config_json|safe }};
         window.__PLUGIN_LINKS = {{ plugin_links_json|safe }};
         window.__CONFIG_EDITORS = {{ config_editors_json|safe }};
@@ -475,6 +480,7 @@
         // Render config editor entries in start menu (open in-dashboard window)
         (function() {
             var container = document.getElementById('start-menu-config-editors');
+            if (!container) return;
             var editors = window.__CONFIG_EDITORS || [];
             editors.forEach(function(ed) {
                 var wrapper = document.createElement('div');

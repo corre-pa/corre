@@ -1,8 +1,10 @@
 //! Axum handlers and router for the Corre operator dashboard.
 //!
 //! `build_router` returns a fully-configured `Router` ready to be merged into the main
-//! application. All routes require a bearer editor token. The SSE endpoint streams
-//! `DashboardEvent` updates from `ExecutionTracker`.
+//! application. Read-only monitoring routes (status, SSE events, logs, services, run-now)
+//! are accessible without authentication. Mutating and sensitive routes (settings, store,
+//! registry, MCP management, app install/uninstall, config editing, system restart) require
+//! a bearer editor token.
 //!
 //! "App" routes manage installable plugin apps.
 
@@ -37,6 +39,7 @@ struct DashboardAssets;
 struct DashboardTemplate<'a> {
     title: &'a str,
     token: &'a str,
+    authenticated: bool,
     config_json: &'a str,
     plugin_links_json: &'a str,
     config_editors_json: &'a str,
@@ -218,13 +221,17 @@ async fn dashboard_page_handler(
     let token_str = extract_token(&headers, &query);
     let config = state.config.read().await;
     let (et, title) = news_config_from_toml(&config);
-    if check_auth(et.as_deref(), token_str).is_err() {
-        return (StatusCode::FORBIDDEN, "Invalid or missing editor token. Add ?token=YOUR_TOKEN to the URL.").into_response();
-    }
-    let token = token_str.unwrap_or_default();
-    let config_json = match serde_json::to_string_pretty(&*config) {
-        Ok(j) => j,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Serialization error: {e}")).into_response(),
+    let authenticated = check_auth(et.as_deref(), token_str).is_ok();
+    let token = if authenticated { token_str.unwrap_or_default() } else { "" };
+
+    // Only expose full config and editors to authenticated users
+    let config_json = if authenticated {
+        match serde_json::to_string_pretty(&*config) {
+            Ok(j) => j,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Serialization error: {e}")).into_response(),
+        }
+    } else {
+        "{}".to_string()
     };
 
     let request_host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
@@ -233,12 +240,17 @@ async fn dashboard_page_handler(
     let plugin_links = collect_plugin_links(&state.plugins, request_host, is_https);
     let plugin_links_json = serde_json::to_string(&plugin_links).unwrap_or_else(|_| "[]".into());
 
-    let config_editors = collect_config_editors(&config, &state.plugins);
-    let config_editors_json = serde_json::to_string(&config_editors).unwrap_or_else(|_| "[]".into());
+    let config_editors_json = if authenticated {
+        let config_editors = collect_config_editors(&config, &state.plugins);
+        serde_json::to_string(&config_editors).unwrap_or_else(|_| "[]".into())
+    } else {
+        "[]".to_string()
+    };
 
     let template = DashboardTemplate {
         title: &title,
         token,
+        authenticated,
         config_json: &config_json,
         plugin_links_json: &plugin_links_json,
         config_editors_json: &config_editors_json,
@@ -251,10 +263,7 @@ async fn dashboard_page_handler(
     }
 }
 
-async fn status_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    if let Err(resp) = require_auth(&state, &headers, &query).await {
-        return resp;
-    }
+async fn status_handler(State(state): State<Arc<DashboardState>>) -> Response<Body> {
     let apps = state.tracker.snapshot().await;
     let metrics = state.tracker.system_metrics();
     let body = serde_json::json!({
@@ -264,16 +273,7 @@ async fn status_handler(State(state): State<Arc<DashboardState>>, headers: Heade
     axum::Json(body).into_response()
 }
 
-async fn run_now_handler(
-    State(state): State<Arc<DashboardState>>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Path(name): Path<String>,
-) -> Response<Body> {
-    if let Err(resp) = require_auth(&state, &headers, &query).await {
-        return resp;
-    }
-
+async fn run_now_handler(State(state): State<Arc<DashboardState>>, Path(name): Path<String>) -> Response<Body> {
     if state.tracker.is_running(&name).await {
         return (StatusCode::CONFLICT, format!("App `{name}` is already running")).into_response();
     }
@@ -284,11 +284,7 @@ async fn run_now_handler(
     }
 }
 
-async fn sse_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMap, Query(query): Query<TokenQuery>) -> Response<Body> {
-    if let Err(resp) = require_auth(&state, &headers, &query).await {
-        return resp;
-    }
-
+async fn sse_handler(State(state): State<Arc<DashboardState>>) -> Response<Body> {
     // Send initial snapshot, then stream incremental events
     let initial_apps = state.tracker.snapshot().await;
     let initial_metrics = state.tracker.system_metrics();
@@ -329,16 +325,7 @@ async fn sse_handler(State(state): State<Arc<DashboardState>>, headers: HeaderMa
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))).into_response()
 }
 
-async fn historical_logs_handler(
-    State(state): State<Arc<DashboardState>>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-    Path(date): Path<String>,
-) -> Response<Body> {
-    if let Err(resp) = require_auth(&state, &headers, &query).await {
-        return resp;
-    }
-
+async fn historical_logs_handler(State(state): State<Arc<DashboardState>>, Path(date): Path<String>) -> Response<Body> {
     // Validate date format: YYYY-MM-DD
     if date.len() != 10
         || date.as_bytes()[4] != b'-'
@@ -891,15 +878,7 @@ async fn system_restart_handler(
 // =========================================================================
 
 /// GET /api/services — list all managed services with status.
-async fn services_list_handler(
-    State(state): State<Arc<DashboardState>>,
-    headers: HeaderMap,
-    Query(query): Query<TokenQuery>,
-) -> Response<Body> {
-    if let Err(resp) = require_auth(&state, &headers, &query).await {
-        return resp;
-    }
-
+async fn services_list_handler(State(state): State<Arc<DashboardState>>) -> Response<Body> {
     let services = state.service_manager.list().await;
     let body: Vec<serde_json::Value> =
         services.into_iter().map(|(name, status)| serde_json::json!({"name": name, "status": status})).collect();
