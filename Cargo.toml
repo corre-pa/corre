@@ -16,6 +16,7 @@ members = [
     "crates/corre-cli",
     "apps/daily-brief",
     "apps/rolodex",
+    "apps/corre-gym",
 ]
 
 [workspace.package]
