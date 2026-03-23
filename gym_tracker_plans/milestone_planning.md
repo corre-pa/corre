@@ -1,4 +1,4 @@
-Everywhere you see {n} in planning conversations, substitute #0.
+Everywhere you see {n} in planning conversations, substitute #1.
 
 # Gym tracker milestone planning
 

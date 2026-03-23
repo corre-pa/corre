@@ -1,5 +1,7 @@
 # Milestone 0: Database + Data Model
 
+Status: Complete
+
 ## Goal
 
 Create the gym tracker crate with its complete SQLite schema, domain models, CRUD operations,
