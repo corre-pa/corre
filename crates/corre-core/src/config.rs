@@ -16,6 +16,9 @@ pub struct CorreConfig {
     /// Raw `[news]` table — parsed into `corre_news::NewsConfig` by consumers.
     #[serde(default = "default_empty_table")]
     pub news: toml::Value,
+    /// Raw `[gym]` table — parsed into `corre_gym::GymConfig` by consumers.
+    #[serde(default = "default_empty_table")]
+    pub gym: toml::Value,
     #[serde(default)]
     #[serde(alias = "capabilities")]
     pub apps: Vec<AppConfig>,
@@ -235,6 +238,11 @@ impl CorreConfig {
         if let Ok(bind) = std::env::var("CORRE_NEWS_BIND") {
             // Patch the raw `[news]` table directly
             if let Some(table) = config.news.as_table_mut() {
+                table.insert("bind".into(), toml::Value::String(bind));
+            }
+        }
+        if let Ok(bind) = std::env::var("CORRE_GYM_BIND") {
+            if let Some(table) = config.gym.as_table_mut() {
                 table.insert("bind".into(), toml::Value::String(bind));
             }
         }

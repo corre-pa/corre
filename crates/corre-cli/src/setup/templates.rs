@@ -103,6 +103,7 @@ pub fn build_config(state: &SetupState) -> CorreConfig {
             table.insert("title".into(), toml::Value::String(state.news_title.clone().unwrap_or_else(|| "Corre News".into())));
             toml::Value::Table(table)
         },
+        gym: toml::Value::Table(toml::map::Map::new()),
         apps,
         safety: SafetyConfig::default(),
         registry: RegistryConfig::default(),

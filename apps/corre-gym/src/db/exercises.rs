@@ -118,6 +118,13 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list exercises")
     }
 
+    pub fn list_full_exercises(&self) -> anyhow::Result<Vec<FullExercise>> {
+        let sql = format!("{SELECT_FULL_EXERCISE} ORDER BY mg.name, e.name");
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_full_exercise)?;
+        rows.collect::<Result<Vec<_>, _>>().context("Failed to list full exercises")
+    }
+
     pub fn list_exercises_by_muscle_group(&self, muscle_group: &str) -> anyhow::Result<Vec<FullExercise>> {
         let sql = format!("{SELECT_FULL_EXERCISE} WHERE mg.name = ?1 ORDER BY e.name");
         let mut stmt = self.conn().prepare(&sql)?;

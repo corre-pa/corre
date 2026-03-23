@@ -1,5 +1,7 @@
 # Milestone 1: Telegram Text Chat
 
+Status: complete
+
 ## Goal
 
 Users text a Telegram bot. The LLM-powered assistant understands gym-related commands,
