@@ -163,3 +163,7 @@ CREATE TABLE IF NOT EXISTS conversation_history (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_user_time ON conversation_history(user_id, timestamp);
 "#;
+
+/// Incremental migration: add exclude_from_context flag to conversation_history.
+/// Runs idempotently — the "duplicate column name" error is suppressed on re-runs.
+pub const MIGRATIONS_V2: &str = "ALTER TABLE conversation_history ADD COLUMN exclude_from_context INTEGER NOT NULL DEFAULT 0;";

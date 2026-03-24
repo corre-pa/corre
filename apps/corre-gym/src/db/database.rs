@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use rusqlite::Connection;
 
-use super::migrations::MIGRATIONS;
+use super::migrations::{MIGRATIONS, MIGRATIONS_V2};
 
 pub struct Database {
     conn: Connection,
@@ -31,6 +31,11 @@ impl Database {
         self.conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         self.conn.execute_batch(MIGRATIONS).context("Failed to run database migrations")?;
+        match self.conn.execute_batch(MIGRATIONS_V2) {
+            Ok(()) => {}
+            Err(e) if e.to_string().contains("duplicate column name") => {}
+            Err(e) => return Err(e).context("Failed to run v2 migrations"),
+        }
         super::seed::seed_exercises(self).context("Failed to seed exercises")?;
         tracing::debug!("Database migrations applied");
         Ok(())

@@ -58,13 +58,32 @@ impl AssistantHandler {
             db.get_recent_messages_for_platform(&user.id, "telegram", self.config.conversation_history_limit)?
         };
 
-        // 7. Call LLM
-        let llm_response = self.call_llm(&system_prompt, &history, text).await?;
+        // 7. Call LLM (on failure, store excluded conversation and return error reply)
+        let llm_response = match self.call_llm(&system_prompt, &history, text).await {
+            Ok(response) => response,
+            Err(e) => {
+                let err_msg = format!("{e:#}");
+                tracing::error!("LLM call failed: {err_msg}");
+                let error_reply = if err_msg.contains("401") || err_msg.contains("Unauthorized") || err_msg.contains("Authentication") {
+                    "I could not access the AI engine. You'll need to check that I'm properly configured with a valid API key."
+                } else {
+                    "I had trouble processing that -- could you try again?"
+                };
+                self.store_excluded_conversation(&user.id, text, error_reply).await?;
+                return Ok(error_reply.to_string());
+            }
+        };
 
         // 8. Parse response
         let parsed = parse_assistant_response(&llm_response);
 
-        // 9. Execute actions, track failures
+        // 9. Check for LLM refusal (off-topic, safety decline) — exclude from future context
+        let is_refusal = is_refusal_response(&parsed.message);
+        if is_refusal {
+            tracing::info!("LLM response detected as refusal, excluding from context");
+        }
+
+        // 10. Execute actions, track failures
         let mut failures: Vec<String> = Vec::new();
         for action in &parsed.actions {
             if let Err(e) = self.execute_action(action, &user).await {
@@ -73,17 +92,21 @@ impl AssistantHandler {
             }
         }
 
-        // 10. Build final reply
+        // 11. Build final reply
         let reply = if failures.is_empty() {
             parsed.message.clone()
         } else {
             format!("{}\n\n(Note: some actions failed: {})", parsed.message, failures.join("; "))
         };
 
-        // 11. Store conversation turn
-        self.store_conversation(&user.id, text, &parsed.message).await?;
+        // 12. Store conversation turn (excluded if refusal)
+        if is_refusal {
+            self.store_excluded_conversation(&user.id, text, &parsed.message).await?;
+        } else {
+            self.store_conversation(&user.id, text, &parsed.message).await?;
+        }
 
-        // 12. Prune old messages
+        // 13. Prune old messages
         self.db.lock().await.prune_old_messages(&user.id, self.config.conversation_history_limit * 2)?;
 
         Ok(reply)
@@ -132,6 +155,7 @@ impl AssistantHandler {
             "/status" => Ok(Some(self.cmd_status(user).await?)),
             "/history" => Ok(Some(self.cmd_history(user).await?)),
             "/exercises" => Ok(Some(self.cmd_exercises())),
+            "/clear" => Ok(Some(self.cmd_clear(user).await?)),
             _ => Ok(None),
         }
     }
@@ -143,6 +167,7 @@ impl AssistantHandler {
              - /status -- see your current session\n\
              - /history -- recent workout summaries\n\
              - /exercises -- available exercises\n\
+             - /clear -- clear conversation context\n\
              - /help -- all commands",
             user.name
         )
@@ -154,6 +179,7 @@ impl AssistantHandler {
          /status -- Current session and today's stats\n\
          /history -- Last 5 workout summaries\n\
          /exercises -- List available exercises by muscle group\n\
+         /clear -- Clear conversation context (fresh start)\n\
          /help -- This message\n\n\
          You can also just chat naturally:\n\
          - \"3 sets of bench press, 80kg, 8 reps\"\n\
@@ -411,6 +437,13 @@ impl AssistantHandler {
         db.start_session(&user.id, None)
     }
 
+    async fn cmd_clear(&self, user: &User) -> anyhow::Result<String> {
+        let db = self.db.lock().await;
+        let excluded = db.exclude_all_messages_for_platform(&user.id, "telegram")?;
+        tracing::info!(user_id = %user.id, excluded = %excluded, "Cleared conversation context");
+        Ok("Conversation context cleared. I'll start fresh from here.".to_string())
+    }
+
     async fn store_conversation(&self, user_id: &str, user_text: &str, assistant_text: &str) -> anyhow::Result<()> {
         let db = self.db.lock().await;
         let user_msg = new_conversation_message(user_id, "telegram", ConversationRole::User, user_text);
@@ -419,6 +452,39 @@ impl AssistantHandler {
         db.insert_message(&assistant_msg)?;
         Ok(())
     }
+
+    async fn store_excluded_conversation(&self, user_id: &str, user_text: &str, assistant_text: &str) -> anyhow::Result<()> {
+        let db = self.db.lock().await;
+        let mut user_msg = new_conversation_message(user_id, "telegram", ConversationRole::User, user_text);
+        user_msg.exclude_from_context = true;
+        db.insert_message(&user_msg)?;
+        let mut assistant_msg = new_conversation_message(user_id, "telegram", ConversationRole::Assistant, assistant_text);
+        assistant_msg.exclude_from_context = true;
+        db.insert_message(&assistant_msg)?;
+        Ok(())
+    }
+}
+
+/// Detect LLM refusal responses that indicate the message was off-topic or blocked.
+fn is_refusal_response(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    const REFUSAL_PATTERNS: &[&str] = &[
+        "i cannot provide",
+        "i can't provide",
+        "i cannot help with",
+        "i can't help with",
+        "i'm not able to",
+        "i am not able to",
+        "outside my scope",
+        "beyond my capabilities",
+        "i don't have the ability",
+        "not something i can help",
+        "i'm unable to",
+        "i am unable to",
+        "i cannot assist with",
+        "i can't assist with",
+    ];
+    REFUSAL_PATTERNS.iter().any(|p| lower.contains(p))
 }
 
 fn format_log_compact(log: &crate::db::ExerciseLog) -> String {
@@ -481,6 +547,7 @@ mod tests {
             date: 0,
             text: Some(text.to_string()),
             voice: None,
+            audio: None,
         }
     }
 
@@ -495,6 +562,7 @@ mod tests {
             max_message_length: 2000,
             session_timeout_hours: 4,
             llm: None,
+            voice: None,
         }
     }
 
@@ -664,5 +732,114 @@ mod tests {
         let user_msgs: Vec<_> = msgs.iter().filter(|m| m.role == ConversationRole::User).collect();
         let last_user_msg = user_msgs.last().unwrap();
         assert_eq!(last_user_msg.content.len(), 2000);
+    }
+
+    #[tokio::test]
+    async fn slash_clear_excludes_prior_messages() {
+        let (handler, _) = setup_handler(r#"{"message": "Got it!", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+
+        // Register + send a normal message (creates 2 conversation messages)
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "how are you").await.unwrap();
+
+        // Verify messages exist in context
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        assert_eq!(msgs.len(), 2); // user + assistant
+        drop(db);
+
+        // Clear
+        let reply = handler.handle_text_message(&msg, "/clear").await.unwrap();
+        assert!(reply.contains("cleared"));
+
+        // Context should now be empty
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        assert_eq!(msgs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn slash_clear_in_help_text() {
+        let (handler, _) = setup_handler(r#"{"message": "x", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
+        assert!(reply.contains("/clear"));
+    }
+
+    // Mock LLM that always returns an error
+    struct FailingMockLlm;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for FailingMockLlm {
+        async fn complete(&self, _request: LlmRequest) -> anyhow::Result<LlmResponse> {
+            anyhow::bail!("Service temporarily unavailable")
+        }
+    }
+
+    async fn setup_failing_handler() -> AssistantHandler {
+        let db = Database::open_in_memory().unwrap();
+        db.seed_exercises().unwrap();
+        let db = Arc::new(Mutex::new(db));
+        let llm: Box<dyn LlmProvider> = Box::new(FailingMockLlm);
+        AssistantHandler::new(db, llm, test_config()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn llm_error_stores_excluded_conversation() {
+        let handler = setup_failing_handler().await;
+        let msg = make_message(12345, "hello");
+
+        // Register
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        // Send a message that will fail at the LLM step
+        let reply = handler.handle_text_message(&msg, "some bad request").await.unwrap();
+        assert!(reply.contains("trouble processing"));
+
+        // The message should NOT appear in context (excluded)
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let context_msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        assert_eq!(context_msgs.len(), 0, "excluded messages should not appear in context");
+
+        // But the messages ARE in the DB (query all, including excluded)
+        let all_count: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM conversation_history WHERE user_id = ?1", rusqlite::params![user.id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(all_count, 2, "both user and assistant messages should be stored");
+    }
+
+    #[tokio::test]
+    async fn refusal_response_excluded_from_context() {
+        let (handler, _) = setup_handler(r#"{"message": "I cannot provide advice on that topic.", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+
+        // Register
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        // Send off-topic message
+        let reply = handler.handle_text_message(&msg, "off topic stuff").await.unwrap();
+        assert!(reply.contains("I cannot provide"));
+
+        // The refusal should not appear in context
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let context_msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        assert_eq!(context_msgs.len(), 0, "refusal messages should not appear in context");
+    }
+
+    #[test]
+    fn refusal_detection() {
+        assert!(is_refusal_response("I cannot provide advice on that topic."));
+        assert!(is_refusal_response("I can't help with that request."));
+        assert!(is_refusal_response("That's outside my scope as a gym assistant."));
+        assert!(is_refusal_response("I'm unable to assist with cooking recipes."));
+        assert!(!is_refusal_response("Great job! I logged your bench press."));
+        assert!(!is_refusal_response("Your session has been started."));
+        assert!(!is_refusal_response("Here's your workout history."));
     }
 }

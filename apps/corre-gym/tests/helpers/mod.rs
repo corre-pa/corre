@@ -209,6 +209,7 @@ pub fn seed_database(db: &Database, data: &SeedData) -> anyhow::Result<()> {
                 role: ConversationRole::from_str_loose(&msg.role),
                 content: msg.content.clone(),
                 timestamp: sess.started_at.clone(),
+                exclude_from_context: false,
             };
             db.insert_message(&conv)?;
         }

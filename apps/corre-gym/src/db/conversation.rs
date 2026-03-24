@@ -12,24 +12,25 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<ConversationMessage> 
         role: ConversationRole::from_str_loose(&row.get::<_, String>(3)?),
         content: row.get(4)?,
         timestamp: row.get(5)?,
+        exclude_from_context: row.get::<_, i32>(6)? != 0,
     })
 }
 
-const SELECT_MSG: &str = "SELECT id, user_id, platform, role, content, timestamp FROM conversation_history";
+const SELECT_MSG: &str = "SELECT id, user_id, platform, role, content, timestamp, exclude_from_context FROM conversation_history";
 
 impl Database {
     pub fn insert_message(&self, msg: &ConversationMessage) -> anyhow::Result<()> {
         self.conn().execute(
-            "INSERT INTO conversation_history (id, user_id, platform, role, content, timestamp) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![msg.id, msg.user_id, msg.platform, msg.role.as_str(), msg.content, msg.timestamp],
+            "INSERT INTO conversation_history (id, user_id, platform, role, content, timestamp, exclude_from_context) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![msg.id, msg.user_id, msg.platform, msg.role.as_str(), msg.content, msg.timestamp, msg.exclude_from_context as i32],
         )?;
-        tracing::debug!(id = %msg.id, role = %msg.role.as_str(), platform = %msg.platform, "DB: inserted message");
+        tracing::debug!(id = %msg.id, role = %msg.role.as_str(), platform = %msg.platform, exclude = %msg.exclude_from_context, "DB: inserted message");
         Ok(())
     }
 
     pub fn get_recent_messages(&self, user_id: &str, limit: usize) -> anyhow::Result<Vec<ConversationMessage>> {
-        let sql = format!("{SELECT_MSG} WHERE user_id = ?1 ORDER BY timestamp DESC LIMIT ?2");
+        let sql = format!("{SELECT_MSG} WHERE user_id = ?1 AND exclude_from_context = 0 ORDER BY timestamp DESC LIMIT ?2");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, limit as i64], row_to_message)?;
         let mut msgs: Vec<_> = rows.collect::<Result<Vec<_>, _>>().context("Failed to get recent messages")?;
@@ -43,12 +44,24 @@ impl Database {
         platform: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<ConversationMessage>> {
-        let sql = format!("{SELECT_MSG} WHERE user_id = ?1 AND platform = ?2 ORDER BY timestamp DESC LIMIT ?3");
+        let sql =
+            format!("{SELECT_MSG} WHERE user_id = ?1 AND platform = ?2 AND exclude_from_context = 0 ORDER BY timestamp DESC LIMIT ?3");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, platform, limit as i64], row_to_message)?;
         let mut msgs: Vec<_> = rows.collect::<Result<Vec<_>, _>>().context("Failed to get recent messages for platform")?;
         msgs.reverse();
         Ok(msgs)
+    }
+
+    /// Mark all messages for a user+platform as excluded from LLM context.
+    /// Messages remain in the DB for audit; they just won't appear in future prompts.
+    pub fn exclude_all_messages_for_platform(&self, user_id: &str, platform: &str) -> anyhow::Result<usize> {
+        let updated = self.conn().execute(
+            "UPDATE conversation_history SET exclude_from_context = 1 WHERE user_id = ?1 AND platform = ?2 AND exclude_from_context = 0",
+            params![user_id, platform],
+        )?;
+        tracing::info!(user_id = %user_id, platform = %platform, updated = %updated, "DB: excluded all messages from context");
+        Ok(updated)
     }
 
     pub fn prune_old_messages(&self, user_id: &str, keep_last: usize) -> anyhow::Result<usize> {
@@ -122,5 +135,58 @@ mod tests {
 
         let remaining = db.get_recent_messages(&user.id, 100).unwrap();
         assert_eq!(remaining.len(), 3);
+    }
+
+    #[test]
+    fn exclude_all_messages_for_platform() {
+        let db = test_db();
+        let user = new_user("Tester", None, "UTC");
+        db.insert_user(&user).unwrap();
+
+        let m1 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "Hello");
+        let m2 = new_conversation_message(&user.id, "telegram", ConversationRole::Assistant, "Hi!");
+        let m3 = new_conversation_message(&user.id, "web", ConversationRole::User, "Web msg");
+        db.insert_message(&m1).unwrap();
+        db.insert_message(&m2).unwrap();
+        db.insert_message(&m3).unwrap();
+
+        // Exclude all telegram messages
+        let excluded = db.exclude_all_messages_for_platform(&user.id, "telegram").unwrap();
+        assert_eq!(excluded, 2);
+
+        // Telegram context should be empty
+        let tg_msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        assert_eq!(tg_msgs.len(), 0);
+
+        // Web messages should be unaffected
+        let web_msgs = db.get_recent_messages_for_platform(&user.id, "web", 100).unwrap();
+        assert_eq!(web_msgs.len(), 1);
+
+        // Second exclude is a no-op
+        let excluded = db.exclude_all_messages_for_platform(&user.id, "telegram").unwrap();
+        assert_eq!(excluded, 0);
+    }
+
+    #[test]
+    fn excluded_messages_hidden_from_context() {
+        let db = test_db();
+        let user = new_user("Tester", None, "UTC");
+        db.insert_user(&user).unwrap();
+
+        let mut m1 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "bad request");
+        m1.exclude_from_context = true;
+        db.insert_message(&m1).unwrap();
+
+        let m2 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "good request");
+        db.insert_message(&m2).unwrap();
+
+        let msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content, "good request");
+
+        // Also verify get_recent_messages filters
+        let msgs = db.get_recent_messages(&user.id, 100).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].content, "good request");
     }
 }

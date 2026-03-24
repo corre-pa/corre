@@ -345,6 +345,8 @@ pub struct ConversationMessage {
     pub role: ConversationRole,
     pub content: String,
     pub timestamp: String,
+    /// When true, this message is stored for audit but excluded from LLM prompt context.
+    pub exclude_from_context: bool,
 }
 
 // ── Time-series and goal progress types ────────────────────────────────────────
@@ -466,5 +468,6 @@ pub fn new_conversation_message(user_id: &str, platform: &str, role: Conversatio
         role,
         content: content.to_string(),
         timestamp: now_str(),
+        exclude_from_context: false,
     }
 }
