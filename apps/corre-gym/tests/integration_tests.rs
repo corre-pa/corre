@@ -146,10 +146,8 @@ fn access_control_across_seeded_groups() {
 fn conversation_history_proportional() {
     let (db, data) = seeded_db();
 
-    let msg_count: i64 = db
-        .conn()
-        .query_row("SELECT COUNT(*) FROM conversation_history WHERE user_id = 'user-1'", [], |r| r.get(0))
-        .unwrap();
+    let msg_count: i64 =
+        db.conn().query_row("SELECT COUNT(*) FROM conversation_history WHERE user_id = 'user-1'", [], |r| r.get(0)).unwrap();
     let session_count = data.sessions.iter().filter(|s| s.user_id == "user-1").count();
 
     assert!(
@@ -165,11 +163,7 @@ fn personal_records() {
     let pr = db.personal_record("user-1", "barbell-bench-press").unwrap();
     assert!(pr.is_some(), "Expected a bench press PR for user-1");
     let pr = pr.unwrap();
-    assert!(
-        pr.weight_kg.unwrap_or(0.0) >= 100.0,
-        "Bench PR should be >= 100kg (achieved goal target), got {:?}",
-        pr.weight_kg
-    );
+    assert!(pr.weight_kg.unwrap_or(0.0) >= 100.0, "Bench PR should be >= 100kg (achieved goal target), got {:?}", pr.weight_kg);
 }
 
 #[test]

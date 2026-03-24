@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chrono::Utc;
-use corre_core::app::{LlmProvider, LlmMessage, LlmRequest, LlmRole};
+use corre_core::app::{LlmMessage, LlmProvider, LlmRequest, LlmRole};
 use tokio::sync::Mutex;
 
 use crate::config::GymConfig;
 use crate::db::{
-    ConversationRole, Database, Difficulty, FullExercise, User,
-    new_conversation_message, new_exercise_goal, new_exercise_log, new_health_entry, new_user,
+    ConversationRole, Database, Difficulty, FullExercise, User, new_conversation_message, new_exercise_goal, new_exercise_log,
+    new_health_entry, new_user,
 };
 use crate::telegram::Message as TgMessage;
 
@@ -47,11 +47,7 @@ impl AssistantHandler {
         self.close_stale_session(&user).await?;
 
         // 4. Truncate message to max_message_length
-        let text = if text.len() > self.config.max_message_length {
-            &text[..self.config.max_message_length]
-        } else {
-            text
-        };
+        let text = if text.len() > self.config.max_message_length { &text[..self.config.max_message_length] } else { text };
 
         // 5. Build system prompt with current context
         let system_prompt = self.build_context(&user).await?;
@@ -88,10 +84,7 @@ impl AssistantHandler {
         self.store_conversation(&user.id, text, &parsed.message).await?;
 
         // 12. Prune old messages
-        self.db
-            .lock()
-            .await
-            .prune_old_messages(&user.id, self.config.conversation_history_limit * 2)?;
+        self.db.lock().await.prune_old_messages(&user.id, self.config.conversation_history_limit * 2)?;
 
         Ok(reply)
     }
@@ -219,15 +212,9 @@ impl AssistantHandler {
 
         let mut parts = vec!["Recent workouts:".to_string()];
         for summary in summaries.iter().take(5) {
-            let duration = summary
-                .duration_mins
-                .map(|d| format!(" ({d} min)"))
-                .unwrap_or_default();
+            let duration = summary.duration_mins.map(|d| format!(" ({d} min)")).unwrap_or_default();
             let status = if summary.session.ended_at.is_some() { "done" } else { "active" };
-            parts.push(format!(
-                "- {} [{status}]: {} exercises{duration}",
-                summary.session.started_at, summary.exercise_count,
-            ));
+            parts.push(format!("- {} [{status}]: {} exercises{duration}", summary.session.started_at, summary.exercise_count,));
         }
 
         Ok(parts.join("\n"))
@@ -248,10 +235,7 @@ impl AssistantHandler {
 
         // Find the last activity time: most recent log or session start
         let logs = db.get_logs_for_session(&session.id)?;
-        let last_activity = logs
-            .last()
-            .map(|l| l.logged_at.as_str())
-            .unwrap_or(&session.started_at);
+        let last_activity = logs.last().map(|l| l.logged_at.as_str()).unwrap_or(&session.started_at);
 
         let threshold_hours = self.config.session_timeout_hours as i64;
         if let Ok(last) = chrono::NaiveDateTime::parse_from_str(last_activity, "%Y-%m-%d %H:%M:%S") {
@@ -310,16 +294,8 @@ impl AssistantHandler {
         Ok(build_system_prompt(&ctx))
     }
 
-    async fn call_llm(
-        &self,
-        system_prompt: &str,
-        history: &[crate::db::ConversationMessage],
-        user_text: &str,
-    ) -> anyhow::Result<String> {
-        let mut messages = vec![LlmMessage {
-            role: LlmRole::System,
-            content: system_prompt.to_string(),
-        }];
+    async fn call_llm(&self, system_prompt: &str, history: &[crate::db::ConversationMessage], user_text: &str) -> anyhow::Result<String> {
+        let mut messages = vec![LlmMessage { role: LlmRole::System, content: system_prompt.to_string() }];
 
         // Add conversation history as user/assistant pairs
         for msg in history {
@@ -328,71 +304,70 @@ impl AssistantHandler {
                 ConversationRole::Assistant => LlmRole::Assistant,
                 ConversationRole::System => LlmRole::System,
             };
-            messages.push(LlmMessage {
-                role,
-                content: msg.content.clone(),
-            });
+            messages.push(LlmMessage { role, content: msg.content.clone() });
         }
 
         // Add current user message
-        messages.push(LlmMessage {
-            role: LlmRole::User,
-            content: user_text.to_string(),
-        });
+        messages.push(LlmMessage { role: LlmRole::User, content: user_text.to_string() });
 
-        let request = LlmRequest {
-            messages,
-            temperature: Some(0.3),
-            max_completion_tokens: Some(1024),
-            json_mode: false,
-        };
+        let request = LlmRequest { messages, temperature: Some(0.3), max_completion_tokens: Some(1024), json_mode: false };
 
         let response = self.llm.complete(request).await.context("LLM completion failed")?;
         Ok(response.content)
     }
 
     async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<()> {
+        tracing::debug!(action = ?action, user_id = %user.id, "Executing action");
         match action {
             AssistantAction::LogExercise { exercise, sets, reps, weight_kg, difficulty } => {
-                let ex =
-                    find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let ex = find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                tracing::debug!(matched = %ex.exercise.name, input = %exercise, "Matched exercise");
                 let session = self.ensure_session(user).await?;
                 let mut log = new_exercise_log(&user.id, &ex.exercise.id, Some(&session.id));
                 log.sets = *sets;
                 log.reps = *reps;
                 log.weight_kg = *weight_kg;
                 log.difficulty = difficulty.unwrap_or(Difficulty::Medium);
+                tracing::debug!(id = %log.id, exercise = %ex.exercise.name, sets = ?log.sets, reps = ?log.reps, weight_kg = ?log.weight_kg, difficulty = ?log.difficulty, "Inserting exercise log");
                 self.db.lock().await.insert_log(&log)?;
             }
             AssistantAction::LogExerciseTimed { exercise, duration_secs, difficulty } => {
-                let ex =
-                    find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let ex = find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                tracing::debug!(matched = %ex.exercise.name, input = %exercise, "Matched exercise");
                 let session = self.ensure_session(user).await?;
                 let mut log = new_exercise_log(&user.id, &ex.exercise.id, Some(&session.id));
                 log.duration_secs = Some(*duration_secs);
                 log.difficulty = difficulty.unwrap_or(Difficulty::Medium);
+                tracing::debug!(id = %log.id, exercise = %ex.exercise.name, duration_secs = %duration_secs, difficulty = ?log.difficulty, "Inserting timed exercise log");
                 self.db.lock().await.insert_log(&log)?;
             }
             AssistantAction::LogExerciseDistance { exercise, distance_m, duration_secs, difficulty } => {
-                let ex =
-                    find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let ex = find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                tracing::debug!(matched = %ex.exercise.name, input = %exercise, "Matched exercise");
                 let session = self.ensure_session(user).await?;
                 let mut log = new_exercise_log(&user.id, &ex.exercise.id, Some(&session.id));
                 log.distance_m = *distance_m;
                 log.duration_secs = *duration_secs;
                 log.difficulty = difficulty.unwrap_or(Difficulty::Medium);
+                tracing::debug!(id = %log.id, exercise = %ex.exercise.name, distance_m = ?log.distance_m, duration_secs = ?log.duration_secs, difficulty = ?log.difficulty, "Inserting distance exercise log");
                 self.db.lock().await.insert_log(&log)?;
             }
             AssistantAction::StartSession { notes } => {
                 let db = self.db.lock().await;
                 if db.get_active_session(&user.id)?.is_none() {
-                    db.start_session(&user.id, notes.as_deref())?;
+                    let session = db.start_session(&user.id, notes.as_deref())?;
+                    tracing::debug!(id = %session.id, notes = ?notes, "Started session");
+                } else {
+                    tracing::debug!("Session already active, skipping start");
                 }
             }
             AssistantAction::EndSession => {
                 let db = self.db.lock().await;
                 if let Some(session) = db.get_active_session(&user.id)? {
+                    tracing::debug!(id = %session.id, "Ending session");
                     db.end_session(&session.id)?;
+                } else {
+                    tracing::debug!("No active session to end");
                 }
             }
             AssistantAction::LogHealth { entry_type, body_part, severity, description } => {
@@ -401,23 +376,24 @@ impl AssistantHandler {
                 if let Some(sev) = severity {
                     entry.severity = sev.clone();
                 }
+                tracing::debug!(id = %entry.id, entry_type = ?entry_type, body_part = ?body_part, severity = ?severity, "Inserting health entry");
                 self.db.lock().await.insert_health_entry(&entry)?;
             }
             AssistantAction::ResolveHealth { description } => {
                 let db = self.db.lock().await;
                 let entries = db.list_active_health_entries(&user.id)?;
-                if let Some(entry) = entries
-                    .iter()
-                    .find(|e| e.description.to_lowercase().contains(&description.to_lowercase()))
-                {
+                if let Some(entry) = entries.iter().find(|e| e.description.to_lowercase().contains(&description.to_lowercase())) {
+                    tracing::debug!(id = %entry.id, description = %entry.description, "Resolving health entry");
                     db.resolve_health_entry(&entry.id)?;
+                } else {
+                    tracing::debug!(search = %description, "No matching health entry found to resolve");
                 }
             }
             AssistantAction::SetGoal { exercise, target_value, end_date } => {
-                let ex =
-                    find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let ex = find_exercise(&self.exercises, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let mut goal = new_exercise_goal(&user.id, &ex.exercise.id, *target_value);
                 goal.end_date = end_date.clone();
+                tracing::debug!(id = %goal.id, exercise = %ex.exercise.name, target = %target_value, end_date = ?end_date, "Inserting goal");
                 self.db.lock().await.insert_goal(&goal)?;
             }
             AssistantAction::Unknown => {
@@ -462,11 +438,7 @@ fn format_log_compact(log: &crate::db::ExerciseLog) -> String {
     if let Some(d) = log.distance_m {
         parts.push(format!("{d}m"));
     }
-    if parts.is_empty() {
-        "no details".to_string()
-    } else {
-        parts.join(", ")
-    }
+    if parts.is_empty() { "no details".to_string() } else { parts.join(", ") }
 }
 
 #[cfg(test)]
@@ -481,9 +453,7 @@ mod tests {
 
     impl MockLlm {
         fn new(response: &str) -> Self {
-            Self {
-                response: std::sync::Mutex::new(response.to_string()),
-            }
+            Self { response: std::sync::Mutex::new(response.to_string()) }
         }
 
         fn set_response(&self, response: &str) {
@@ -494,9 +464,7 @@ mod tests {
     #[async_trait::async_trait]
     impl LlmProvider for MockLlm {
         async fn complete(&self, _request: LlmRequest) -> anyhow::Result<LlmResponse> {
-            Ok(LlmResponse {
-                content: self.response.lock().unwrap().clone(),
-            })
+            Ok(LlmResponse { content: self.response.lock().unwrap().clone() })
         }
     }
 
@@ -509,10 +477,7 @@ mod tests {
                 last_name: Some("User".to_string()),
                 username: Some("testuser".to_string()),
             }),
-            chat: crate::telegram::Chat {
-                id: user_id,
-                chat_type: "private".to_string(),
-            },
+            chat: crate::telegram::Chat { id: user_id, chat_type: "private".to_string() },
             date: 0,
             text: Some(text.to_string()),
             voice: None,

@@ -36,15 +36,20 @@ fn extract_json_object(text: &str) -> &str {
 /// entire response as a plain-text message with no actions.
 pub fn parse_assistant_response(raw: &str) -> AssistantResponse {
     let json_str = extract_json_object(raw);
+    tracing::debug!(raw_len = raw.len(), json_len = json_str.len(), "Parsing LLM response");
+    tracing::debug!(json = json_str, "Extracted JSON");
 
     match serde_json::from_str::<AssistantResponse>(json_str) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            tracing::warn!("Failed to parse LLM response as JSON: {e}");
-            AssistantResponse {
-                message: raw.to_string(),
-                actions: vec![],
+        Ok(parsed) => {
+            tracing::debug!(message_len = parsed.message.len(), actions = parsed.actions.len(), "Parsed response");
+            for (i, action) in parsed.actions.iter().enumerate() {
+                tracing::debug!(index = i, action = ?action, "Action from LLM");
             }
+            parsed
+        }
+        Err(e) => {
+            tracing::warn!(raw = raw, "Failed to parse LLM response as JSON: {e}");
+            AssistantResponse { message: raw.to_string(), actions: vec![] }
         }
     }
 }

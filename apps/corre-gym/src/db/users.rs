@@ -25,6 +25,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![user.id, user.name, user.telegram_id, user.signal_id, user.timezone, user.created_at, user.updated_at],
         )?;
+        tracing::debug!(id = %user.id, name = %user.name, telegram_id = ?user.telegram_id, "DB: inserted user");
         Ok(())
     }
 
@@ -56,12 +57,14 @@ impl Database {
             params![user.name, user.telegram_id, user.signal_id, user.timezone, user.id],
         )?;
         anyhow::ensure!(rows > 0, "User with id {} not found", user.id);
+        tracing::debug!(id = %user.id, "DB: updated user");
         Ok(())
     }
 
     pub fn delete_user(&self, id: &str) -> anyhow::Result<()> {
         let rows = self.conn().execute("DELETE FROM users WHERE id = ?1", params![id])?;
         anyhow::ensure!(rows > 0, "User with id {id} not found");
+        tracing::debug!(id = %id, "DB: deleted user");
         Ok(())
     }
 
@@ -75,8 +78,8 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::new_user;
+    use super::*;
 
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()

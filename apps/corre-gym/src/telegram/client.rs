@@ -25,10 +25,7 @@ impl TelegramClient {
             .build()
             .context("building HTTP client")?;
 
-        Ok(Self {
-            client,
-            base_url: format!("https://api.telegram.org/bot{token}"),
-        })
+        Ok(Self { client, base_url: format!("https://api.telegram.org/bot{token}") })
     }
 
     /// Get bot info (startup verification).
@@ -62,13 +59,7 @@ impl TelegramClient {
     }
 
     /// Send a text message. Returns the sent Message.
-    pub async fn send_message(
-        &self,
-        chat_id: i64,
-        text: &str,
-        parse_mode: Option<&str>,
-        reply_to: Option<i64>,
-    ) -> anyhow::Result<Message> {
+    pub async fn send_message(&self, chat_id: i64, text: &str, parse_mode: Option<&str>, reply_to: Option<i64>) -> anyhow::Result<Message> {
         let mut body = json!({
             "chat_id": chat_id,
             "text": text,
@@ -107,11 +98,7 @@ impl TelegramClient {
     }
 
     /// Post with automatic retry on 429 rate limiting.
-    async fn post_with_retry<T: serde::de::DeserializeOwned>(
-        &self,
-        method: &str,
-        body: &serde_json::Value,
-    ) -> anyhow::Result<T> {
+    async fn post_with_retry<T: serde::de::DeserializeOwned>(&self, method: &str, body: &serde_json::Value) -> anyhow::Result<T> {
         for _ in 0..3 {
             let resp = self
                 .client

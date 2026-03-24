@@ -24,6 +24,7 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![msg.id, msg.user_id, msg.platform, msg.role.as_str(), msg.content, msg.timestamp],
         )?;
+        tracing::debug!(id = %msg.id, role = %msg.role.as_str(), platform = %msg.platform, "DB: inserted message");
         Ok(())
     }
 
@@ -56,14 +57,17 @@ impl Database {
              (SELECT id FROM conversation_history WHERE user_id = ?1 ORDER BY timestamp DESC LIMIT ?2)",
             params![user_id, keep_last as i64],
         )?;
+        if deleted > 0 {
+            tracing::debug!(user_id = %user_id, deleted = %deleted, "DB: pruned old messages");
+        }
         Ok(deleted)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::{new_conversation_message, new_user};
+    use super::*;
 
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()

@@ -31,11 +31,19 @@ impl Database {
              achieved, notes, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
-                goal.id, goal.user_id, goal.exercise_id, goal.target_value,
-                goal.start_date, goal.end_date, goal.achieved as i32,
-                goal.notes, goal.created_at, goal.updated_at,
+                goal.id,
+                goal.user_id,
+                goal.exercise_id,
+                goal.target_value,
+                goal.start_date,
+                goal.end_date,
+                goal.achieved as i32,
+                goal.notes,
+                goal.created_at,
+                goal.updated_at,
             ],
         )?;
+        tracing::debug!(id = %goal.id, exercise_id = %goal.exercise_id, target = %goal.target_value, "DB: inserted goal");
         Ok(())
     }
 
@@ -54,19 +62,16 @@ impl Database {
     }
 
     pub fn list_goals_in_period(&self, user_id: &str, from: &str, to: &str) -> anyhow::Result<Vec<ExerciseGoal>> {
-        let sql = format!(
-            "{SELECT_GOAL} WHERE user_id = ?1 AND start_date <= ?3 AND (end_date IS NULL OR end_date >= ?2) ORDER BY start_date"
-        );
+        let sql =
+            format!("{SELECT_GOAL} WHERE user_id = ?1 AND start_date <= ?3 AND (end_date IS NULL OR end_date >= ?2) ORDER BY start_date");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, from, to], row_to_goal)?;
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list goals in period")
     }
 
     pub fn mark_goal_achieved(&self, id: &str) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "UPDATE exercise_goals SET achieved = 1, updated_at = datetime('now') WHERE id = ?1",
-            params![id],
-        )?;
+        let rows =
+            self.conn().execute("UPDATE exercise_goals SET achieved = 1, updated_at = datetime('now') WHERE id = ?1", params![id])?;
         anyhow::ensure!(rows > 0, "Goal with id {id} not found");
         Ok(())
     }
@@ -80,8 +85,8 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::{new_exercise_goal, new_user};
+    use super::*;
 
     fn test_db() -> Database {
         let db = Database::open_in_memory().unwrap();

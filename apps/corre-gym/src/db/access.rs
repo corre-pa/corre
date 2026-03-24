@@ -49,20 +49,15 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::{AccessLevel, Group, new_user};
+    use super::*;
 
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
 
     fn make_group(name: &str) -> Group {
-        Group {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.to_string(),
-            description: None,
-            created_at: "2025-01-01 00:00:00".into(),
-        }
+        Group { id: uuid::Uuid::new_v4().to_string(), name: name.to_string(), description: None, created_at: "2025-01-01 00:00:00".into() }
     }
 
     fn setup_group_with_users(db: &Database, actor_level: AccessLevel) -> (String, String, String) {

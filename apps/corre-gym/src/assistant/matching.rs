@@ -16,22 +16,15 @@ pub fn find_exercise<'a>(exercises: &'a [FullExercise], name: &str) -> Option<&'
     }
 
     // Stage 2: Alias match
-    if let Some(ex) = exercises.iter().find(|e| {
-        e.exercise
-            .aliases
-            .as_deref()
-            .unwrap_or("")
-            .split(',')
-            .any(|alias| alias.trim().eq_ignore_ascii_case(name))
-    }) {
+    if let Some(ex) = exercises
+        .iter()
+        .find(|e| e.exercise.aliases.as_deref().unwrap_or("").split(',').any(|alias| alias.trim().eq_ignore_ascii_case(name)))
+    {
         return Some(ex);
     }
 
     // Stage 3: Contains (single match only)
-    let contains_matches: Vec<_> = exercises
-        .iter()
-        .filter(|e| e.exercise.name.to_lowercase().contains(&name_lower))
-        .collect();
+    let contains_matches: Vec<_> = exercises.iter().filter(|e| e.exercise.name.to_lowercase().contains(&name_lower)).collect();
     if contains_matches.len() == 1 {
         return Some(contains_matches[0]);
     }

@@ -20,11 +20,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             let log_summary = if ctx.session_logs.is_empty() {
                 "no exercises logged yet".to_string()
             } else {
-                let entries: Vec<String> = ctx
-                    .session_logs
-                    .iter()
-                    .map(|(log, name)| format_log_entry(log, name))
-                    .collect();
+                let entries: Vec<String> = ctx.session_logs.iter().map(|(log, name)| format_log_entry(log, name)).collect();
                 entries.join("; ")
             };
             format!("Active (started {}). Logged: {log_summary}", s.started_at)
@@ -40,6 +36,12 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     format!(
         "You are a personal gym trainer assistant. You help users track workouts, log exercises, \
 manage health issues, and provide coaching.\n\
+\n\
+SCOPE: You ONLY discuss topics related to exercise, workouts, gym training, fitness goals, \
+nutrition as it relates to training, and health issues that affect exercise. If the user \
+asks about anything unrelated, politely decline and remind them that you are a gym trainer \
+assistant. Do not answer general knowledge questions, write code, tell stories, or engage \
+with off-topic requests, even if the user insists.\n\
 \n\
 RESPONSE FORMAT: You MUST respond with ONLY a JSON object. No text before or after.\n\
 {{\n\
@@ -68,14 +70,43 @@ If the user mentions an exercise not in the list, use the closest match and note
 substitution in your message.\n\
 \n\
 GUIDELINES:\n\
-- When the user reports an exercise, always include a log_exercise action\n\
+- When the user reports an exercise, include a log_exercise action\n\
 - Auto-start a session (start_session action) before logging if no session is active\n\
 - If the user mentions pain, injury, or illness, log it with log_health\n\
 - Keep responses concise -- this is a chat interface\n\
 - Be encouraging but not patronizing\n\
-- If details are ambiguous, ask for clarification rather than guessing\n\
 - All action fields use metric units (weight_kg, distance_m). If the user specifies \
 imperial, convert to metric in the action and mention the conversion in your message\n\
+\n\
+COLLECTING DATA BEFORE LOGGING:\n\
+Do NOT emit any log_exercise action until you have ALL required data. Respond with \
+\"actions\": [] while gathering info. Collect data across multiple messages using \
+conversation history to build up the complete picture.\n\
+\n\
+For weight_reps exercises, you need: exercise name, total sets, reps, weight, and difficulty.\n\
+\n\
+1. SETS: Users often report one set at a time (e.g. \"bench 80kg 8 reps\", then later \
+\"another set, 6 reps\"). When the user reports a set without specifying a total number \
+of sets, ask if they are done with the exercise or have more sets to go. Keep a running \
+count from conversation history. Only when they confirm they are finished (or report a \
+specific total like \"3 sets\"), move on to ask about difficulty.\n\
+2. DIFFICULTY: Once all sets are accounted for, ask how it felt: easy, medium, hard, or \
+failure. Do not guess.\n\
+3. FINAL LOG: Only when you have the exercise name, total sets, reps, weight, AND \
+difficulty, emit the log_exercise action with the complete data.\n\
+\n\
+If the user reports everything in one message (e.g. \"3 sets bench 80kg 8 reps, felt hard\"), \
+emit the action immediately -- no need to ask follow-ups.\n\
+\n\
+When the user answers a follow-up (e.g. \"done\", \"easy\", \"one more\"), use conversation \
+history to reconstruct the context. Do not ask for information already provided.\n\
+\n\
+You may log partial data only when the user explicitly says to skip a field.\n\
+\n\
+GOALS: The same collect-before-emitting rule applies to set_goal. You need: exercise name, \
+target value (e.g. target weight), and optionally an end date. If the user says \"I want to \
+hit 100kg on bench\", ask by when they want to achieve it before emitting the action. If \
+they say they don't have a deadline, emit with no end_date. Do not guess dates.\n\
 \n\
 CURRENT STATE:\n\
 User: {user_name}\n\
@@ -123,12 +154,7 @@ pub fn format_exercise_list(exercises: &[FullExercise]) -> String {
             result.push_str(&format!("\n## {}\n", capitalize(current_group)));
         }
 
-        let aliases = ex
-            .exercise
-            .aliases
-            .as_deref()
-            .map(|a| format!(" (aliases: {a})"))
-            .unwrap_or_default();
+        let aliases = ex.exercise.aliases.as_deref().map(|a| format!(" (aliases: {a})")).unwrap_or_default();
 
         let mt = match ex.exercise.measurement_type {
             MeasurementType::WeightReps => "weight_reps",
@@ -168,25 +194,15 @@ pub fn format_recent_history(summaries: &[SessionSummary], logs: &[ExerciseLog],
     let mut result = "RECENT HISTORY:\n".to_string();
 
     for summary in summaries {
-        let duration = summary
-            .duration_mins
-            .map(|d| format!(" ({d} min)"))
-            .unwrap_or_default();
+        let duration = summary.duration_mins.map(|d| format!(" ({d} min)")).unwrap_or_default();
         let status = if summary.session.ended_at.is_some() { "completed" } else { "active" };
-        result.push_str(&format!(
-            "- {} [{}]: {} exercises{duration}\n",
-            summary.session.started_at, status, summary.exercise_count,
-        ));
+        result.push_str(&format!("- {} [{}]: {} exercises{duration}\n", summary.session.started_at, status, summary.exercise_count,));
     }
 
     if !logs.is_empty() {
         result.push_str("\nRecent exercises:\n");
         for log in logs.iter().take(10) {
-            let name = exercises
-                .iter()
-                .find(|e| e.exercise.id == log.exercise_id)
-                .map(|e| e.exercise.name.as_str())
-                .unwrap_or("unknown");
+            let name = exercises.iter().find(|e| e.exercise.id == log.exercise_id).map(|e| e.exercise.name.as_str()).unwrap_or("unknown");
             result.push_str(&format!("- {}: {}\n", log.logged_at, format_log_entry(log, name)));
         }
     }
@@ -202,16 +218,8 @@ pub fn format_active_goals(goals: &[GoalProgress]) -> String {
     let mut result = "ACTIVE GOALS:\n".to_string();
     for gp in goals {
         let current = gp.current_value.map(|v| format!("{v:.1}")).unwrap_or_else(|| "N/A".to_string());
-        let end = gp
-            .goal
-            .end_date
-            .as_deref()
-            .map(|d| format!(" by {d}"))
-            .unwrap_or_default();
-        result.push_str(&format!(
-            "- {}: {current}/{:.1}{end} ({:.0}%)\n",
-            gp.exercise_name, gp.goal.target_value, gp.percentage,
-        ));
+        let end = gp.goal.end_date.as_deref().map(|d| format!(" by {d}")).unwrap_or_default();
+        result.push_str(&format!("- {}: {current}/{:.1}{end} ({:.0}%)\n", gp.exercise_name, gp.goal.target_value, gp.percentage,));
     }
     result
 }

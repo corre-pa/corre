@@ -58,6 +58,7 @@ impl LlmProvider for OpenAiCompatProvider {
             messages: request.messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: m.content.clone() }).collect(),
             temperature: Some(request.temperature.unwrap_or(self.default_temperature)),
             max_completion_tokens: request.max_completion_tokens,
+            response_format: None,
             extra: self.extra_body.clone(),
         };
 

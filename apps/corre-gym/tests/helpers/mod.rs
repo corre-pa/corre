@@ -129,12 +129,7 @@ pub fn seed_database(db: &Database, data: &SeedData) -> anyhow::Result<()> {
 
     // 2. Groups
     for g in &data.groups {
-        let group = Group {
-            id: g.id.clone(),
-            name: g.name.clone(),
-            description: g.description.clone(),
-            created_at: g.created_at.clone(),
-        };
+        let group = Group { id: g.id.clone(), name: g.name.clone(), description: g.description.clone(), created_at: g.created_at.clone() };
         db.insert_group(&group)?;
     }
 
@@ -160,7 +155,16 @@ pub fn seed_database(db: &Database, data: &SeedData) -> anyhow::Result<()> {
         db.conn().execute(
             "INSERT OR IGNORE INTO exercises (id, name, aliases, muscle_group_id, purpose, measurement_type_id, description, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![exercise.id, exercise.name, exercise.aliases, exercise.muscle_group_id, exercise.purpose, ex.measurement_type_id, exercise.description, exercise.created_at],
+            rusqlite::params![
+                exercise.id,
+                exercise.name,
+                exercise.aliases,
+                exercise.muscle_group_id,
+                exercise.purpose,
+                ex.measurement_type_id,
+                exercise.description,
+                exercise.created_at
+            ],
         )?;
     }
 

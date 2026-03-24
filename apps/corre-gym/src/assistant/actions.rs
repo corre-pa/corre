@@ -61,7 +61,8 @@ mod tests {
 
     #[test]
     fn parse_log_exercise_action() {
-        let json = r#"{"type": "log_exercise", "exercise": "Barbell Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0, "difficulty": "hard"}"#;
+        let json =
+            r#"{"type": "log_exercise", "exercise": "Barbell Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0, "difficulty": "hard"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
             AssistantAction::LogExercise { exercise, sets, reps, weight_kg, difficulty } => {

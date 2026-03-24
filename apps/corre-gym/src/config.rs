@@ -50,10 +50,7 @@ fn default_session_timeout_hours() -> u32 {
 
 impl GymConfig {
     pub fn from_toml_table(table: Option<&toml::Value>) -> anyhow::Result<Self> {
-        table
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("missing [gym] section in corre.toml"))
-            .and_then(|v| v.try_into().map_err(Into::into))
+        table.cloned().ok_or_else(|| anyhow::anyhow!("missing [gym] section in corre.toml")).and_then(|v| v.try_into().map_err(Into::into))
     }
 
     /// Resolve `${VAR}` references in secret fields.

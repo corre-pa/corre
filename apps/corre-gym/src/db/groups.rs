@@ -6,12 +6,7 @@ use super::models::{AccessLevel, Group, User};
 use super::users::row_to_user;
 
 fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<Group> {
-    Ok(Group {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        description: row.get(2)?,
-        created_at: row.get(3)?,
-    })
+    Ok(Group { id: row.get(0)?, name: row.get(1)?, description: row.get(2)?, created_at: row.get(3)? })
 }
 
 impl Database {
@@ -36,10 +31,9 @@ impl Database {
     }
 
     pub fn update_group(&self, group: &Group) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "UPDATE groups SET name = ?1, description = ?2 WHERE id = ?3",
-            params![group.name, group.description, group.id],
-        )?;
+        let rows = self
+            .conn()
+            .execute("UPDATE groups SET name = ?1, description = ?2 WHERE id = ?3", params![group.name, group.description, group.id])?;
         anyhow::ensure!(rows > 0, "Group with id {} not found", group.id);
         Ok(())
     }
@@ -59,10 +53,7 @@ impl Database {
     }
 
     pub fn remove_member(&self, user_id: &str, group_id: &str) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "DELETE FROM group_members WHERE user_id = ?1 AND group_id = ?2",
-            params![user_id, group_id],
-        )?;
+        let rows = self.conn().execute("DELETE FROM group_members WHERE user_id = ?1 AND group_id = ?2", params![user_id, group_id])?;
         anyhow::ensure!(rows > 0, "Membership not found for user {user_id} in group {group_id}");
         Ok(())
     }
@@ -109,20 +100,15 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::new_user;
+    use super::*;
 
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()
     }
 
     fn make_group(name: &str) -> Group {
-        Group {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.to_string(),
-            description: None,
-            created_at: "2025-01-01 00:00:00".into(),
-        }
+        Group { id: uuid::Uuid::new_v4().to_string(), name: name.to_string(), description: None, created_at: "2025-01-01 00:00:00".into() }
     }
 
     #[test]

@@ -54,9 +54,8 @@ impl Database {
         );
 
         let mut stmt = self.conn().prepare(&sql)?;
-        let rows = stmt.query_map(params![user_id, exercise_id, from, to], |row| {
-            Ok(TimeSeriesPoint { date: row.get(0)?, value: row.get(1)? })
-        })?;
+        let rows =
+            stmt.query_map(params![user_id, exercise_id, from, to], |row| Ok(TimeSeriesPoint { date: row.get(0)?, value: row.get(1)? }))?;
         rows.collect::<Result<Vec<_>, _>>().context("Failed to query exercise time series")
     }
 
@@ -85,9 +84,7 @@ impl Database {
         )?;
 
         let exercise_info: Vec<(String, String, String)> = stmt
-            .query_map(params![user_id, muscle_group, from_str, to_str], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?
+            .query_map(params![user_id, muscle_group, from_str, to_str], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<Result<Vec<_>, _>>()
             .context("Failed to discover exercises")?;
 
@@ -106,12 +103,7 @@ impl Database {
     }
 
     /// Time series for all exercises that have an active or recently-completed goal.
-    pub fn goal_time_series(
-        &self,
-        user_id: &str,
-        from: Option<&str>,
-        to: Option<&str>,
-    ) -> anyhow::Result<Vec<TimeSeries>> {
+    pub fn goal_time_series(&self, user_id: &str, from: Option<&str>, to: Option<&str>) -> anyhow::Result<Vec<TimeSeries>> {
         let default_from = (chrono::Utc::now() - chrono::Duration::days(365)).format("%Y-%m-%d").to_string();
         let default_to = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let from_str = from.unwrap_or(&default_from);
@@ -127,9 +119,7 @@ impl Database {
         )?;
 
         let exercise_info: Vec<(String, String, String)> = stmt
-            .query_map(params![user_id, from_str, to_str], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?
+            .query_map(params![user_id, from_str, to_str], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
             .collect::<Result<Vec<_>, _>>()
             .context("Failed to discover goal exercises")?;
 
@@ -149,12 +139,7 @@ impl Database {
 
     /// Goal progress report for a period. Lists every goal whose date range
     /// overlaps [from, to], with current progress percentage and status.
-    pub fn goal_progress_report(
-        &self,
-        user_id: &str,
-        from: Option<&str>,
-        to: Option<&str>,
-    ) -> anyhow::Result<Vec<GoalProgress>> {
+    pub fn goal_progress_report(&self, user_id: &str, from: Option<&str>, to: Option<&str>) -> anyhow::Result<Vec<GoalProgress>> {
         let default_from = (chrono::Utc::now() - chrono::Duration::days(365)).format("%Y-%m-%d").to_string();
         let default_to = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let from_str = from.unwrap_or(&default_from);
@@ -252,8 +237,8 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::{new_exercise_goal, new_exercise_log, new_user};
+    use super::*;
 
     fn test_db() -> Database {
         let db = Database::open_in_memory().unwrap();

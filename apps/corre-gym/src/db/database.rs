@@ -11,6 +11,9 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("Failed to create database directory {}", parent.display()))?;
+        }
         let conn = Connection::open(path).with_context(|| format!("Failed to open database at {}", path.display()))?;
         let db = Self { conn };
         db.run_migrations()?;
@@ -28,6 +31,7 @@ impl Database {
         self.conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         self.conn.execute_batch(MIGRATIONS).context("Failed to run database migrations")?;
+        super::seed::seed_exercises(self).context("Failed to seed exercises")?;
         tracing::debug!("Database migrations applied");
         Ok(())
     }

@@ -23,9 +23,17 @@ pub(crate) struct ApiRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
     /// Provider-specific fields flattened into the top-level JSON body.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ResponseFormat {
+    #[serde(rename = "type")]
+    pub format_type: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,17 +1,17 @@
-mod migrations;
-mod database;
-mod models;
-mod exercises;
-mod users;
-mod groups;
 mod access;
-mod logs;
-mod goals;
-mod schedules;
-mod health;
 mod conversation;
+mod database;
+mod exercises;
+mod goals;
+mod groups;
+mod health;
+mod logs;
+mod migrations;
+mod models;
 mod progress;
+mod schedules;
 mod seed;
+mod users;
 
 pub use database::Database;
 pub use models::*;

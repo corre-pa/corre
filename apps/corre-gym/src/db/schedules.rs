@@ -41,9 +41,15 @@ impl Database {
              enabled, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
-                schedule.id, schedule.user_id, schedule.name, schedule.cron_expr,
-                schedule.reminder_type.as_str(), schedule.reminder_notice_mins,
-                schedule.enabled as i32, schedule.created_at, schedule.updated_at,
+                schedule.id,
+                schedule.user_id,
+                schedule.name,
+                schedule.cron_expr,
+                schedule.reminder_type.as_str(),
+                schedule.reminder_notice_mins,
+                schedule.enabled as i32,
+                schedule.created_at,
+                schedule.updated_at,
             ],
         )?;
         Ok(())
@@ -68,8 +74,12 @@ impl Database {
             "UPDATE schedules SET name = ?1, cron_expr = ?2, reminder_type = ?3, \
              reminder_notice_mins = ?4, enabled = ?5, updated_at = datetime('now') WHERE id = ?6",
             params![
-                schedule.name, schedule.cron_expr, schedule.reminder_type.as_str(),
-                schedule.reminder_notice_mins, schedule.enabled as i32, schedule.id,
+                schedule.name,
+                schedule.cron_expr,
+                schedule.reminder_type.as_str(),
+                schedule.reminder_notice_mins,
+                schedule.enabled as i32,
+                schedule.id,
             ],
         )?;
         anyhow::ensure!(rows > 0, "Schedule with id {} not found", schedule.id);
@@ -83,10 +93,9 @@ impl Database {
     }
 
     pub fn toggle_schedule(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "UPDATE schedules SET enabled = ?1, updated_at = datetime('now') WHERE id = ?2",
-            params![enabled as i32, id],
-        )?;
+        let rows = self
+            .conn()
+            .execute("UPDATE schedules SET enabled = ?1, updated_at = datetime('now') WHERE id = ?2", params![enabled as i32, id])?;
         anyhow::ensure!(rows > 0, "Schedule with id {id} not found");
         Ok(())
     }
@@ -110,10 +119,9 @@ impl Database {
     }
 
     pub fn remove_schedule_exercise(&self, schedule_id: &str, exercise_id: &str) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "DELETE FROM schedule_exercises WHERE schedule_id = ?1 AND exercise_id = ?2",
-            params![schedule_id, exercise_id],
-        )?;
+        let rows = self
+            .conn()
+            .execute("DELETE FROM schedule_exercises WHERE schedule_id = ?1 AND exercise_id = ?2", params![schedule_id, exercise_id])?;
         anyhow::ensure!(rows > 0, "Schedule exercise not found");
         Ok(())
     }
@@ -126,8 +134,8 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::new_user;
+    use super::*;
 
     fn test_db() -> Database {
         let db = Database::open_in_memory().unwrap();

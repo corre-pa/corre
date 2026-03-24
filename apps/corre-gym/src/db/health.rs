@@ -31,11 +31,19 @@ impl Database {
              started_at, resolved_at, notes, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
-                entry.id, entry.user_id, entry.entry_type.as_str(), entry.body_part,
-                entry.severity, entry.description, entry.started_at, entry.resolved_at,
-                entry.notes, entry.updated_at,
+                entry.id,
+                entry.user_id,
+                entry.entry_type.as_str(),
+                entry.body_part,
+                entry.severity,
+                entry.description,
+                entry.started_at,
+                entry.resolved_at,
+                entry.notes,
+                entry.updated_at,
             ],
         )?;
+        tracing::debug!(id = %entry.id, entry_type = %entry.entry_type.as_str(), description = %entry.description, "DB: inserted health entry");
         Ok(())
     }
 
@@ -73,11 +81,11 @@ impl Database {
     }
 
     pub fn resolve_health_entry(&self, id: &str) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "UPDATE health_entries SET resolved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
-            params![id],
-        )?;
+        let rows = self
+            .conn()
+            .execute("UPDATE health_entries SET resolved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![id])?;
         anyhow::ensure!(rows > 0, "Health entry with id {id} not found");
+        tracing::debug!(id = %id, "DB: resolved health entry");
         Ok(())
     }
 
@@ -86,8 +94,13 @@ impl Database {
             "UPDATE health_entries SET entry_type = ?1, body_part = ?2, severity = ?3, \
              description = ?4, resolved_at = ?5, notes = ?6, updated_at = datetime('now') WHERE id = ?7",
             params![
-                entry.entry_type.as_str(), entry.body_part, entry.severity,
-                entry.description, entry.resolved_at, entry.notes, entry.id,
+                entry.entry_type.as_str(),
+                entry.body_part,
+                entry.severity,
+                entry.description,
+                entry.resolved_at,
+                entry.notes,
+                entry.id,
             ],
         )?;
         anyhow::ensure!(rows > 0, "Health entry with id {} not found", entry.id);
@@ -97,8 +110,8 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::{new_health_entry, new_user};
+    use super::*;
 
     fn test_db() -> Database {
         Database::open_in_memory().unwrap()

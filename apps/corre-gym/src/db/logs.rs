@@ -5,13 +5,7 @@ use super::database::Database;
 use super::models::{Difficulty, ExerciseLog, MeasurementType, Session, SessionSummary, new_session};
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<Session> {
-    Ok(Session {
-        id: row.get(0)?,
-        user_id: row.get(1)?,
-        started_at: row.get(2)?,
-        ended_at: row.get(3)?,
-        notes: row.get(4)?,
-    })
+    Ok(Session { id: row.get(0)?, user_id: row.get(1)?, started_at: row.get(2)?, ended_at: row.get(3)?, notes: row.get(4)? })
 }
 
 fn row_to_log(row: &rusqlite::Row) -> rusqlite::Result<ExerciseLog> {
@@ -46,22 +40,19 @@ impl Database {
             "INSERT INTO sessions (id, user_id, started_at, notes) VALUES (?1, ?2, ?3, ?4)",
             params![session.id, session.user_id, session.started_at, session.notes],
         )?;
+        tracing::debug!(id = %session.id, user_id = %user_id, "DB: inserted session");
         Ok(session)
     }
 
     pub fn end_session(&self, session_id: &str) -> anyhow::Result<()> {
-        let rows = self.conn().execute(
-            "UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1",
-            params![session_id],
-        )?;
+        let rows = self.conn().execute("UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1", params![session_id])?;
         anyhow::ensure!(rows > 0, "Session with id {session_id} not found");
+        tracing::debug!(id = %session_id, "DB: ended session");
         Ok(())
     }
 
     pub fn get_session(&self, id: &str) -> anyhow::Result<Option<Session>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, user_id, started_at, ended_at, notes FROM sessions WHERE id = ?1",
-        )?;
+        let mut stmt = self.conn().prepare("SELECT id, user_id, started_at, ended_at, notes FROM sessions WHERE id = ?1")?;
         let mut rows = stmt.query_map(params![id], row_to_session)?;
         rows.next().transpose().context("Failed to read session row")
     }
@@ -100,11 +91,7 @@ impl Database {
         )?;
         let rows = stmt.query_map(params![user_id, from, to], |row| {
             let session = row_to_session(row)?;
-            Ok(SessionSummary {
-                session,
-                exercise_count: row.get(5)?,
-                duration_mins: row.get(6)?,
-            })
+            Ok(SessionSummary { session, exercise_count: row.get(5)?, duration_mins: row.get(6)? })
         })?;
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list session summaries")
     }
@@ -117,11 +104,22 @@ impl Database {
              sets, reps, weight_kg, duration_secs, distance_m, level, difficulty, notes) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
-                log.id, log.user_id, log.exercise_id, log.session_id, log.logged_at,
-                log.sets, log.reps, log.weight_kg, log.duration_secs, log.distance_m,
-                log.level, log.difficulty.as_str(), log.notes,
+                log.id,
+                log.user_id,
+                log.exercise_id,
+                log.session_id,
+                log.logged_at,
+                log.sets,
+                log.reps,
+                log.weight_kg,
+                log.duration_secs,
+                log.distance_m,
+                log.level,
+                log.difficulty.as_str(),
+                log.notes,
             ],
         )?;
+        tracing::debug!(id = %log.id, exercise_id = %log.exercise_id, session_id = ?log.session_id, "DB: inserted exercise log");
         Ok(())
     }
 
@@ -131,12 +129,22 @@ impl Database {
              sets = ?4, reps = ?5, weight_kg = ?6, duration_secs = ?7, distance_m = ?8, \
              level = ?9, difficulty = ?10, notes = ?11 WHERE id = ?12",
             params![
-                log.exercise_id, log.session_id, log.logged_at,
-                log.sets, log.reps, log.weight_kg, log.duration_secs, log.distance_m,
-                log.level, log.difficulty.as_str(), log.notes, log.id,
+                log.exercise_id,
+                log.session_id,
+                log.logged_at,
+                log.sets,
+                log.reps,
+                log.weight_kg,
+                log.duration_secs,
+                log.distance_m,
+                log.level,
+                log.difficulty.as_str(),
+                log.notes,
+                log.id,
             ],
         )?;
         anyhow::ensure!(rows > 0, "Exercise log with id {} not found", log.id);
+        tracing::debug!(id = %log.id, "DB: updated exercise log");
         Ok(())
     }
 
@@ -165,9 +173,7 @@ impl Database {
     }
 
     pub fn get_recent_logs(&self, user_id: &str, days: i32) -> anyhow::Result<Vec<ExerciseLog>> {
-        let sql = format!(
-            "{SELECT_LOG} WHERE user_id = ?1 AND logged_at >= datetime('now', ?2) ORDER BY logged_at DESC"
-        );
+        let sql = format!("{SELECT_LOG} WHERE user_id = ?1 AND logged_at >= datetime('now', ?2) ORDER BY logged_at DESC");
         let modifier = format!("-{days} days");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, modifier], row_to_log)?;
@@ -184,11 +190,15 @@ impl Database {
 
     pub fn personal_record(&self, user_id: &str, exercise_id: &str) -> anyhow::Result<Option<ExerciseLog>> {
         // Determine measurement type for this exercise
-        let mt: Option<String> = self.conn().query_row(
-            "SELECT mt.name FROM exercises e JOIN measurement_types mt ON e.measurement_type_id = mt.id WHERE e.id = ?1",
-            params![exercise_id],
-            |row| row.get(0),
-        ).optional().context("Failed to look up exercise measurement type")?;
+        let mt: Option<String> = self
+            .conn()
+            .query_row(
+                "SELECT mt.name FROM exercises e JOIN measurement_types mt ON e.measurement_type_id = mt.id WHERE e.id = ?1",
+                params![exercise_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("Failed to look up exercise measurement type")?;
 
         let mt = match mt {
             Some(m) => MeasurementType::from_str_loose(&m),
@@ -225,8 +235,8 @@ use rusqlite::OptionalExtension as _;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::models::{new_exercise_log, new_user};
+    use super::*;
 
     fn test_db() -> Database {
         let db = Database::open_in_memory().unwrap();
@@ -398,9 +408,7 @@ mod tests {
         db.insert_log(&log).unwrap();
 
         // Delete session by deleting directly
-        self::super::super::database::Database::conn(&db)
-            .execute("DELETE FROM sessions WHERE id = ?1", params![session.id])
-            .unwrap();
+        self::super::super::database::Database::conn(&db).execute("DELETE FROM sessions WHERE id = ?1", params![session.id]).unwrap();
 
         // Log should be cascade-deleted
         let logs = db.get_logs_for_exercise(&user_id, &ex_id, 10).unwrap();

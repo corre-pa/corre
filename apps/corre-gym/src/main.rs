@@ -18,12 +18,16 @@ use corre_llm::OpenAiCompatProvider;
 #[command(name = "corre-gym", about = "Personal gym trainer Telegram bot")]
 struct Cli {
     /// Path to corre.toml config file
-    #[arg(short, long, default_value = default_config_path())]
+    #[arg(short, long, default_value_os_t = default_config_path())]
     config: PathBuf,
 }
 
-fn default_config_path() -> &'static str {
-    "corre.toml"
+fn default_data_dir() -> PathBuf {
+    dirs::data_dir().map(|d| d.join("corre")).unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn default_config_path() -> PathBuf {
+    default_data_dir().join("corre.toml")
 }
 
 #[tokio::main]
@@ -34,8 +38,8 @@ async fn main() -> anyhow::Result<()> {
 
 async fn setup() -> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>)> {
     // 1. Load .env from data dir (best-effort, same as corre-news)
-    let default_data_dir = dirs::data_dir().map(|d| d.join("corre")).unwrap_or_else(|| PathBuf::from("."));
-    let _ = dotenvy::from_filename_override(default_data_dir.join(".env")).ok();
+    let default_data_dir = default_data_dir();
+    let _ = dotenvy::from_filename(default_data_dir.join(".env")).ok();
 
     // 2. Init tracing
     tracing_subscriber::fmt()
@@ -47,17 +51,27 @@ async fn setup() -> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>)>
     let cli = Cli::parse();
 
     // 4. Load config
+    tracing::info!(path = %cli.config.display(), "Loading config");
     let config = CorreConfig::load(&cli.config).context("loading config")?;
     let data_dir = config.data_dir();
+    tracing::debug!(raw_gym = %config.gym, "Raw [gym] table from config");
     let mut gym_config = GymConfig::from_toml_table(Some(&config.gym))?;
     gym_config.resolve_secrets()?;
 
     // 5. Build LLM provider (with optional [gym.llm] overrides)
+    tracing::debug!(gym_llm = ?gym_config.llm, "Gym LLM override");
     let effective_llm = match gym_config.llm.as_ref() {
         Some(overrides) => config.llm.with_overrides(overrides),
         None => config.llm.clone(),
     };
-    let llm = OpenAiCompatProvider::from_config(&effective_llm)?;
+    tracing::info!(model = %effective_llm.model, base_url = %effective_llm.base_url, "LLM config loaded");
+    let raw_llm: Box<dyn corre_core::app::LlmProvider> = Box::new(OpenAiCompatProvider::from_config(&effective_llm)?);
+    let llm: Box<dyn corre_core::app::LlmProvider> = if config.safety.enabled {
+        tracing::info!("Safety layer enabled — wrapping LLM provider");
+        Box::new(corre_safety::SafeLlmProvider::new(raw_llm, &config.safety))
+    } else {
+        raw_llm
+    };
 
     // 6. Open database
     let db = Database::open(&data_dir.join(&gym_config.db_path))?;
@@ -71,16 +85,12 @@ async fn setup() -> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>)>
     let allowed_ids = gym_config.telegram_allowed_ids.clone();
 
     // 8. Create handler
-    let handler = AssistantHandler::new(db, Box::new(llm), gym_config).await?;
+    let handler = AssistantHandler::new(db, llm, gym_config).await?;
 
     Ok((telegram, handler, allowed_ids))
 }
 
-async fn run_polling_loop(
-    telegram: &TelegramClient,
-    handler: &AssistantHandler,
-    allowed_ids: &[i64],
-) -> anyhow::Result<()> {
+async fn run_polling_loop(telegram: &TelegramClient, handler: &AssistantHandler, allowed_ids: &[i64]) -> anyhow::Result<()> {
     let mut offset = 0i64;
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
@@ -130,8 +140,13 @@ async fn process_message(telegram: &TelegramClient, handler: &AssistantHandler, 
     let reply = match handler.handle_text_message(message, text).await {
         Ok(text) => text,
         Err(e) => {
-            tracing::error!("Handler error: {e:#}");
-            "I had trouble processing that -- could you try again?".to_string()
+            let msg = format!("{e:#}");
+            tracing::error!("Handler error: {msg}");
+            if msg.contains("401") || msg.contains("Unauthorized") || msg.contains("Authentication") {
+                "I could not access the AI engine. You'll need to check that I'm properly configured with a valid API key.".to_string()
+            } else {
+                "I had trouble processing that -- could you try again?".to_string()
+            }
         }
     };
 
@@ -158,10 +173,7 @@ async fn send_long_message(telegram: &TelegramClient, chat_id: i64, text: &str) 
 
         let chunk = &remaining[..MAX_LEN];
         // Try splitting at the last newline
-        let split_at = chunk
-            .rfind('\n')
-            .or_else(|| chunk.rfind(' '))
-            .unwrap_or(MAX_LEN);
+        let split_at = chunk.rfind('\n').or_else(|| chunk.rfind(' ')).unwrap_or(MAX_LEN);
 
         telegram.send_message(chat_id, &remaining[..split_at], None, None).await?;
         remaining = remaining[split_at..].trim_start();
