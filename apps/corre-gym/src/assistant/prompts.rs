@@ -224,7 +224,7 @@ pub fn format_active_goals(goals: &[GoalProgress]) -> String {
     result
 }
 
-fn capitalize(s: &str) -> String {
+pub fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) => c.to_uppercase().to_string() + &chars.as_str().replace('_', " "),

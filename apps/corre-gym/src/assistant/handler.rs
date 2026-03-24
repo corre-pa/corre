@@ -17,6 +17,21 @@ use super::matching::find_exercise;
 use super::parser::parse_assistant_response;
 use super::prompts::{PromptContext, build_system_prompt};
 
+pub struct Reply {
+    pub text: String,
+    pub parse_mode: Option<&'static str>,
+}
+
+impl Reply {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), parse_mode: None }
+    }
+
+    pub fn as_html(&mut self) {
+        self.parse_mode = Some("HTML");
+    }
+}
+
 pub struct AssistantHandler {
     db: Arc<Mutex<Database>>,
     llm: Box<dyn LlmProvider>,
@@ -30,12 +45,12 @@ impl AssistantHandler {
         Ok(Self { db, llm, config, exercises })
     }
 
-    /// Process an incoming text message and return a reply string.
-    pub async fn handle_text_message(&self, message: &TgMessage, text: &str) -> anyhow::Result<String> {
+    /// Process an incoming text message and return a reply.
+    pub async fn handle_text_message(&self, message: &TgMessage, text: &str) -> anyhow::Result<Reply> {
         // 1. Identify user (auto-register if new)
         let (user, is_new) = self.ensure_user(message).await?;
         if is_new {
-            return Ok(self.welcome_message(&user));
+            return Ok(Reply::new(self.welcome_message(&user)));
         }
 
         // 2. Check for slash commands
@@ -70,7 +85,7 @@ impl AssistantHandler {
                     "I had trouble processing that -- could you try again?"
                 };
                 self.store_excluded_conversation(&user.id, text, error_reply).await?;
-                return Ok(error_reply.to_string());
+                return Ok(Reply::new(error_reply));
             }
         };
 
@@ -109,7 +124,7 @@ impl AssistantHandler {
         // 13. Prune old messages
         self.db.lock().await.prune_old_messages(&user.id, self.config.conversation_history_limit * 2)?;
 
-        Ok(reply)
+        Ok(Reply::new(reply))
     }
 
     async fn ensure_user(&self, message: &TgMessage) -> anyhow::Result<(User, bool)> {
@@ -147,15 +162,15 @@ impl AssistantHandler {
         )
     }
 
-    async fn handle_command(&self, text: &str, user: &User) -> anyhow::Result<Option<String>> {
+    async fn handle_command(&self, text: &str, user: &User) -> anyhow::Result<Option<Reply>> {
         let cmd = text.split_whitespace().next().unwrap_or("").to_lowercase();
         match cmd.as_str() {
-            "/start" => Ok(Some(self.cmd_start(user))),
-            "/help" => Ok(Some(Self::cmd_help())),
+            "/start" => Ok(Some(Reply::new(self.cmd_start(user)))),
+            "/help" => Ok(Some(Reply::new(Self::cmd_help()))),
             "/status" => Ok(Some(self.cmd_status(user).await?)),
-            "/history" => Ok(Some(self.cmd_history(user).await?)),
+            "/history" => Ok(Some(Reply::new(self.cmd_history(user).await?))),
             "/exercises" => Ok(Some(self.cmd_exercises())),
-            "/clear" => Ok(Some(self.cmd_clear(user).await?)),
+            "/clear" => Ok(Some(Reply::new(self.cmd_clear(user).await?))),
             _ => Ok(None),
         }
     }
@@ -190,16 +205,16 @@ impl AssistantHandler {
             .to_string()
     }
 
-    async fn cmd_status(&self, user: &User) -> anyhow::Result<String> {
+    async fn cmd_status(&self, user: &User) -> anyhow::Result<Reply> {
         let db = self.db.lock().await;
-        let mut parts = vec![format!("Status for {}", user.name)];
+        let mut result = format!("<b>Status for {}</b>\n", escape_html(&user.name));
 
         match db.get_active_session(&user.id)? {
             Some(session) => {
                 let logs = db.get_logs_for_session(&session.id)?;
-                parts.push(format!("Active session (started {})", session.started_at));
+                result.push_str(&format!("\n<b>Active session</b> (started {})\n", escape_html(&session.started_at)));
                 if logs.is_empty() {
-                    parts.push("  No exercises logged yet".to_string());
+                    result.push_str("No exercises logged yet\n");
                 } else {
                     for log in &logs {
                         let name = self
@@ -208,24 +223,30 @@ impl AssistantHandler {
                             .find(|e| e.exercise.id == log.exercise_id)
                             .map(|e| e.exercise.name.as_str())
                             .unwrap_or("unknown");
-                        parts.push(format!("  - {name}: {}", format_log_compact(log)));
+                        result.push_str(&format!("- <b>{}</b>: {}\n", escape_html(name), escape_html(&format_log_compact(log))));
                     }
                 }
             }
-            None => parts.push("No active session".to_string()),
+            None => result.push_str("No active session\n"),
         }
 
         let health = db.list_active_health_entries(&user.id)?;
         if !health.is_empty() {
-            parts.push(String::new());
-            parts.push("Active health issues:".to_string());
+            result.push_str(&format!("\n<b>Active health issues</b>\n"));
             for entry in &health {
                 let body = entry.body_part.as_deref().unwrap_or("general");
-                parts.push(format!("  - {} ({body}): {}", entry.entry_type, entry.description));
+                result.push_str(&format!(
+                    "- {} ({}): {}\n",
+                    entry.entry_type.as_str(),
+                    escape_html(body),
+                    escape_html(&entry.description),
+                ));
             }
         }
 
-        Ok(parts.join("\n"))
+        let mut reply = Reply::new(result);
+        reply.as_html();
+        Ok(reply)
     }
 
     async fn cmd_history(&self, user: &User) -> anyhow::Result<String> {
@@ -246,11 +267,49 @@ impl AssistantHandler {
         Ok(parts.join("\n"))
     }
 
-    fn cmd_exercises(&self) -> String {
-        use super::prompts::format_exercise_list;
-        let mut result = "Available exercises:\n".to_string();
-        result.push_str(&format_exercise_list(&self.exercises));
-        result
+    fn cmd_exercises(&self) -> Reply {
+        use crate::db::MeasurementType;
+        use super::prompts::capitalize;
+
+        let mut result = String::new();
+
+        // Group exercises by muscle group (they're already sorted by group)
+        let mut groups: Vec<(&str, Vec<(&str, &str, &str)>)> = Vec::new();
+        for ex in &self.exercises {
+            let aliases = ex.exercise.aliases.as_deref().unwrap_or("");
+            let mt = match ex.exercise.measurement_type {
+                MeasurementType::WeightReps => "weight_reps",
+                MeasurementType::TimeBased => "time_based",
+                MeasurementType::DistanceBased => "distance_based",
+                MeasurementType::LevelBased => "level_based",
+                MeasurementType::ScoreBased => "score_based",
+            };
+            match groups.last_mut() {
+                Some((group, rows)) if *group == ex.muscle_group => rows.push((&ex.exercise.name, aliases, mt)),
+                _ => groups.push((&ex.muscle_group, vec![(&ex.exercise.name, aliases, mt)])),
+            }
+        }
+
+        for (group, rows) in &groups {
+            let name_w = rows.iter().map(|(n, _, _)| n.len()).max().unwrap_or(4).max(4);
+            let alias_w = rows.iter().map(|(_, a, _)| a.len()).max().unwrap_or(7).max(7);
+
+            result.push_str(&format!("\n<b>{}</b>\n<pre>", escape_html(&capitalize(group))));
+            result.push_str(&format!("{:<name_w$} | {:<alias_w$} | Type\n", "Name", "Aliases"));
+            result.push_str(&format!("{:-<name_w$}-+-{:-<alias_w$}-+------\n", "", ""));
+            for (name, aliases, mt) in rows {
+                result.push_str(&format!(
+                    "{:<name_w$} | {:<alias_w$} | {mt}\n",
+                    escape_html(name),
+                    escape_html(aliases),
+                ));
+            }
+            result.push_str("</pre>");
+        }
+
+        let mut reply = Reply::new(result);
+        reply.as_html();
+        reply
     }
 
     async fn close_stale_session(&self, user: &User) -> anyhow::Result<()> {
@@ -299,7 +358,8 @@ impl AssistantHandler {
         let recent_summaries = db.list_session_summaries(&user.id, None, None)?;
         let recent_summaries: Vec<_> = recent_summaries.into_iter().take(5).collect();
         let recent_logs = db.get_recent_logs(&user.id, 7)?;
-        let recent_logs: Vec<_> = recent_logs.into_iter().take(10).collect();
+        let session_log_ids: std::collections::HashSet<&str> = session_logs.iter().map(|(log, _)| log.id.as_str()).collect();
+        let recent_logs: Vec<_> = recent_logs.into_iter().filter(|log| !session_log_ids.contains(log.id.as_str())).take(10).collect();
         let active_goals = db.goal_progress_report(&user.id, None, None)?;
         let schedules = db.list_schedules(&user.id)?;
 
@@ -487,6 +547,10 @@ fn is_refusal_response(text: &str) -> bool {
     REFUSAL_PATTERNS.iter().any(|p| lower.contains(p))
 }
 
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 fn format_log_compact(log: &crate::db::ExerciseLog) -> String {
     let mut parts = Vec::new();
     if let Some(s) = log.sets {
@@ -590,7 +654,7 @@ mod tests {
         let (handler, _) = setup_handler(r#"{"message": "Hello!", "actions": []}"#).await;
         let msg = make_message(12345, "hello");
         let reply = handler.handle_text_message(&msg, "hello").await.unwrap();
-        assert!(reply.contains("Welcome"));
+        assert!(reply.text.contains("Welcome"));
     }
 
     #[tokio::test]
@@ -602,7 +666,7 @@ mod tests {
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         // Second message goes through LLM
         let reply = handler.handle_text_message(&msg, "how are you").await.unwrap();
-        assert_eq!(reply, "Got it!");
+        assert_eq!(reply.text, "Got it!");
     }
 
     #[tokio::test]
@@ -617,7 +681,7 @@ mod tests {
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         // Log exercise
         let reply = handler.handle_text_message(&msg, "3 sets bench 80kg 8 reps").await.unwrap();
-        assert_eq!(reply, "Logged your bench press!");
+        assert_eq!(reply.text, "Logged your bench press!");
 
         // Verify DB records
         let db = handler.db.lock().await;
@@ -663,7 +727,7 @@ mod tests {
         // Register first
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
-        assert!(reply.contains("Available commands"));
+        assert!(reply.text.contains("Available commands"));
     }
 
     #[tokio::test]
@@ -674,7 +738,7 @@ mod tests {
         // Register first
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         let reply = handler.handle_text_message(&msg, "/start").await.unwrap();
-        assert!(reply.contains("already registered"));
+        assert!(reply.text.contains("already registered"));
     }
 
     #[tokio::test]
@@ -709,7 +773,7 @@ mod tests {
 
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         let reply = handler.handle_text_message(&msg, "do stuff").await.unwrap();
-        assert!(reply.contains("some actions failed"));
+        assert!(reply.text.contains("some actions failed"));
     }
 
     #[tokio::test]
@@ -723,7 +787,7 @@ mod tests {
         let long_text = "a".repeat(3000);
         llm.set_response(r#"{"message": "received", "actions": []}"#);
         let reply = handler.handle_text_message(&msg, &long_text).await.unwrap();
-        assert_eq!(reply, "received");
+        assert_eq!(reply.text, "received");
 
         // Verify stored message was truncated
         let db = handler.db.lock().await;
@@ -752,7 +816,7 @@ mod tests {
 
         // Clear
         let reply = handler.handle_text_message(&msg, "/clear").await.unwrap();
-        assert!(reply.contains("cleared"));
+        assert!(reply.text.contains("cleared"));
 
         // Context should now be empty
         let db = handler.db.lock().await;
@@ -767,7 +831,7 @@ mod tests {
         let msg = make_message(12345, "hello");
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
-        assert!(reply.contains("/clear"));
+        assert!(reply.text.contains("/clear"));
     }
 
     // Mock LLM that always returns an error
@@ -798,7 +862,7 @@ mod tests {
 
         // Send a message that will fail at the LLM step
         let reply = handler.handle_text_message(&msg, "some bad request").await.unwrap();
-        assert!(reply.contains("trouble processing"));
+        assert!(reply.text.contains("trouble processing"));
 
         // The message should NOT appear in context (excluded)
         let db = handler.db.lock().await;
@@ -823,7 +887,7 @@ mod tests {
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         // Send off-topic message
         let reply = handler.handle_text_message(&msg, "off topic stuff").await.unwrap();
-        assert!(reply.contains("I cannot provide"));
+        assert!(reply.text.contains("I cannot provide"));
 
         // The refusal should not appear in context
         let db = handler.db.lock().await;

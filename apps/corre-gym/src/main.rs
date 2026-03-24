@@ -185,15 +185,15 @@ async fn process_message(
 async fn process_text_message(telegram: &TelegramClient, handler: &AssistantHandler, message: &Message, text: &str) {
     let _ = telegram.send_chat_action(message.chat.id, "typing").await;
 
-    let reply = match handler.handle_text_message(message, text).await {
-        Ok(text) => text,
+    let (reply_text, parse_mode) = match handler.handle_text_message(message, text).await {
+        Ok(reply) => (reply.text, reply.parse_mode),
         Err(e) => {
             tracing::error!("Handler error: {e:#}");
-            "Something went wrong -- please try again later.".to_string()
+            ("Something went wrong -- please try again later.".to_string(), None)
         }
     };
 
-    if let Err(e) = send_long_message(telegram, message.chat.id, &reply).await {
+    if let Err(e) = send_long_message(telegram, message.chat.id, &reply_text, parse_mode).await {
         tracing::error!("Failed to send reply: {e:#}");
     }
 }
@@ -283,7 +283,7 @@ async fn process_voice_message(
 
     // 6. Process transcript through handler (identical to text messages)
     let reply = match handler.handle_text_message(message, &transcript).await {
-        Ok(text) => text,
+        Ok(r) => r.text,
         Err(e) => {
             tracing::error!("Handler error: {e:#}");
             "I had trouble processing that -- could you try again?".to_string()
@@ -295,7 +295,7 @@ async fn process_voice_message(
     // 7. Send text reply with transcript echo (if configured)
     if pipeline.should_send_text() {
         let text_with_echo = format!("_Heard: \"{transcript}\"_\n\n{reply}");
-        if let Err(e) = send_long_message(telegram, message.chat.id, &text_with_echo).await {
+        if let Err(e) = send_long_message(telegram, message.chat.id, &text_with_echo, None).await {
             tracing::error!("Failed to send text reply: {e:#}");
         }
     }
@@ -310,7 +310,7 @@ async fn process_voice_message(
                     // Fallback: send text if we haven't already
                     if !pipeline.should_send_text() {
                         let text_with_echo = format!("_Heard: \"{transcript}\"_\n\n{reply}");
-                        if let Err(e) = send_long_message(telegram, message.chat.id, &text_with_echo).await {
+                        if let Err(e) = send_long_message(telegram, message.chat.id, &text_with_echo, None).await {
                             tracing::warn!("Failed to send fallback text: {e:#}");
                         }
                     }
@@ -322,7 +322,7 @@ async fn process_voice_message(
                 // Graceful degradation: send text if we haven't already
                 if !pipeline.should_send_text() {
                     let text_with_echo = format!("_Heard: \"{transcript}\"_\n\n{reply}");
-                    if let Err(e) = send_long_message(telegram, message.chat.id, &text_with_echo).await {
+                    if let Err(e) = send_long_message(telegram, message.chat.id, &text_with_echo, None).await {
                         tracing::warn!("Failed to send fallback text: {e:#}");
                     }
                 }
@@ -358,18 +358,18 @@ fn spawn_chat_action_loop(telegram: &TelegramClient, chat_id: i64, action: &str)
 }
 
 /// Splits messages exceeding Telegram's 4096 character limit.
-async fn send_long_message(telegram: &TelegramClient, chat_id: i64, text: &str) -> anyhow::Result<()> {
+async fn send_long_message(telegram: &TelegramClient, chat_id: i64, text: &str, parse_mode: Option<&str>) -> anyhow::Result<()> {
     const MAX_LEN: usize = 4096;
 
     if text.len() <= MAX_LEN {
-        telegram.send_message(chat_id, text, None, None).await?;
+        telegram.send_message(chat_id, text, parse_mode, None).await?;
         return Ok(());
     }
 
     let mut remaining = text;
     while !remaining.is_empty() {
         if remaining.len() <= MAX_LEN {
-            telegram.send_message(chat_id, remaining, None, None).await?;
+            telegram.send_message(chat_id, remaining, parse_mode, None).await?;
             break;
         }
 
@@ -377,7 +377,7 @@ async fn send_long_message(telegram: &TelegramClient, chat_id: i64, text: &str) 
         // Try splitting at the last newline
         let split_at = chunk.rfind('\n').or_else(|| chunk.rfind(' ')).unwrap_or(MAX_LEN);
 
-        telegram.send_message(chat_id, &remaining[..split_at], None, None).await?;
+        telegram.send_message(chat_id, &remaining[..split_at], parse_mode, None).await?;
         remaining = remaining[split_at..].trim_start();
     }
 
