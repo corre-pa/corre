@@ -1,4 +1,4 @@
-Everywhere you see {n} in planning conversations, substitute #1.
+Everywhere you see {n} in planning conversations, substitute #2.
 
 # Gym tracker milestone planning
 
@@ -19,3 +19,13 @@ Then start a sub-agent to review your plan. DO NOT let this subagent markup the 
 
 Always ask me if you're unsure about design decisions.
 Do not treat the rolodex app as canonical. We can do better.
+
+# Milestone Progress
+
+* Milestone 0 - Complete
+* Milestone 1 - Complete
+* Milestone 2 - In progress
+* Milestone 3 - Not started
+* Milestone 4 - Not started
+* Milestone 5 - Not started
+* Milestone 6 - Not started

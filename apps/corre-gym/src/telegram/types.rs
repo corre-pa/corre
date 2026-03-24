@@ -30,6 +30,7 @@ pub struct Message {
     pub date: i64,
     pub text: Option<String>,
     pub voice: Option<Voice>,
+    pub audio: Option<Audio>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,4 +59,18 @@ pub struct BotUser {
     pub id: i64,
     pub username: Option<String>,
     pub first_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TelegramFile {
+    pub file_id: String,
+    pub file_unique_id: Option<String>,
+    pub file_size: Option<i64>,
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Audio {
+    pub file_id: String,
+    pub duration: i32,
 }

@@ -69,7 +69,14 @@ mod tests {
             }),
         );
 
-        let req = ApiRequest { model: "test-model".into(), messages: vec![], temperature: Some(0.3), max_completion_tokens: None, extra };
+        let req = ApiRequest {
+            model: "test-model".into(),
+            messages: vec![],
+            temperature: Some(0.3),
+            max_completion_tokens: None,
+            response_format: None,
+            extra,
+        };
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "test-model");
         assert!(json["temperature"].as_f64().unwrap() - 0.3 < 0.001);

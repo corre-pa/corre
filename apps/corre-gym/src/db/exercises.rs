@@ -216,8 +216,10 @@ mod tests {
         db.insert_exercise(&ex).unwrap();
 
         let results = db.list_exercises_by_muscle_group("chest").unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].muscle_group, "chest");
+        // DB is pre-seeded with 6 chest exercises + 1 inserted
+        assert!(results.len() >= 7, "Expected at least 7 chest exercises, got {}", results.len());
+        assert!(results.iter().all(|r| r.muscle_group == "chest"));
+        assert!(results.iter().any(|r| r.exercise.id == ex.id));
     }
 
     #[test]
@@ -227,7 +229,9 @@ mod tests {
         db.insert_exercise(&ex).unwrap();
 
         let results = db.search_exercises("Bench").unwrap();
-        assert_eq!(results.len(), 1);
+        // Seeded exercises also contain "Bench" (Barbell Bench Press, Dumbbell Bench Press, etc.)
+        assert!(results.len() >= 2, "Expected at least 2 results for 'Bench', got {}", results.len());
+        assert!(results.iter().any(|r| r.id == ex.id));
     }
 
     #[test]
@@ -237,7 +241,9 @@ mod tests {
         db.insert_exercise(&ex).unwrap();
 
         let results = db.search_exercises("flat bench").unwrap();
-        assert_eq!(results.len(), 1);
+        // Seeded Barbell Bench Press also has "flat bench" in its aliases
+        assert!(results.len() >= 2, "Expected at least 2 results for 'flat bench', got {}", results.len());
+        assert!(results.iter().any(|r| r.id == ex.id));
     }
 
     #[test]
@@ -296,8 +302,9 @@ mod tests {
     #[test]
     fn seed_exercises_populates_catalogue() {
         let db = test_db();
-        let count = db.seed_exercises().unwrap();
-        assert!(count >= 30, "Expected at least 30 exercises, got {count}");
+        // Exercises are already seeded during open_in_memory() -> run_migrations()
+        let exercises = db.list_exercises().unwrap();
+        assert!(exercises.len() >= 30, "Expected at least 30 exercises, got {}", exercises.len());
     }
 
     #[test]

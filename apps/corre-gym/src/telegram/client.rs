@@ -3,11 +3,13 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use serde_json::json;
 
-use super::types::{BotUser, Message, TelegramResponse, Update};
+use super::types::{BotUser, Message, TelegramFile, TelegramResponse, Update};
 
+#[derive(Clone)]
 pub struct TelegramClient {
     client: reqwest::Client,
     base_url: String,
+    file_base_url: String,
 }
 
 impl TelegramClient {
@@ -25,7 +27,9 @@ impl TelegramClient {
             .build()
             .context("building HTTP client")?;
 
-        Ok(Self { client, base_url: format!("https://api.telegram.org/bot{token}") })
+        let base_url = format!("https://api.telegram.org/bot{token}");
+        let file_base_url = format!("https://api.telegram.org/file/bot{token}");
+        Ok(Self { client, base_url, file_base_url })
     }
 
     /// Get bot info (startup verification).
@@ -82,6 +86,36 @@ impl TelegramClient {
         });
         let _: bool = self.post("sendChatAction", &body).await?;
         Ok(())
+    }
+
+    /// Get the file metadata for a file_id (needed to construct download URL).
+    pub async fn get_file(&self, file_id: &str) -> anyhow::Result<TelegramFile> {
+        self.post("getFile", &json!({"file_id": file_id})).await
+    }
+
+    /// Download file bytes directly into memory.
+    pub async fn download_file_bytes(&self, file_path: &str) -> anyhow::Result<Vec<u8>> {
+        let url = format!("{}/{file_path}", self.file_base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            bail!("file download failed: {}", resp.status());
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Send a voice message (OGG/Opus bytes).
+    pub async fn send_voice(&self, chat_id: i64, ogg_bytes: &[u8], reply_to: Option<i64>) -> anyhow::Result<Message> {
+        let url = format!("{}/sendVoice", self.base_url);
+        let part = reqwest::multipart::Part::bytes(ogg_bytes.to_vec()).file_name("voice.ogg").mime_str("audio/ogg")?;
+        let mut form = reqwest::multipart::Form::new().text("chat_id", chat_id.to_string()).part("voice", part);
+        if let Some(reply_id) = reply_to {
+            form = form.text("reply_to_message_id", reply_id.to_string());
+        }
+        let resp: TelegramResponse<Message> = self.client.post(&url).multipart(form).send().await?.json().await?;
+        match resp.result {
+            Some(msg) if resp.ok => Ok(msg),
+            _ => bail!("sendVoice failed: {}", resp.description.unwrap_or_else(|| "unknown error".into())),
+        }
     }
 
     async fn post<T: serde::de::DeserializeOwned>(&self, method: &str, body: &serde_json::Value) -> anyhow::Result<T> {
