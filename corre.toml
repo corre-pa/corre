@@ -15,6 +15,20 @@ bind = "192.168.1.101:5510"
 title = "Corre News"
 editor_token = "edit"   # set to enable /settings and /settings/topics
 
+[gym]
+bind = "127.0.0.1:5520"              # web dashboard (M3, unused in M1)
+telegram_bot_token = "${CORRE_GYM_BOT_TOKEN}"
+telegram_allowed_ids = []             # empty = allow all (dev mode); set to restrict access
+default_timezone = "Europe/London"
+conversation_history_limit = 20       # messages to include in LLM context
+db_path = "./data/gym-tracker.db"            # relative to data_dir
+max_message_length = 2000             # truncate user messages beyond this before sending to LLM
+session_timeout_hours = 4             # auto-close stale sessions older than this
+
+# [gym.llm]                          # optional per-service LLM overrides
+# model = "gpt-4o"
+# temperature = 0.3
+
 # [safety]
 # enabled = true                    # toggle the prompt-injection defense layer
 # max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size

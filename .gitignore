@@ -9,3 +9,5 @@ todos.md
 dist/
 mcp-registry/site/
 plans/
+# local data
+data/
