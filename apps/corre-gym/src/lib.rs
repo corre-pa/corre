@@ -3,3 +3,4 @@ pub mod config;
 pub mod db;
 pub mod telegram;
 pub mod voice;
+pub mod web;

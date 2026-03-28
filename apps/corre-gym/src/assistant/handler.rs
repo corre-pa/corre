@@ -45,7 +45,7 @@ impl AssistantHandler {
         Ok(Self { db, llm, config, exercises })
     }
 
-    /// Process an incoming text message and return a reply.
+    /// Process an incoming Telegram text message and return a reply.
     pub async fn handle_text_message(&self, message: &TgMessage, text: &str) -> anyhow::Result<Reply> {
         // 1. Identify user (auto-register if new)
         let (user, is_new) = self.ensure_user(message).await?;
@@ -53,24 +53,29 @@ impl AssistantHandler {
             return Ok(Reply::new(self.welcome_message(&user)));
         }
 
+        self.handle_message_for_user(&user, text, "telegram").await
+    }
+
+    /// Process a message for a known, authenticated user on any platform.
+    pub async fn handle_message_for_user(&self, user: &User, text: &str, platform: &str) -> anyhow::Result<Reply> {
         // 2. Check for slash commands
-        if let Some(reply) = self.handle_command(text, &user).await? {
+        if let Some(reply) = self.handle_command(text, user, platform).await? {
             return Ok(reply);
         }
 
         // 3. Auto-close stale sessions
-        self.close_stale_session(&user).await?;
+        self.close_stale_session(user).await?;
 
         // 4. Truncate message to max_message_length
         let text = if text.len() > self.config.max_message_length { &text[..self.config.max_message_length] } else { text };
 
         // 5. Build system prompt with current context
-        let system_prompt = self.build_context(&user).await?;
+        let system_prompt = self.build_context(user).await?;
 
         // 6. Load conversation history
         let history = {
             let db = self.db.lock().await;
-            db.get_recent_messages_for_platform(&user.id, "telegram", self.config.conversation_history_limit)?
+            db.get_recent_messages_for_platform(&user.id, platform, self.config.conversation_history_limit)?
         };
 
         // 7. Call LLM (on failure, store excluded conversation and return error reply)
@@ -84,7 +89,7 @@ impl AssistantHandler {
                 } else {
                     "I had trouble processing that -- could you try again?"
                 };
-                self.store_excluded_conversation(&user.id, text, error_reply).await?;
+                self.store_excluded_conversation_on_platform(&user.id, platform, text, error_reply).await?;
                 return Ok(Reply::new(error_reply));
             }
         };
@@ -116,9 +121,9 @@ impl AssistantHandler {
 
         // 12. Store conversation turn (excluded if refusal)
         if is_refusal {
-            self.store_excluded_conversation(&user.id, text, &parsed.message).await?;
+            self.store_excluded_conversation_on_platform(&user.id, platform, text, &parsed.message).await?;
         } else {
-            self.store_conversation(&user.id, text, &parsed.message).await?;
+            self.store_conversation_on_platform(&user.id, platform, text, &parsed.message).await?;
         }
 
         // 13. Prune old messages
@@ -162,7 +167,7 @@ impl AssistantHandler {
         )
     }
 
-    async fn handle_command(&self, text: &str, user: &User) -> anyhow::Result<Option<Reply>> {
+    async fn handle_command(&self, text: &str, user: &User, platform: &str) -> anyhow::Result<Option<Reply>> {
         let cmd = text.split_whitespace().next().unwrap_or("").to_lowercase();
         match cmd.as_str() {
             "/start" => Ok(Some(Reply::new(self.cmd_start(user)))),
@@ -170,7 +175,7 @@ impl AssistantHandler {
             "/status" => Ok(Some(self.cmd_status(user).await?)),
             "/history" => Ok(Some(Reply::new(self.cmd_history(user).await?))),
             "/exercises" => Ok(Some(self.cmd_exercises())),
-            "/clear" => Ok(Some(Reply::new(self.cmd_clear(user).await?))),
+            "/clear" => Ok(Some(Reply::new(self.cmd_clear(user, platform).await?))),
             _ => Ok(None),
         }
     }
@@ -235,12 +240,8 @@ impl AssistantHandler {
             result.push_str(&format!("\n<b>Active health issues</b>\n"));
             for entry in &health {
                 let body = entry.body_part.as_deref().unwrap_or("general");
-                result.push_str(&format!(
-                    "- {} ({}): {}\n",
-                    entry.entry_type.as_str(),
-                    escape_html(body),
-                    escape_html(&entry.description),
-                ));
+                result
+                    .push_str(&format!("- {} ({}): {}\n", entry.entry_type.as_str(), escape_html(body), escape_html(&entry.description),));
             }
         }
 
@@ -268,8 +269,8 @@ impl AssistantHandler {
     }
 
     fn cmd_exercises(&self) -> Reply {
-        use crate::db::MeasurementType;
         use super::prompts::capitalize;
+        use crate::db::MeasurementType;
 
         let mut result = String::new();
 
@@ -298,11 +299,7 @@ impl AssistantHandler {
             result.push_str(&format!("{:<name_w$} | {:<alias_w$} | Type\n", "Name", "Aliases"));
             result.push_str(&format!("{:-<name_w$}-+-{:-<alias_w$}-+------\n", "", ""));
             for (name, aliases, mt) in rows {
-                result.push_str(&format!(
-                    "{:<name_w$} | {:<alias_w$} | {mt}\n",
-                    escape_html(name),
-                    escape_html(aliases),
-                ));
+                result.push_str(&format!("{:<name_w$} | {:<alias_w$} | {mt}\n", escape_html(name), escape_html(aliases),));
             }
             result.push_str("</pre>");
         }
@@ -497,28 +494,40 @@ impl AssistantHandler {
         db.start_session(&user.id, None)
     }
 
-    async fn cmd_clear(&self, user: &User) -> anyhow::Result<String> {
+    async fn cmd_clear(&self, user: &User, platform: &str) -> anyhow::Result<String> {
         let db = self.db.lock().await;
-        let excluded = db.exclude_all_messages_for_platform(&user.id, "telegram")?;
-        tracing::info!(user_id = %user.id, excluded = %excluded, "Cleared conversation context");
+        let excluded = db.exclude_all_messages_for_platform(&user.id, platform)?;
+        tracing::info!(user_id = %user.id, platform = %platform, excluded = %excluded, "Cleared conversation context");
         Ok("Conversation context cleared. I'll start fresh from here.".to_string())
     }
 
-    async fn store_conversation(&self, user_id: &str, user_text: &str, assistant_text: &str) -> anyhow::Result<()> {
+    async fn store_conversation_on_platform(
+        &self,
+        user_id: &str,
+        platform: &str,
+        user_text: &str,
+        assistant_text: &str,
+    ) -> anyhow::Result<()> {
         let db = self.db.lock().await;
-        let user_msg = new_conversation_message(user_id, "telegram", ConversationRole::User, user_text);
+        let user_msg = new_conversation_message(user_id, platform, ConversationRole::User, user_text);
         db.insert_message(&user_msg)?;
-        let assistant_msg = new_conversation_message(user_id, "telegram", ConversationRole::Assistant, assistant_text);
+        let assistant_msg = new_conversation_message(user_id, platform, ConversationRole::Assistant, assistant_text);
         db.insert_message(&assistant_msg)?;
         Ok(())
     }
 
-    async fn store_excluded_conversation(&self, user_id: &str, user_text: &str, assistant_text: &str) -> anyhow::Result<()> {
+    async fn store_excluded_conversation_on_platform(
+        &self,
+        user_id: &str,
+        platform: &str,
+        user_text: &str,
+        assistant_text: &str,
+    ) -> anyhow::Result<()> {
         let db = self.db.lock().await;
-        let mut user_msg = new_conversation_message(user_id, "telegram", ConversationRole::User, user_text);
+        let mut user_msg = new_conversation_message(user_id, platform, ConversationRole::User, user_text);
         user_msg.exclude_from_context = true;
         db.insert_message(&user_msg)?;
-        let mut assistant_msg = new_conversation_message(user_id, "telegram", ConversationRole::Assistant, assistant_text);
+        let mut assistant_msg = new_conversation_message(user_id, platform, ConversationRole::Assistant, assistant_text);
         assistant_msg.exclude_from_context = true;
         db.insert_message(&assistant_msg)?;
         Ok(())

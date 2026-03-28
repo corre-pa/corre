@@ -381,6 +381,31 @@ pub struct SessionSummary {
     pub duration_mins: Option<i32>,
 }
 
+// ── Dashboard aggregate types ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MuscleGroupWeeklyVolume {
+    pub week: String,
+    pub muscle_group: String,
+    pub total_volume: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalRecord {
+    pub exercise_id: String,
+    pub exercise_name: String,
+    pub muscle_group: String,
+    pub measurement_type: String,
+    pub value: f64,
+    pub achieved_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeekSummary {
+    pub session_count: i32,
+    pub total_volume: f64,
+}
+
 // ── Constructors ───────────────────────────────────────────────────────────────
 
 fn now_str() -> String {

@@ -13,6 +13,7 @@ use corre_gym::config::GymConfig;
 use corre_gym::db::Database;
 use corre_gym::telegram::{Message, TelegramClient, Voice};
 use corre_gym::voice::VoicePipeline;
+use corre_gym::web;
 use corre_llm::OpenAiCompatProvider;
 
 #[derive(Parser)]
@@ -33,11 +34,32 @@ fn default_config_path() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let (telegram, handler, allowed_ids, voice_pipeline) = setup().await?;
-    run_polling_loop(&telegram, &handler, &allowed_ids, voice_pipeline.as_ref()).await
+    let (telegram, handler, allowed_ids, voice_pipeline, gym_config, db, bot_username) = setup().await?;
+    let handler = Arc::new(handler);
+
+    tokio::select! {
+        result = run_polling_loop(&telegram, &handler, &allowed_ids, voice_pipeline.as_ref()) => {
+            result
+        }
+        result = web::serve(
+            &gym_config.bind,
+            db,
+            handler.clone(),
+            gym_config.clone(),
+            bot_username,
+            None,
+        ) => {
+            result
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Ctrl+C received, shutting down");
+            Ok(())
+        }
+    }
 }
 
-async fn setup() -> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>, Option<VoicePipeline>)> {
+async fn setup()
+-> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>, Option<VoicePipeline>, GymConfig, Arc<Mutex<Database>>, String)> {
     // 1. Load .env from data dir (best-effort, same as corre-news)
     let default_data_dir = default_data_dir();
     let _ = dotenvy::from_filename(default_data_dir.join(".env")).ok();
@@ -74,19 +96,21 @@ async fn setup() -> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>, 
         raw_llm
     };
 
-    // 6. Open database
+    // 6. Open database (RwLock for parallel reads from web + Telegram)
     let db = Database::open(&data_dir.join(&gym_config.db_path))?;
     let db = Arc::new(Mutex::new(db));
 
     // 7. Create Telegram client, verify connection
     let telegram = TelegramClient::new(&gym_config.telegram_bot_token)?;
     let me = telegram.get_me().await?;
-    tracing::info!("Bot @{} connected (id: {})", me.username.as_deref().unwrap_or("?"), me.id);
+    let bot_username = me.username.clone().unwrap_or_default();
+    debug_assert!(!bot_username.starts_with('@'), "bot_username should not start with @");
+    tracing::info!("Bot @{bot_username} connected (id: {})", me.id);
 
     let allowed_ids = gym_config.telegram_allowed_ids.clone();
 
     // 8. Create handler
-    let handler = AssistantHandler::new(db, llm, gym_config.clone()).await?;
+    let handler = AssistantHandler::new(db.clone(), llm, gym_config.clone()).await?;
 
     // 9. Voice pipeline (optional)
     let voice_pipeline = match &gym_config.voice {
@@ -114,40 +138,30 @@ async fn setup() -> anyhow::Result<(TelegramClient, AssistantHandler, Vec<i64>, 
         }
     };
 
-    Ok((telegram, handler, allowed_ids, voice_pipeline))
+    Ok((telegram, handler, allowed_ids, voice_pipeline, gym_config, db, bot_username))
 }
 
 async fn run_polling_loop(
     telegram: &TelegramClient,
-    handler: &AssistantHandler,
+    handler: &Arc<AssistantHandler>,
     allowed_ids: &[i64],
     voice_pipeline: Option<&VoicePipeline>,
 ) -> anyhow::Result<()> {
     let mut offset = 0i64;
-    let shutdown = tokio::signal::ctrl_c();
-    tokio::pin!(shutdown);
 
     loop {
-        tokio::select! {
-            _ = &mut shutdown => {
-                tracing::info!("Shutting down");
-                break Ok(());
-            }
-            result = telegram.get_updates(offset, 30) => {
-                match result {
-                    Ok(updates) => {
-                        for update in updates {
-                            offset = update.update_id + 1;
-                            if let Some(ref message) = update.message {
-                                process_message(telegram, handler, voice_pipeline, message, allowed_ids).await;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("get_updates failed: {e:#}");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+        match telegram.get_updates(offset, 30).await {
+            Ok(updates) => {
+                for update in updates {
+                    offset = update.update_id + 1;
+                    if let Some(ref message) = update.message {
+                        process_message(telegram, handler, voice_pipeline, message, allowed_ids).await;
                     }
                 }
+            }
+            Err(e) => {
+                tracing::error!("get_updates failed: {e:#}");
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
     }
@@ -155,7 +169,7 @@ async fn run_polling_loop(
 
 async fn process_message(
     telegram: &TelegramClient,
-    handler: &AssistantHandler,
+    handler: &Arc<AssistantHandler>,
     voice_pipeline: Option<&VoicePipeline>,
     message: &Message,
     allowed_ids: &[i64],
@@ -182,7 +196,7 @@ async fn process_message(
     }
 }
 
-async fn process_text_message(telegram: &TelegramClient, handler: &AssistantHandler, message: &Message, text: &str) {
+async fn process_text_message(telegram: &TelegramClient, handler: &Arc<AssistantHandler>, message: &Message, text: &str) {
     let _ = telegram.send_chat_action(message.chat.id, "typing").await;
 
     let (reply_text, parse_mode) = match handler.handle_text_message(message, text).await {
@@ -200,7 +214,7 @@ async fn process_text_message(telegram: &TelegramClient, handler: &AssistantHand
 
 async fn process_voice_message(
     telegram: &TelegramClient,
-    handler: &AssistantHandler,
+    handler: &Arc<AssistantHandler>,
     voice_pipeline: Option<&VoicePipeline>,
     message: &Message,
     voice: &Voice,

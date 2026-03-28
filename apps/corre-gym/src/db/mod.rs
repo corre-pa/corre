@@ -1,5 +1,6 @@
 mod access;
 mod conversation;
+mod dashboard;
 mod database;
 mod exercises;
 mod goals;
