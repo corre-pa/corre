@@ -19,28 +19,36 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<ConversationMessage> 
 const SELECT_MSG: &str = "SELECT id, user_id, platform, role, content, timestamp, exclude_from_context FROM conversation_history";
 
 impl Database {
-    pub fn insert_message(&self, msg: &ConversationMessage) -> anyhow::Result<()> {
+    pub fn insert_message(&self, msg: &ConversationMessage) -> anyhow::Result<i64> {
         self.conn().execute(
-            "INSERT INTO conversation_history (id, user_id, platform, role, content, timestamp, exclude_from_context) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![msg.id, msg.user_id, msg.platform, msg.role.as_str(), msg.content, msg.timestamp, msg.exclude_from_context as i32],
+            "INSERT INTO conversation_history (user_id, platform, role, content, timestamp, exclude_from_context) \
+             VALUES (?1, ?2, ?3, ?4, COALESCE(?5, datetime('now')), ?6)",
+            params![
+                msg.user_id,
+                msg.platform,
+                msg.role.as_str(),
+                msg.content,
+                if msg.timestamp.is_empty() { None } else { Some(&msg.timestamp) },
+                msg.exclude_from_context as i32,
+            ],
         )?;
-        tracing::debug!(id = %msg.id, role = %msg.role.as_str(), platform = %msg.platform, exclude = %msg.exclude_from_context, "DB: inserted message");
-        Ok(())
+        let id = self.conn().last_insert_rowid();
+        tracing::debug!(id, role = %msg.role.as_str(), platform = %msg.platform, exclude = %msg.exclude_from_context, "DB: inserted message");
+        Ok(id)
     }
 
-    pub fn get_recent_messages(&self, user_id: &str, limit: usize) -> anyhow::Result<Vec<ConversationMessage>> {
+    pub fn get_recent_messages(&self, user_id: i64, limit: usize) -> anyhow::Result<Vec<ConversationMessage>> {
         let sql = format!("{SELECT_MSG} WHERE user_id = ?1 AND exclude_from_context = 0 ORDER BY timestamp DESC LIMIT ?2");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, limit as i64], row_to_message)?;
         let mut msgs: Vec<_> = rows.collect::<Result<Vec<_>, _>>().context("Failed to get recent messages")?;
-        msgs.reverse(); // chronological order
+        msgs.reverse();
         Ok(msgs)
     }
 
     pub fn get_recent_messages_for_platform(
         &self,
-        user_id: &str,
+        user_id: i64,
         platform: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<ConversationMessage>> {
@@ -53,25 +61,23 @@ impl Database {
         Ok(msgs)
     }
 
-    /// Mark all messages for a user+platform as excluded from LLM context.
-    /// Messages remain in the DB for audit; they just won't appear in future prompts.
-    pub fn exclude_all_messages_for_platform(&self, user_id: &str, platform: &str) -> anyhow::Result<usize> {
+    pub fn exclude_all_messages_for_platform(&self, user_id: i64, platform: &str) -> anyhow::Result<usize> {
         let updated = self.conn().execute(
             "UPDATE conversation_history SET exclude_from_context = 1 WHERE user_id = ?1 AND platform = ?2 AND exclude_from_context = 0",
             params![user_id, platform],
         )?;
-        tracing::info!(user_id = %user_id, platform = %platform, updated = %updated, "DB: excluded all messages from context");
+        tracing::info!(user_id, %platform, updated, "DB: excluded all messages from context");
         Ok(updated)
     }
 
-    pub fn prune_old_messages(&self, user_id: &str, keep_last: usize) -> anyhow::Result<usize> {
+    pub fn prune_old_messages(&self, user_id: i64, keep_last: usize) -> anyhow::Result<usize> {
         let deleted = self.conn().execute(
             "DELETE FROM conversation_history WHERE user_id = ?1 AND id NOT IN \
              (SELECT id FROM conversation_history WHERE user_id = ?1 ORDER BY timestamp DESC LIMIT ?2)",
             params![user_id, keep_last as i64],
         )?;
         if deleted > 0 {
-            tracing::debug!(user_id = %user_id, deleted = %deleted, "DB: pruned old messages");
+            tracing::debug!(user_id, deleted, "DB: pruned old messages");
         }
         Ok(deleted)
     }
@@ -89,15 +95,12 @@ mod tests {
     #[test]
     fn insert_and_get_recent() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let m1 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "Hello");
-        let m2 = new_conversation_message(&user.id, "telegram", ConversationRole::Assistant, "Hi there!");
-        db.insert_message(&m1).unwrap();
-        db.insert_message(&m2).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::User, "Hello")).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::Assistant, "Hi there!")).unwrap();
 
-        let msgs = db.get_recent_messages(&user.id, 10).unwrap();
+        let msgs = db.get_recent_messages(user_id, 10).unwrap();
         assert_eq!(msgs.len(), 2);
         assert!(msgs.iter().any(|m| m.role == ConversationRole::User));
         assert!(msgs.iter().any(|m| m.role == ConversationRole::Assistant));
@@ -106,15 +109,12 @@ mod tests {
     #[test]
     fn get_recent_by_platform() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let m1 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "From TG");
-        let m2 = new_conversation_message(&user.id, "web", ConversationRole::User, "From Web");
-        db.insert_message(&m1).unwrap();
-        db.insert_message(&m2).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::User, "From TG")).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "web", ConversationRole::User, "From Web")).unwrap();
 
-        let msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 10).unwrap();
+        let msgs = db.get_recent_messages_for_platform(user_id, "telegram", 10).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].content, "From TG");
     }
@@ -122,70 +122,57 @@ mod tests {
     #[test]
     fn prune_old_messages() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
         for i in 0..10 {
-            let msg = new_conversation_message(&user.id, "telegram", ConversationRole::User, &format!("Message {i}"));
-            db.insert_message(&msg).unwrap();
+            db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::User, &format!("Message {i}"))).unwrap();
         }
 
-        let deleted = db.prune_old_messages(&user.id, 3).unwrap();
+        let deleted = db.prune_old_messages(user_id, 3).unwrap();
         assert_eq!(deleted, 7);
 
-        let remaining = db.get_recent_messages(&user.id, 100).unwrap();
+        let remaining = db.get_recent_messages(user_id, 100).unwrap();
         assert_eq!(remaining.len(), 3);
     }
 
     #[test]
     fn exclude_all_messages_for_platform() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let m1 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "Hello");
-        let m2 = new_conversation_message(&user.id, "telegram", ConversationRole::Assistant, "Hi!");
-        let m3 = new_conversation_message(&user.id, "web", ConversationRole::User, "Web msg");
-        db.insert_message(&m1).unwrap();
-        db.insert_message(&m2).unwrap();
-        db.insert_message(&m3).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::User, "Hello")).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::Assistant, "Hi!")).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "web", ConversationRole::User, "Web msg")).unwrap();
 
-        // Exclude all telegram messages
-        let excluded = db.exclude_all_messages_for_platform(&user.id, "telegram").unwrap();
+        let excluded = db.exclude_all_messages_for_platform(user_id, "telegram").unwrap();
         assert_eq!(excluded, 2);
 
-        // Telegram context should be empty
-        let tg_msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        let tg_msgs = db.get_recent_messages_for_platform(user_id, "telegram", 100).unwrap();
         assert_eq!(tg_msgs.len(), 0);
 
-        // Web messages should be unaffected
-        let web_msgs = db.get_recent_messages_for_platform(&user.id, "web", 100).unwrap();
+        let web_msgs = db.get_recent_messages_for_platform(user_id, "web", 100).unwrap();
         assert_eq!(web_msgs.len(), 1);
 
-        // Second exclude is a no-op
-        let excluded = db.exclude_all_messages_for_platform(&user.id, "telegram").unwrap();
+        let excluded = db.exclude_all_messages_for_platform(user_id, "telegram").unwrap();
         assert_eq!(excluded, 0);
     }
 
     #[test]
     fn excluded_messages_hidden_from_context() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let mut m1 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "bad request");
+        let mut m1 = new_conversation_message(user_id, "telegram", ConversationRole::User, "bad request");
         m1.exclude_from_context = true;
         db.insert_message(&m1).unwrap();
 
-        let m2 = new_conversation_message(&user.id, "telegram", ConversationRole::User, "good request");
-        db.insert_message(&m2).unwrap();
+        db.insert_message(&new_conversation_message(user_id, "telegram", ConversationRole::User, "good request")).unwrap();
 
-        let msgs = db.get_recent_messages_for_platform(&user.id, "telegram", 100).unwrap();
+        let msgs = db.get_recent_messages_for_platform(user_id, "telegram", 100).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].content, "good request");
 
-        // Also verify get_recent_messages filters
-        let msgs = db.get_recent_messages(&user.id, 100).unwrap();
+        let msgs = db.get_recent_messages(user_id, 100).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].content, "good request");
     }

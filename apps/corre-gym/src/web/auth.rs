@@ -68,7 +68,7 @@ const SESSION_MAX_AGE_SECS: i64 = 30 * 24 * 3600; // 30 days
 
 #[derive(Debug, Serialize, Deserialize)]
 struct SessionPayload {
-    user_id: String,
+    user_id: i64,
     telegram_id: i64,
     name: String,
     created_at: i64,
@@ -81,7 +81,7 @@ fn signing_key(state: &AppState) -> Vec<u8> {
 
 pub fn create_session_cookie(state: &AppState, user: &User, telegram_id: i64) -> String {
     let payload =
-        SessionPayload { user_id: user.id.clone(), telegram_id, name: user.name.clone(), created_at: chrono::Utc::now().timestamp() };
+        SessionPayload { user_id: user.id, telegram_id, name: user.name.clone(), created_at: chrono::Utc::now().timestamp() };
     let json = serde_json::to_string(&payload).expect("session payload serializes");
     let b64 = BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes());
 
@@ -150,7 +150,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         };
 
         let db = state.db.lock().await;
-        let user = db.get_user(&payload.user_id).ok().flatten();
+        let user = db.get_user(payload.user_id).ok().flatten();
 
         match user {
             Some(user) => Ok(AuthUser { user }),
@@ -327,7 +327,7 @@ mod tests {
 
         // Manually create an expired payload
         let payload = SessionPayload {
-            user_id: "test".to_string(),
+            user_id: 1,
             telegram_id: 12345,
             name: "Test".to_string(),
             created_at: chrono::Utc::now().timestamp() - SESSION_MAX_AGE_SECS - 100,

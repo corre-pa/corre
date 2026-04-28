@@ -7,7 +7,7 @@ use axum::response::{Html, IntoResponse, Redirect};
 
 use super::AppState;
 use super::auth::{AuthUser, TelegramLoginParams, create_logout_cookie, create_session_cookie, verify_telegram_login};
-use crate::db::{FullExercise, new_user};
+use crate::db::{ExerciseTypeWithAncestry, new_user};
 
 // ── Templates ─────────────────────────────────────────────────────────────────
 #[derive(Template)]
@@ -63,21 +63,21 @@ pub async fn dashboard(auth: AuthUser, State(_state): State<Arc<AppState>>) -> i
 }
 
 pub async fn history(auth: AuthUser, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let exercises = {
+    let catalogue = {
         let db = state.db.lock().await;
-        db.list_full_exercises().unwrap_or_default()
+        db.list_exercise_types_with_ancestry().unwrap_or_default()
     };
-    let exercises_json = exercises_to_json(&exercises);
+    let exercises_json = exercise_types_to_json(&catalogue);
     let template = HistoryTemplate { user_name: auth.user.name.clone(), exercises_json, active_page: "history".to_string() };
     Html(template.render().unwrap_or_else(|e| format!("Template error: {e}")))
 }
 
 pub async fn progress(auth: AuthUser, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let exercises = {
+    let catalogue = {
         let db = state.db.lock().await;
-        db.list_full_exercises().unwrap_or_default()
+        db.list_exercise_types_with_ancestry().unwrap_or_default()
     };
-    let exercises_json = exercises_to_json(&exercises);
+    let exercises_json = exercise_types_to_json(&catalogue);
     let template = ProgressTemplate { user_name: auth.user.name.clone(), exercises_json, active_page: "progress".to_string() };
     Html(template.render().unwrap_or_else(|e| format!("Template error: {e}")))
 }
@@ -114,12 +114,19 @@ pub async fn telegram_login_callback(State(state): State<Arc<AppState>>, Query(p
                 Some(last) => format!("{} {last}", params.first_name),
                 None => params.first_name.clone(),
             };
-            let user = new_user(&name, Some(&telegram_id_str), "UTC");
+            let draft = new_user(&name, Some(&telegram_id_str), "UTC");
             let db = state.db.lock().await;
-            if let Err(e) = db.insert_user(&user) {
-                tracing::error!("Failed to auto-register user: {e:#}");
-                return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Registration failed").into_response();
-            }
+            let user_id = match db.insert_user(&draft) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Failed to auto-register user: {e:#}");
+                    return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Registration failed").into_response();
+                }
+            };
+            let user = match db.get_user(user_id) {
+                Ok(Some(u)) => u,
+                _ => return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Registration failed").into_response(),
+            };
             tracing::info!(telegram_id = %telegram_id_str, name = %user.name, "Auto-registered user via web login");
             user
         }
@@ -131,14 +138,24 @@ pub async fn telegram_login_callback(State(state): State<Arc<AppState>>, Query(p
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn exercises_to_json(exercises: &[FullExercise]) -> String {
-    let list: Vec<serde_json::Value> = exercises
+fn exercise_types_to_json(catalogue: &[ExerciseTypeWithAncestry]) -> String {
+    let list: Vec<serde_json::Value> = catalogue
         .iter()
+        .filter(|e| {
+            matches!(
+                e.exercise_type.level,
+                crate::db::ExerciseLevel::Exercise | crate::db::ExerciseLevel::Variation
+            )
+        })
         .map(|e| {
             serde_json::json!({
-                "id": e.exercise.id,
-                "name": e.exercise.name,
+                "id": e.exercise_type.id,
+                "name": e.exercise_type.name,
+                "level": e.exercise_type.level.as_str(),
+                "parent_id": e.exercise_type.parent_id,
                 "muscle_group": e.muscle_group,
+                "specific_muscle": e.specific_muscle,
+                "exercise": e.exercise,
             })
         })
         .collect();

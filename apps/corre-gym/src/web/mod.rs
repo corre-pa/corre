@@ -23,7 +23,7 @@ pub struct AppState {
     pub config: GymConfig,
     pub bot_username: String,
     pub session_secret: Option<String>,
-    pub chat_rate_limiter: DashMap<String, Vec<Instant>>,
+    pub chat_rate_limiter: DashMap<i64, Vec<Instant>>,
 }
 
 #[derive(Embed)]
@@ -42,7 +42,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // Auth callback
         .route("/auth/telegram", get(handlers::telegram_login_callback))
         // JSON API
-        .route("/api/logs", get(api::logs))
+        .route("/api/sets", get(api::sets))
         .route("/api/progress/exercise", get(api::progress_exercise))
         .route("/api/progress/volume", get(api::progress_volume))
         .route("/api/progress/frequency", get(api::progress_frequency))

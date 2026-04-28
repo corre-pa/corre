@@ -30,7 +30,7 @@ async function loadDashboard() {
     const [goals, health, logs] = await Promise.all([
         api('/api/goals'),
         api('/api/health'),
-        api('/api/logs?limit=20'),
+        api('/api/sets?limit=20'),
     ]);
 
     // Week stats — derive from logs
@@ -109,10 +109,10 @@ async function loadLogs(exercises) {
     const to = document.getElementById('filter-to').value;
     const exId = document.getElementById('filter-exercise').value;
 
-    let url = `/api/logs?limit=${historyState.limit}&offset=${historyState.offset}`;
+    let url = `/api/sets?limit=${historyState.limit}&offset=${historyState.offset}`;
     if (from) url += `&from=${from}`;
     if (to) url += `&to=${to}`;
-    if (exId) url += `&exercise_id=${exId}`;
+    if (exId) url += `&exercise_type_id=${exId}&include_descendants=true`;
 
     const data = await api(url);
     if (!data) return;
@@ -122,18 +122,29 @@ async function loadLogs(exercises) {
 
     const tbody = document.getElementById('logs-body');
     if (data.data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="placeholder">No logs found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="placeholder">No sets found</td></tr>';
     } else {
-        tbody.innerHTML = data.data.map(l => `<tr>
-            <td>${fmtDate(l.logged_at)}</td>
-            <td>${esc(exMap[l.exercise_id] || l.exercise_id)}</td>
-            <td>${l.sets ?? '-'}</td>
-            <td>${l.reps ?? '-'}</td>
-            <td>${l.weight_kg != null ? l.weight_kg + ' kg' : '-'}</td>
-            <td>${l.duration_secs != null ? l.duration_secs + 's' : '-'}</td>
-            <td>${esc(l.difficulty)}</td>
-            <td>${l.notes ? esc(l.notes) : '-'}</td>
-        </tr>`).join('');
+        tbody.innerHTML = data.data.map(s => {
+            const name = exMap[s.exercise_type_id] || `#${s.exercise_type_id}`;
+            let countCell = s.count != null ? `${s.count}` : '-';
+            let valueCell = '-';
+            switch (s.measurement_type) {
+                case 'weight_reps': valueCell = `${s.value} kg`; break;
+                case 'time_based': valueCell = `${s.value}s`; break;
+                case 'distance_based': valueCell = `${s.value} m`; break;
+                case 'level_based': valueCell = `lvl ${s.value}`; break;
+                case 'score_based': valueCell = `${s.value}`; break;
+            }
+            return `<tr>
+                <td>${fmtDate(s.logged_at)}</td>
+                <td>${esc(name)}</td>
+                <td>${countCell}</td>
+                <td>${valueCell}</td>
+                <td>${esc(s.measurement_type)}</td>
+                <td>${esc(s.perceived_difficulty)}</td>
+                <td>${s.comment ? esc(s.comment) : '-'}</td>
+            </tr>`;
+        }).join('');
     }
 
     // Pagination
@@ -199,7 +210,7 @@ async function loadWeightChart() {
     const days = parseInt(document.getElementById('time-range').value);
     const from = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
 
-    const data = await api(`/api/progress/exercise?exercise_id=${exId}&from=${from}`);
+    const data = await api(`/api/progress/exercise?exercise_type_id=${exId}&include_descendants=true&from=${from}`);
     if (!data) return;
 
     if (charts.weight) charts.weight.destroy();
@@ -276,7 +287,8 @@ async function loadRecords() {
         if (r.measurement_type === 'weight_reps') val += ' kg';
         else if (r.measurement_type === 'time_based') val += 's';
         else if (r.measurement_type === 'distance_based') val += ' m';
-        return `<tr><td>${esc(r.exercise_name)}</td><td>${esc(r.muscle_group)}</td><td>${val}</td><td>${fmtDate(r.achieved_at)}</td></tr>`;
+        const mg = r.muscle_group || '-';
+        return `<tr><td>${esc(r.exercise_name)}</td><td>${esc(mg)}</td><td>${val}</td><td>${fmtDate(r.achieved_at)}</td></tr>`;
     }).join('');
 }
 

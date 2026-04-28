@@ -16,19 +16,15 @@ impl Database {
         }
         let mut conn = Connection::open(path).with_context(|| format!("Failed to open database at {}", path.display()))?;
         run_migrations(&mut conn)?;
-        let db = Self { conn };
-        super::seed::seed_exercises(&db).context("Failed to seed exercises")?;
         tracing::debug!("Database migrations applied");
-        Ok(db)
+        Ok(Self { conn })
     }
 
     pub fn open_in_memory() -> anyhow::Result<Self> {
         let mut conn = Connection::open_in_memory().context("Failed to open in-memory database")?;
         run_migrations(&mut conn)?;
-        let db = Self { conn };
-        super::seed::seed_exercises(&db).context("Failed to seed exercises")?;
         tracing::debug!("Database migrations applied");
-        Ok(db)
+        Ok(Self { conn })
     }
 
     pub fn conn(&self) -> &Connection {
@@ -53,9 +49,9 @@ mod tests {
             .conn()
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
-                 ('exercises', 'users', 'groups', 'group_members', 'exercise_goals', \
-                  'sessions', 'exercise_logs', 'schedules', 'schedule_exercises', \
-                  'health_entries', 'conversation_history', 'muscle_groups', 'measurement_types')",
+                 ('exercise_types', 'users', 'groups', 'group_members', 'exercise_goals', \
+                  'sessions', 'exercise_entry', 'sets', 'schedules', 'schedule_exercises', \
+                  'health_entries', 'conversation_history', 'measurement_types')",
                 [],
                 |row| row.get(0),
             )
@@ -81,8 +77,9 @@ mod tests {
     #[test]
     fn muscle_groups_seeded() {
         let db = Database::open_in_memory().unwrap();
-        let count: i64 = db.conn().query_row("SELECT COUNT(*) FROM muscle_groups", [], |row| row.get(0)).unwrap();
-        assert_eq!(count, 16);
+        let count: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM exercise_types WHERE level = 'muscle_group'", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 7);
     }
 
     #[test]
@@ -96,6 +93,6 @@ mod tests {
     fn user_version_set_to_latest() {
         let db = Database::open_in_memory().unwrap();
         let version: i64 = db.conn().query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 1);
     }
 }

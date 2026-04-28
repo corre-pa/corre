@@ -2,7 +2,6 @@ use std::fmt;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 // ── Enums ──────────────────────────────────────────────────────────────────────
 
@@ -37,9 +36,85 @@ impl MeasurementType {
             _ => Self::WeightReps,
         }
     }
+
+    /// Stable numeric id matching `measurement_types.id` rows in the migration.
+    pub fn id(&self) -> i64 {
+        match self {
+            Self::WeightReps => 1,
+            Self::TimeBased => 2,
+            Self::DistanceBased => 3,
+            Self::LevelBased => 4,
+            Self::ScoreBased => 5,
+        }
+    }
+
+    pub fn from_id(id: i64) -> Self {
+        match id {
+            2 => Self::TimeBased,
+            3 => Self::DistanceBased,
+            4 => Self::LevelBased,
+            5 => Self::ScoreBased,
+            _ => Self::WeightReps,
+        }
+    }
 }
 
 impl fmt::Display for MeasurementType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExerciseLevel {
+    MuscleGroup,
+    SpecificMuscle,
+    Exercise,
+    Variation,
+}
+
+impl ExerciseLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MuscleGroup => "muscle_group",
+            Self::SpecificMuscle => "specific_muscle",
+            Self::Exercise => "exercise",
+            Self::Variation => "variation",
+        }
+    }
+
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "muscle_group" | "musclegroup" => Some(Self::MuscleGroup),
+            "specific_muscle" | "specificmuscle" => Some(Self::SpecificMuscle),
+            "exercise" => Some(Self::Exercise),
+            "variation" => Some(Self::Variation),
+            _ => None,
+        }
+    }
+
+    /// Tier index where 1 = muscle_group … 4 = variation.
+    pub fn tier(&self) -> u8 {
+        match self {
+            Self::MuscleGroup => 1,
+            Self::SpecificMuscle => 2,
+            Self::Exercise => 3,
+            Self::Variation => 4,
+        }
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        match self {
+            Self::MuscleGroup => None,
+            Self::SpecificMuscle => Some(Self::MuscleGroup),
+            Self::Exercise => Some(Self::SpecificMuscle),
+            Self::Variation => Some(Self::Exercise),
+        }
+    }
+}
+
+impl fmt::Display for ExerciseLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -215,27 +290,32 @@ pub enum GoalStatus {
 
 // ── Structs ────────────────────────────────────────────────────────────────────
 
+/// Hierarchical exercise taxonomy entry (muscle_group → … → variation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Exercise {
-    pub id: String,
+pub struct ExerciseType {
+    pub id: i64,
     pub name: String,
+    pub parent_id: Option<i64>,
+    pub level: ExerciseLevel,
     pub aliases: Option<String>,
-    pub muscle_group_id: i32,
-    pub purpose: String,
-    pub measurement_type: MeasurementType,
+    pub purpose: Option<String>,
+    pub measurement_type: Option<MeasurementType>,
     pub description: Option<String>,
     pub created_at: String,
 }
 
+/// An exercise_type with the names of its ancestors flattened in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FullExercise {
-    pub exercise: Exercise,
-    pub muscle_group: String,
+pub struct ExerciseTypeWithAncestry {
+    pub exercise_type: ExerciseType,
+    pub muscle_group: Option<String>,
+    pub specific_muscle: Option<String>,
+    pub exercise: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    pub id: String,
+    pub id: i64,
     pub name: String,
     pub telegram_id: Option<String>,
     pub signal_id: Option<String>,
@@ -246,7 +326,7 @@ pub struct User {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
-    pub id: String,
+    pub id: i64,
     pub name: String,
     pub description: Option<String>,
     pub created_at: String,
@@ -254,17 +334,17 @@ pub struct Group {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMember {
-    pub user_id: String,
-    pub group_id: String,
+    pub user_id: i64,
+    pub group_id: i64,
     pub level: AccessLevel,
     pub granted_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExerciseGoal {
-    pub id: String,
-    pub user_id: String,
-    pub exercise_id: String,
+    pub id: i64,
+    pub user_id: i64,
+    pub exercise_type_id: i64,
     pub target_value: f64,
     pub start_date: String,
     pub end_date: Option<String>,
@@ -276,34 +356,49 @@ pub struct ExerciseGoal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
-    pub id: String,
-    pub user_id: String,
+    pub id: i64,
+    pub user_id: i64,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub notes: Option<String>,
 }
 
+/// A block of related sets within a session (or standalone).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExerciseLog {
-    pub id: String,
-    pub user_id: String,
-    pub exercise_id: String,
-    pub session_id: Option<String>,
+pub struct ExerciseEntry {
+    pub id: i64,
+    pub user_id: i64,
+    pub session_id: Option<i64>,
+    pub start_timestamp: String,
+    pub end_timestamp: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// A single recorded set. The (count, value) pair is interpreted via measurement_type:
+///
+///   weight_reps    → count = reps,  value = weight_kg
+///   time_based     → count = NULL,  value = duration_secs
+///   distance_based → count = NULL,  value = distance_m
+///   level_based    → count = NULL,  value = level
+///   score_based    → count = NULL,  value = score
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExerciseSet {
+    pub id: i64,
+    pub exercise_entry_id: i64,
+    pub exercise_type_id: i64,
+    pub order_idx: i32,
+    pub measurement_type: MeasurementType,
+    pub count: Option<i32>,
+    pub value: f64,
+    pub perceived_difficulty: Difficulty,
+    pub comment: Option<String>,
     pub logged_at: String,
-    pub sets: Option<i32>,
-    pub reps: Option<i32>,
-    pub weight_kg: Option<f64>,
-    pub duration_secs: Option<i32>,
-    pub distance_m: Option<f64>,
-    pub level: Option<i32>,
-    pub difficulty: Difficulty,
-    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Schedule {
-    pub id: String,
-    pub user_id: String,
+    pub id: i64,
+    pub user_id: i64,
     pub name: String,
     pub cron_expr: String,
     pub reminder_type: ReminderType,
@@ -315,8 +410,8 @@ pub struct Schedule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleExercise {
-    pub schedule_id: String,
-    pub exercise_id: String,
+    pub schedule_id: i64,
+    pub exercise_type_id: i64,
     pub order_idx: i32,
     pub target_sets: Option<i32>,
     pub target_reps: Option<i32>,
@@ -325,8 +420,8 @@ pub struct ScheduleExercise {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthEntry {
-    pub id: String,
-    pub user_id: String,
+    pub id: i64,
+    pub user_id: i64,
     pub entry_type: HealthEntryType,
     pub body_part: Option<String>,
     pub severity: String,
@@ -339,8 +434,8 @@ pub struct HealthEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
-    pub id: String,
-    pub user_id: String,
+    pub id: i64,
+    pub user_id: i64,
     pub platform: String,
     pub role: ConversationRole,
     pub content: String,
@@ -359,7 +454,7 @@ pub struct TimeSeriesPoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeSeries {
-    pub exercise_id: String,
+    pub exercise_type_id: i64,
     pub exercise_name: String,
     pub measurement_type: MeasurementType,
     pub points: Vec<TimeSeriesPoint>,
@@ -392,9 +487,9 @@ pub struct MuscleGroupWeeklyVolume {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersonalRecord {
-    pub exercise_id: String,
+    pub exercise_type_id: i64,
     pub exercise_name: String,
-    pub muscle_group: String,
+    pub muscle_group: Option<String>,
     pub measurement_type: String,
     pub value: f64,
     pub achieved_at: String,
@@ -406,7 +501,7 @@ pub struct WeekSummary {
     pub total_volume: f64,
 }
 
-// ── Constructors ───────────────────────────────────────────────────────────────
+// ── Constructors (drafts; id is set by the insert function via last_insert_rowid) ──
 
 fn now_str() -> String {
     Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
@@ -415,7 +510,7 @@ fn now_str() -> String {
 pub fn new_user(name: &str, telegram_id: Option<&str>, timezone: &str) -> User {
     let now = now_str();
     User {
-        id: Uuid::new_v4().to_string(),
+        id: 0,
         name: name.to_string(),
         telegram_id: telegram_id.map(String::from),
         signal_id: None,
@@ -425,40 +520,35 @@ pub fn new_user(name: &str, telegram_id: Option<&str>, timezone: &str) -> User {
     }
 }
 
-pub fn new_session(user_id: &str, notes: Option<&str>) -> Session {
-    Session {
-        id: Uuid::new_v4().to_string(),
-        user_id: user_id.to_string(),
-        started_at: now_str(),
-        ended_at: None,
-        notes: notes.map(String::from),
-    }
+pub fn new_session(user_id: i64, notes: Option<&str>) -> Session {
+    Session { id: 0, user_id, started_at: now_str(), ended_at: None, notes: notes.map(String::from) }
 }
 
-pub fn new_exercise_log(user_id: &str, exercise_id: &str, session_id: Option<&str>) -> ExerciseLog {
-    ExerciseLog {
-        id: Uuid::new_v4().to_string(),
-        user_id: user_id.to_string(),
-        exercise_id: exercise_id.to_string(),
-        session_id: session_id.map(String::from),
+pub fn new_exercise_entry(user_id: i64, session_id: Option<i64>, comment: Option<&str>) -> ExerciseEntry {
+    ExerciseEntry { id: 0, user_id, session_id, start_timestamp: now_str(), end_timestamp: None, comment: comment.map(String::from) }
+}
+
+pub fn new_exercise_set(exercise_entry_id: i64, exercise_type_id: i64, measurement_type: MeasurementType, value: f64) -> ExerciseSet {
+    ExerciseSet {
+        id: 0,
+        exercise_entry_id,
+        exercise_type_id,
+        order_idx: 0,
+        measurement_type,
+        count: None,
+        value,
+        perceived_difficulty: Difficulty::Medium,
+        comment: None,
         logged_at: now_str(),
-        sets: None,
-        reps: None,
-        weight_kg: None,
-        duration_secs: None,
-        distance_m: None,
-        level: None,
-        difficulty: Difficulty::Medium,
-        notes: None,
     }
 }
 
-pub fn new_exercise_goal(user_id: &str, exercise_id: &str, target_value: f64) -> ExerciseGoal {
+pub fn new_exercise_goal(user_id: i64, exercise_type_id: i64, target_value: f64) -> ExerciseGoal {
     let now = now_str();
     ExerciseGoal {
-        id: Uuid::new_v4().to_string(),
-        user_id: user_id.to_string(),
-        exercise_id: exercise_id.to_string(),
+        id: 0,
+        user_id,
+        exercise_type_id,
         target_value,
         start_date: now.clone(),
         end_date: None,
@@ -469,11 +559,11 @@ pub fn new_exercise_goal(user_id: &str, exercise_id: &str, target_value: f64) ->
     }
 }
 
-pub fn new_health_entry(user_id: &str, entry_type: HealthEntryType, description: &str) -> HealthEntry {
+pub fn new_health_entry(user_id: i64, entry_type: HealthEntryType, description: &str) -> HealthEntry {
     let now = now_str();
     HealthEntry {
-        id: Uuid::new_v4().to_string(),
-        user_id: user_id.to_string(),
+        id: 0,
+        user_id,
         entry_type,
         body_part: None,
         severity: "mild".to_string(),
@@ -485,10 +575,10 @@ pub fn new_health_entry(user_id: &str, entry_type: HealthEntryType, description:
     }
 }
 
-pub fn new_conversation_message(user_id: &str, platform: &str, role: ConversationRole, content: &str) -> ConversationMessage {
+pub fn new_conversation_message(user_id: i64, platform: &str, role: ConversationRole, content: &str) -> ConversationMessage {
     ConversationMessage {
-        id: Uuid::new_v4().to_string(),
-        user_id: user_id.to_string(),
+        id: 0,
+        user_id,
         platform: platform.to_string(),
         role,
         content: content.to_string(),

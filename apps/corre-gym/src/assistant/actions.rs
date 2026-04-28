@@ -12,26 +12,34 @@ pub struct AssistantResponse {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantAction {
+    /// Weight × reps logging. `sets` is the number of identical sets to record;
+    /// the handler creates one row in `sets` per repetition group.
     LogExercise {
         exercise: String,
         sets: Option<i32>,
         reps: Option<i32>,
         weight_kg: Option<f64>,
-        #[serde(default)]
-        difficulty: Option<Difficulty>,
+        #[serde(default, alias = "difficulty")]
+        perceived_difficulty: Option<Difficulty>,
+        #[serde(default, alias = "notes")]
+        comment: Option<String>,
     },
     LogExerciseTimed {
         exercise: String,
         duration_secs: i32,
-        #[serde(default)]
-        difficulty: Option<Difficulty>,
+        #[serde(default, alias = "difficulty")]
+        perceived_difficulty: Option<Difficulty>,
+        #[serde(default, alias = "notes")]
+        comment: Option<String>,
     },
     LogExerciseDistance {
         exercise: String,
         distance_m: Option<f64>,
         duration_secs: Option<i32>,
-        #[serde(default)]
-        difficulty: Option<Difficulty>,
+        #[serde(default, alias = "difficulty")]
+        perceived_difficulty: Option<Difficulty>,
+        #[serde(default, alias = "notes")]
+        comment: Option<String>,
     },
     StartSession {
         notes: Option<String>,
@@ -61,17 +69,27 @@ mod tests {
 
     #[test]
     fn parse_log_exercise_action() {
-        let json =
-            r#"{"type": "log_exercise", "exercise": "Barbell Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0, "difficulty": "hard"}"#;
+        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "hard"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
-            AssistantAction::LogExercise { exercise, sets, reps, weight_kg, difficulty } => {
-                assert_eq!(exercise, "Barbell Bench Press");
+            AssistantAction::LogExercise { exercise, sets, reps, weight_kg, perceived_difficulty, comment } => {
+                assert_eq!(exercise, "Bench Press");
                 assert_eq!(sets, Some(3));
                 assert_eq!(reps, Some(8));
                 assert_eq!(weight_kg, Some(80.0));
-                assert_eq!(difficulty, Some(Difficulty::Hard));
+                assert_eq!(perceived_difficulty, Some(Difficulty::Hard));
+                assert_eq!(comment, None);
             }
+            _ => panic!("expected LogExercise"),
+        }
+    }
+
+    #[test]
+    fn parse_log_exercise_legacy_difficulty_alias() {
+        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "difficulty": "easy"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::LogExercise { perceived_difficulty, .. } => assert_eq!(perceived_difficulty, Some(Difficulty::Easy)),
             _ => panic!("expected LogExercise"),
         }
     }
@@ -123,7 +141,7 @@ mod tests {
 
     #[test]
     fn parse_set_goal() {
-        let json = r#"{"type": "set_goal", "exercise": "Barbell Bench Press", "target_value": 100.0, "end_date": "2026-06-01"}"#;
+        let json = r#"{"type": "set_goal", "exercise": "Bench Press", "target_value": 100.0, "end_date": "2026-06-01"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         assert!(matches!(action, AssistantAction::SetGoal { target_value, .. } if target_value == 100.0));
     }
@@ -137,14 +155,15 @@ mod tests {
 
     #[test]
     fn missing_optional_fields() {
-        let json = r#"{"type": "log_exercise", "exercise": "Barbell Bench Press"}"#;
+        let json = r#"{"type": "log_exercise", "exercise": "Bench Press"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
-            AssistantAction::LogExercise { sets, reps, weight_kg, difficulty, .. } => {
+            AssistantAction::LogExercise { sets, reps, weight_kg, perceived_difficulty, comment, .. } => {
                 assert_eq!(sets, None);
                 assert_eq!(reps, None);
                 assert_eq!(weight_kg, None);
-                assert_eq!(difficulty, None);
+                assert_eq!(perceived_difficulty, None);
+                assert_eq!(comment, None);
             }
             _ => panic!("expected LogExercise"),
         }
@@ -175,10 +194,7 @@ mod tests {
     #[test]
     fn parse_response_null_actions() {
         let json = r#"{"message": "Hello!", "actions": null}"#;
-        // serde(default) on Vec means missing field -> empty vec, but null needs special handling
-        // With #[serde(default)] alone, null will error. Let's test the parser handles it via fallback.
         let result = serde_json::from_str::<AssistantResponse>(json);
-        // null for a Vec<T> with #[serde(default)] will fail serde; our parser.rs handles this gracefully
         assert!(result.is_err());
     }
 }

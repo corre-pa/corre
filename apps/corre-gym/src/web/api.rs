@@ -38,23 +38,19 @@ pub struct Paginated<T: Serialize> {
 
 #[derive(Debug, Deserialize)]
 pub struct UserFilter {
-    pub user_id: Option<String>,
+    pub user_id: Option<i64>,
 }
 
-async fn resolve_target_user(
-    auth: &AuthUser,
-    state: &AppState,
-    requested_user_id: Option<&str>,
-) -> Result<String, axum::response::Response> {
+async fn resolve_target_user(auth: &AuthUser, state: &AppState, requested_user_id: Option<i64>) -> Result<i64, axum::response::Response> {
     match requested_user_id {
         Some(target_id) if target_id != auth.user.id => {
             let db = state.db.lock().await;
-            if !db.can_read(&auth.user.id, target_id).unwrap_or(false) {
+            if !db.can_read(auth.user.id, target_id).unwrap_or(false) {
                 return Err(StatusCode::FORBIDDEN.into_response());
             }
-            Ok(target_id.to_string())
+            Ok(target_id)
         }
-        _ => Ok(auth.user.id.clone()),
+        _ => Ok(auth.user.id),
     }
 }
 
@@ -63,12 +59,11 @@ async fn resolve_target_user(
 const CHAT_RATE_LIMIT: usize = 10;
 const CHAT_RATE_WINDOW_SECS: u64 = 60;
 
-fn check_rate_limit(state: &AppState, user_id: &str) -> Result<(), (StatusCode, String)> {
+fn check_rate_limit(state: &AppState, user_id: i64) -> Result<(), (StatusCode, String)> {
     let now = Instant::now();
-    let mut entry = state.chat_rate_limiter.entry(user_id.to_string()).or_default();
+    let mut entry = state.chat_rate_limiter.entry(user_id).or_default();
     let window_start = now - std::time::Duration::from_secs(CHAT_RATE_WINDOW_SECS);
 
-    // Remove old entries
     entry.retain(|t| *t > window_start);
 
     if entry.len() >= CHAT_RATE_LIMIT {
@@ -81,31 +76,33 @@ fn check_rate_limit(state: &AppState, user_id: &str) -> Result<(), (StatusCode, 
     Ok(())
 }
 
-// ── Exercise logs ─────────────────────────────────────────────────────────────
+// ── Sets (formerly logs) ──────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-pub struct LogsQuery {
+pub struct SetsQuery {
     pub from: Option<String>,
     pub to: Option<String>,
-    pub exercise_id: Option<String>,
+    pub exercise_type_id: Option<i64>,
+    #[serde(default)]
+    pub include_descendants: bool,
     #[serde(flatten)]
     pub user: UserFilter,
     #[serde(flatten)]
     pub pagination: PaginationParams,
 }
 
-pub async fn logs(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<LogsQuery>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user.user_id.as_deref()).await {
+pub async fn sets(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<SetsQuery>) -> impl IntoResponse {
+    let user_id = match resolve_target_user(&auth, &state, q.user.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let (limit, offset) = q.pagination.resolve();
     let db = state.db.lock().await;
-    match db.get_logs_paginated(&user_id, q.from.as_deref(), q.to.as_deref(), q.exercise_id.as_deref(), limit, offset) {
+    match db.get_sets_paginated(user_id, q.from.as_deref(), q.to.as_deref(), q.exercise_type_id, q.include_descendants, limit, offset) {
         Ok((data, total)) => Json(Paginated { data, limit, offset, total }).into_response(),
         Err(e) => {
-            tracing::error!("Failed to get logs: {e:#}");
+            tracing::error!("Failed to get sets: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -115,9 +112,11 @@ pub async fn logs(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): 
 
 #[derive(Debug, Deserialize)]
 pub struct ExerciseProgressQuery {
-    pub exercise_id: String,
+    pub exercise_type_id: i64,
     pub from: Option<String>,
     pub to: Option<String>,
+    #[serde(default)]
+    pub include_descendants: bool,
     #[serde(flatten)]
     pub user: UserFilter,
 }
@@ -127,13 +126,13 @@ pub async fn progress_exercise(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ExerciseProgressQuery>,
 ) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let db = state.db.lock().await;
-    match db.exercise_time_series(&user_id, &q.exercise_id, q.from.as_deref(), q.to.as_deref()) {
+    match db.exercise_time_series(user_id, q.exercise_type_id, q.from.as_deref(), q.to.as_deref(), q.include_descendants) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get exercise progress: {e:#}");
@@ -152,7 +151,7 @@ pub struct VolumeQuery {
 }
 
 pub async fn progress_volume(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<VolumeQuery>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
@@ -160,7 +159,7 @@ pub async fn progress_volume(auth: AuthUser, State(state): State<Arc<AppState>>,
     let weeks = q.weeks.unwrap_or(12);
     let period = format!("-{} days", weeks * 7);
     let db = state.db.lock().await;
-    match db.volume_by_muscle_group_weekly(&user_id, &period) {
+    match db.volume_by_muscle_group_weekly(user_id, &period) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get volume data: {e:#}");
@@ -179,14 +178,14 @@ pub struct FrequencyQuery {
 }
 
 pub async fn progress_frequency(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<FrequencyQuery>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let weeks = q.weeks.unwrap_or(12);
     let db = state.db.lock().await;
-    match db.session_count_by_week(&user_id, weeks) {
+    match db.session_count_by_week(user_id, weeks) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get frequency data: {e:#}");
@@ -198,13 +197,13 @@ pub async fn progress_frequency(auth: AuthUser, State(state): State<Arc<AppState
 // ── Progress: personal records ────────────────────────────────────────────────
 
 pub async fn progress_records(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<UserFilter>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let db = state.db.lock().await;
-    match db.personal_records(&user_id) {
+    match db.personal_records(user_id) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get personal records: {e:#}");
@@ -216,13 +215,13 @@ pub async fn progress_records(auth: AuthUser, State(state): State<Arc<AppState>>
 // ── Goals ─────────────────────────────────────────────────────────────────────
 
 pub async fn goals(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<UserFilter>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let db = state.db.lock().await;
-    match db.goal_progress_report(&user_id, None, None) {
+    match db.goal_progress_report(user_id, None, None) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get goals: {e:#}");
@@ -234,13 +233,13 @@ pub async fn goals(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q):
 // ── Health ────────────────────────────────────────────────────────────────────
 
 pub async fn health(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<UserFilter>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let db = state.db.lock().await;
-    match db.list_active_health_entries(&user_id) {
+    match db.list_active_health_entries(user_id) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get health entries: {e:#}");
@@ -252,13 +251,13 @@ pub async fn health(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q)
 // ── Schedule ──────────────────────────────────────────────────────────────────
 
 pub async fn schedule(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<UserFilter>) -> impl IntoResponse {
-    let user_id = match resolve_target_user(&auth, &state, q.user_id.as_deref()).await {
+    let user_id = match resolve_target_user(&auth, &state, q.user_id).await {
         Ok(id) => id,
         Err(e) => return e,
     };
 
     let db = state.db.lock().await;
-    match db.list_schedules(&user_id) {
+    match db.list_schedules(user_id) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get schedules: {e:#}");
@@ -275,7 +274,7 @@ pub struct ChatSendBody {
 }
 
 pub async fn chat_send(auth: AuthUser, State(state): State<Arc<AppState>>, Json(body): Json<ChatSendBody>) -> impl IntoResponse {
-    if let Err((status, msg)) = check_rate_limit(&state, &auth.user.id) {
+    if let Err((status, msg)) = check_rate_limit(&state, auth.user.id) {
         return (status, Json(serde_json::json!({ "error": msg }))).into_response();
     }
 
@@ -302,7 +301,7 @@ pub struct ChatHistoryQuery {
 pub async fn chat_history(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): Query<ChatHistoryQuery>) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(50).min(200);
     let db = state.db.lock().await;
-    match db.get_recent_messages_for_platform(&auth.user.id, "web", limit) {
+    match db.get_recent_messages_for_platform(auth.user.id, "web", limit) {
         Ok(data) => Json(data).into_response(),
         Err(e) => {
             tracing::error!("Failed to get chat history: {e:#}");
@@ -325,11 +324,10 @@ pub async fn user_profile(auth: AuthUser) -> impl IntoResponse {
 
 // ── Group members ─────────────────────────────────────────────────────────────
 
-pub async fn group_members(auth: AuthUser, State(state): State<Arc<AppState>>, Path(id): Path<String>) -> impl IntoResponse {
+pub async fn group_members(auth: AuthUser, State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> impl IntoResponse {
     let db = state.db.lock().await;
 
-    // Verify the requesting user is a member of this specific group
-    match db.is_group_member(&auth.user.id, &id) {
+    match db.is_group_member(auth.user.id, id) {
         Ok(true) => {}
         Ok(false) => return StatusCode::FORBIDDEN.into_response(),
         Err(e) => {
@@ -338,7 +336,7 @@ pub async fn group_members(auth: AuthUser, State(state): State<Arc<AppState>>, P
         }
     }
 
-    match db.list_group_members(&id) {
+    match db.list_group_members(id) {
         Ok(members) => {
             let data: Vec<serde_json::Value> = members
                 .iter()

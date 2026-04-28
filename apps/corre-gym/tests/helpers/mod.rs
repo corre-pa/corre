@@ -1,261 +1,174 @@
+//! Programmatic test fixture for corre-gym integration tests.
+//!
+//! Builds a small but realistic dataset on top of the migration-seeded
+//! exercise_types taxonomy: two users, three groups, sessions/entries/sets
+//! over a six-month period, a few goals (achieved + failed), and health entries.
+
+use chrono::{Duration, NaiveDate};
 use corre_gym::db::*;
-use serde::Deserialize;
 
-#[derive(Deserialize)]
-pub struct SeedData {
-    pub users: Vec<SeedUser>,
-    pub exercises: Vec<SeedExercise>,
-    pub groups: Vec<SeedGroup>,
-    pub group_members: Vec<SeedGroupMember>,
-    pub sessions: Vec<SeedSession>,
-    pub goals: Vec<SeedGoal>,
-    pub health_entries: Vec<SeedHealthEntry>,
+#[allow(dead_code)]
+pub struct Fixture {
+    pub db: Database,
+    pub alice_id: i64,
+    pub bob_id: i64,
+    pub group_id: i64,
+    pub bench_press_id: i64,
+    pub deadlift_id: i64,
+    pub plank_id: i64,
+    pub running_id: i64,
 }
 
-#[derive(Deserialize)]
-pub struct SeedUser {
-    pub id: String,
-    pub name: String,
-    pub telegram_id: Option<String>,
-    pub signal_id: Option<String>,
-    pub timezone: String,
-    pub created_at: String,
-}
-
-#[derive(Deserialize)]
-pub struct SeedExercise {
-    pub id: String,
-    pub name: String,
-    pub aliases: Option<String>,
-    pub muscle_group_id: i32,
-    pub purpose: String,
-    pub measurement_type_id: i32,
-    pub description: Option<String>,
-    pub created_at: String,
-}
-
-#[derive(Deserialize)]
-pub struct SeedGroup {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub created_at: String,
-}
-
-#[derive(Deserialize)]
-pub struct SeedGroupMember {
-    pub user_id: String,
-    pub group_id: String,
-    pub level: String,
-}
-
-#[derive(Deserialize)]
-pub struct SeedSession {
-    pub id: String,
-    pub user_id: String,
-    pub started_at: String,
-    pub ended_at: Option<String>,
-    pub notes: Option<String>,
-    pub logs: Vec<SeedLog>,
-    pub conversation: Vec<SeedConversation>,
-}
-
-#[derive(Deserialize)]
-pub struct SeedLog {
-    pub id: String,
-    pub exercise_id: String,
-    pub sets: Option<i32>,
-    pub reps: Option<i32>,
-    pub weight_kg: Option<f64>,
-    pub duration_secs: Option<i32>,
-    pub distance_m: Option<f64>,
-    pub difficulty: String,
-    pub notes: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct SeedConversation {
-    pub role: String,
-    pub content: String,
-}
-
-#[derive(Deserialize)]
-pub struct SeedGoal {
-    pub id: String,
-    pub user_id: String,
-    pub exercise_id: String,
-    pub target_value: f64,
-    pub start_date: String,
-    pub end_date: Option<String>,
-    pub achieved: bool,
-    pub notes: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct SeedHealthEntry {
-    pub id: String,
-    pub user_id: String,
-    pub entry_type: String,
-    pub body_part: Option<String>,
-    pub severity: String,
-    pub description: String,
-    pub started_at: String,
-    pub resolved_at: Option<String>,
-    pub notes: Option<String>,
-}
-
-const MEASUREMENT_TYPE_NAMES: &[&str] = &["", "weight_reps", "time_based", "distance_based", "level_based", "score_based"];
-
-pub fn load_seed_data() -> SeedData {
-    let json = include_str!("../fixtures/seed_data.json");
-    serde_json::from_str(json).expect("Failed to parse seed_data.json")
-}
-
-pub fn seed_database(db: &Database, data: &SeedData) -> anyhow::Result<()> {
-    // 1. Users
-    for u in &data.users {
-        let now = &u.created_at;
-        let user = User {
-            id: u.id.clone(),
-            name: u.name.clone(),
-            telegram_id: u.telegram_id.clone(),
-            signal_id: u.signal_id.clone(),
-            timezone: u.timezone.clone(),
-            created_at: now.clone(),
-            updated_at: now.clone(),
-        };
-        db.insert_user(&user)?;
-    }
-
-    // 2. Groups
-    for g in &data.groups {
-        let group = Group { id: g.id.clone(), name: g.name.clone(), description: g.description.clone(), created_at: g.created_at.clone() };
-        db.insert_group(&group)?;
-    }
-
-    // 3. Group members
-    for gm in &data.group_members {
-        db.add_member(&gm.user_id, &gm.group_id, AccessLevel::from_str_loose(&gm.level))?;
-    }
-
-    // 4. Exercises (insert from fixture, using INSERT OR IGNORE since seed may overlap)
-    for ex in &data.exercises {
-        let mt_name = MEASUREMENT_TYPE_NAMES.get(ex.measurement_type_id as usize).copied().unwrap_or("weight_reps");
-        let exercise = Exercise {
-            id: ex.id.clone(),
-            name: ex.name.clone(),
-            aliases: ex.aliases.clone(),
-            muscle_group_id: ex.muscle_group_id,
-            purpose: ex.purpose.clone(),
-            measurement_type: MeasurementType::from_str_loose(mt_name),
-            description: ex.description.clone(),
-            created_at: ex.created_at.clone(),
-        };
-        // Use INSERT OR IGNORE since seed_exercises may have already inserted some
-        db.conn().execute(
-            "INSERT OR IGNORE INTO exercises (id, name, aliases, muscle_group_id, purpose, measurement_type_id, description, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![
-                exercise.id,
-                exercise.name,
-                exercise.aliases,
-                exercise.muscle_group_id,
-                exercise.purpose,
-                ex.measurement_type_id,
-                exercise.description,
-                exercise.created_at
-            ],
-        )?;
-    }
-
-    // 5. Sessions + logs + conversation
-    for sess in &data.sessions {
-        let session = Session {
-            id: sess.id.clone(),
-            user_id: sess.user_id.clone(),
-            started_at: sess.started_at.clone(),
-            ended_at: sess.ended_at.clone(),
-            notes: sess.notes.clone(),
-        };
-        db.conn().execute(
-            "INSERT INTO sessions (id, user_id, started_at, ended_at, notes) VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![session.id, session.user_id, session.started_at, session.ended_at, session.notes],
-        )?;
-
-        for log in &sess.logs {
-            let exercise_log = ExerciseLog {
-                id: log.id.clone(),
-                user_id: sess.user_id.clone(),
-                exercise_id: log.exercise_id.clone(),
-                session_id: Some(sess.id.clone()),
-                logged_at: sess.started_at.clone(),
-                sets: log.sets,
-                reps: log.reps,
-                weight_kg: log.weight_kg,
-                duration_secs: log.duration_secs,
-                distance_m: log.distance_m,
-                level: None,
-                difficulty: Difficulty::from_str_loose(&log.difficulty),
-                notes: log.notes.clone(),
-            };
-            db.insert_log(&exercise_log)?;
-        }
-
-        for (i, msg) in sess.conversation.iter().enumerate() {
-            let conv = ConversationMessage {
-                id: format!("{}-msg-{i}", sess.id),
-                user_id: sess.user_id.clone(),
-                platform: "telegram".into(),
-                role: ConversationRole::from_str_loose(&msg.role),
-                content: msg.content.clone(),
-                timestamp: sess.started_at.clone(),
-                exclude_from_context: false,
-            };
-            db.insert_message(&conv)?;
-        }
-    }
-
-    // 6. Goals
-    for g in &data.goals {
-        let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let goal = ExerciseGoal {
-            id: g.id.clone(),
-            user_id: g.user_id.clone(),
-            exercise_id: g.exercise_id.clone(),
-            target_value: g.target_value,
-            start_date: g.start_date.clone(),
-            end_date: g.end_date.clone(),
-            achieved: g.achieved,
-            notes: g.notes.clone(),
-            created_at: now.clone(),
-            updated_at: now,
-        };
-        db.insert_goal(&goal)?;
-    }
-
-    // 7. Health entries
-    for h in &data.health_entries {
-        let entry = HealthEntry {
-            id: h.id.clone(),
-            user_id: h.user_id.clone(),
-            entry_type: HealthEntryType::from_str_loose(&h.entry_type),
-            body_part: h.body_part.clone(),
-            severity: h.severity.clone(),
-            description: h.description.clone(),
-            started_at: h.started_at.clone(),
-            resolved_at: h.resolved_at.clone(),
-            notes: h.notes.clone(),
-            updated_at: h.started_at.clone(),
-        };
-        db.insert_health_entry(&entry)?;
-    }
-
-    Ok(())
-}
-
-pub fn seeded_db() -> (Database, SeedData) {
+/// Build the fixture. Returns an in-memory DB pre-populated with everything the
+/// integration tests need.
+#[allow(dead_code)]
+pub fn build_fixture() -> Fixture {
     let db = Database::open_in_memory().unwrap();
-    let data = load_seed_data();
-    seed_database(&db, &data).unwrap();
-    (db, data)
+    let alice_id = db.insert_user(&new_user("Alice", Some("alice_tg"), "Europe/London")).unwrap();
+    let bob_id = db.insert_user(&new_user("Bob", Some("bob_tg"), "America/New_York")).unwrap();
+
+    let group = Group { id: 0, name: "Training Buddies".into(), description: None, created_at: String::new() };
+    let group_id = db.insert_group(&group).unwrap();
+    db.add_member(alice_id, group_id, AccessLevel::Admin).unwrap();
+    db.add_member(bob_id, group_id, AccessLevel::Write).unwrap();
+
+    let bench_press_id = db.get_exercise_type_by_name("Bench Press").unwrap().unwrap().id;
+    let deadlift_id = db.get_exercise_type_by_name("Deadlift").unwrap().unwrap().id;
+    let plank_id = db.get_exercise_type_by_name("Plank").unwrap().unwrap().id;
+    let running_id = db.get_exercise_type_by_name("Running").unwrap().unwrap().id;
+
+    seed_alice_history(&db, alice_id, bench_press_id, deadlift_id, plank_id, running_id);
+    seed_bob_history(&db, bob_id, bench_press_id);
+    seed_goals(&db, alice_id, bob_id, bench_press_id, deadlift_id);
+    seed_health(&db, alice_id);
+
+    Fixture { db, alice_id, bob_id, group_id, bench_press_id, deadlift_id, plank_id, running_id }
+}
+
+fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, plank: i64, running: i64) {
+    // 26 weekly sessions starting 2025-01-06 (Mon) — gap during 2025-07-01..2025-07-14 (injury).
+    let start = NaiveDate::from_ymd_opt(2025, 1, 6).unwrap();
+    for week in 0..26 {
+        let date = start + Duration::days((week * 7) as i64);
+
+        if date >= NaiveDate::from_ymd_opt(2025, 7, 1).unwrap() && date <= NaiveDate::from_ymd_opt(2025, 7, 14).unwrap() {
+            continue; // injury gap
+        }
+
+        let started = format!("{date} 09:00:00");
+        let ended = format!("{date} 10:30:00");
+        db.conn()
+            .execute(
+                "INSERT INTO sessions (user_id, started_at, ended_at, notes) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![user_id, started, ended, format!("Week {}", week + 1)],
+            )
+            .unwrap();
+        let session_id = db.conn().last_insert_rowid();
+
+        let mut bench_entry = new_exercise_entry(user_id, Some(session_id), None);
+        bench_entry.start_timestamp = format!("{date} 09:05:00");
+        let bench_entry_id = db.insert_entry(&bench_entry).unwrap();
+
+        let progressing_weight = 70.0 + (week as f64) * 1.0;
+        for set_idx in 0..3 {
+            let mut s = new_exercise_set(bench_entry_id, bench, MeasurementType::WeightReps, progressing_weight);
+            s.count = Some(8);
+            s.order_idx = set_idx;
+            s.logged_at = format!("{date} 09:05:00");
+            db.insert_set(&s).unwrap();
+        }
+
+        if week % 2 == 0 {
+            let mut dl_entry = new_exercise_entry(user_id, Some(session_id), None);
+            dl_entry.start_timestamp = format!("{date} 09:30:00");
+            let dl_entry_id = db.insert_entry(&dl_entry).unwrap();
+            let dl_weight = 100.0 + (week as f64) * 1.5;
+            for set_idx in 0..3 {
+                let mut s = new_exercise_set(dl_entry_id, deadlift, MeasurementType::WeightReps, dl_weight);
+                s.count = Some(5);
+                s.order_idx = set_idx;
+                s.logged_at = format!("{date} 09:30:00");
+                db.insert_set(&s).unwrap();
+            }
+        }
+
+        // Plank (time-based)
+        let mut plank_entry = new_exercise_entry(user_id, Some(session_id), None);
+        plank_entry.start_timestamp = format!("{date} 09:55:00");
+        let plank_entry_id = db.insert_entry(&plank_entry).unwrap();
+        let mut plank_set = new_exercise_set(plank_entry_id, plank, MeasurementType::TimeBased, 60.0 + week as f64);
+        plank_set.logged_at = format!("{date} 09:55:00");
+        db.insert_set(&plank_set).unwrap();
+
+        // Running (distance-based)
+        let mut run_entry = new_exercise_entry(user_id, Some(session_id), None);
+        run_entry.start_timestamp = format!("{date} 10:05:00");
+        let run_entry_id = db.insert_entry(&run_entry).unwrap();
+        let mut run_set = new_exercise_set(run_entry_id, running, MeasurementType::DistanceBased, 3000.0 + (week as f64) * 100.0);
+        run_set.logged_at = format!("{date} 10:05:00");
+        db.insert_set(&run_set).unwrap();
+
+        let prompt =
+            new_conversation_message(user_id, "telegram", ConversationRole::User, &format!("Logged my session on {date}"));
+        db.insert_message(&prompt).unwrap();
+        let reply = new_conversation_message(user_id, "telegram", ConversationRole::Assistant, "Nice work! Keep it up.");
+        db.insert_message(&reply).unwrap();
+    }
+}
+
+fn seed_bob_history(db: &Database, user_id: i64, bench: i64) {
+    for day in 0..10 {
+        let date = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap() + Duration::days(day * 3);
+        db.conn()
+            .execute(
+                "INSERT INTO sessions (user_id, started_at, ended_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![user_id, format!("{date} 18:00:00"), format!("{date} 19:00:00")],
+            )
+            .unwrap();
+        let session_id = db.conn().last_insert_rowid();
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, Some(session_id), None)).unwrap();
+        for _ in 0..3 {
+            let mut s = new_exercise_set(entry_id, bench, MeasurementType::WeightReps, 60.0);
+            s.count = Some(10);
+            s.logged_at = format!("{date} 18:05:00");
+            db.insert_set(&s).unwrap();
+        }
+    }
+}
+
+fn seed_goals(db: &Database, alice: i64, bob: i64, bench: i64, deadlift: i64) {
+    // Alice: achieved bench goal (90 kg)
+    let mut achieved = new_exercise_goal(alice, bench, 90.0);
+    achieved.start_date = "2025-01-01".into();
+    achieved.end_date = Some("2025-12-31".into());
+    achieved.achieved = true;
+    db.insert_goal(&achieved).unwrap();
+
+    // Alice: failed deadlift goal (target way too high, end_date in past)
+    let mut failed = new_exercise_goal(alice, deadlift, 500.0);
+    failed.start_date = "2024-01-01".into();
+    failed.end_date = Some("2024-06-01".into());
+    db.insert_goal(&failed).unwrap();
+
+    // Bob: active goal
+    let mut active = new_exercise_goal(bob, bench, 100.0);
+    active.start_date = "2025-01-01".into();
+    active.end_date = Some("2026-12-31".into());
+    db.insert_goal(&active).unwrap();
+}
+
+fn seed_health(db: &Database, user_id: i64) {
+    // Resolved injury (the "gap" in Alice's training)
+    let mut injury = new_health_entry(user_id, HealthEntryType::Injury, "Lower back strain");
+    injury.body_part = Some("lower back".into());
+    injury.severity = "moderate".into();
+    injury.started_at = "2025-07-01".into();
+    injury.resolved_at = Some("2025-07-14".into());
+    db.insert_health_entry(&injury).unwrap();
+
+    // Active wellbeing entry
+    let mut active = new_health_entry(user_id, HealthEntryType::Wellbeing, "Sleeping well");
+    active.severity = "mild".into();
+    active.started_at = "2025-08-01".into();
+    db.insert_health_entry(&active).unwrap();
 }

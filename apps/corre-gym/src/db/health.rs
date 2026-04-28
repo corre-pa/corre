@@ -25,36 +25,35 @@ const SELECT_HEALTH: &str = "\
     FROM health_entries";
 
 impl Database {
-    pub fn insert_health_entry(&self, entry: &HealthEntry) -> anyhow::Result<()> {
+    pub fn insert_health_entry(&self, entry: &HealthEntry) -> anyhow::Result<i64> {
         self.conn().execute(
-            "INSERT INTO health_entries (id, user_id, entry_type, body_part, severity, description, \
-             started_at, resolved_at, notes, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO health_entries (user_id, entry_type, body_part, severity, description, \
+                                          started_at, resolved_at, notes) \
+             VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, datetime('now')), ?7, ?8)",
             params![
-                entry.id,
                 entry.user_id,
                 entry.entry_type.as_str(),
                 entry.body_part,
                 entry.severity,
                 entry.description,
-                entry.started_at,
+                if entry.started_at.is_empty() { None } else { Some(&entry.started_at) },
                 entry.resolved_at,
                 entry.notes,
-                entry.updated_at,
             ],
         )?;
-        tracing::debug!(id = %entry.id, entry_type = %entry.entry_type.as_str(), description = %entry.description, "DB: inserted health entry");
-        Ok(())
+        let id = self.conn().last_insert_rowid();
+        tracing::debug!(id, entry_type = %entry.entry_type.as_str(), description = %entry.description, "DB: inserted health entry");
+        Ok(id)
     }
 
-    pub fn get_health_entry(&self, id: &str) -> anyhow::Result<Option<HealthEntry>> {
+    pub fn get_health_entry(&self, id: i64) -> anyhow::Result<Option<HealthEntry>> {
         let sql = format!("{SELECT_HEALTH} WHERE id = ?1");
         let mut stmt = self.conn().prepare(&sql)?;
         let mut rows = stmt.query_map(params![id], row_to_health_entry)?;
         rows.next().transpose().context("Failed to read health entry row")
     }
 
-    pub fn list_active_health_entries(&self, user_id: &str) -> anyhow::Result<Vec<HealthEntry>> {
+    pub fn list_active_health_entries(&self, user_id: i64) -> anyhow::Result<Vec<HealthEntry>> {
         let sql = format!("{SELECT_HEALTH} WHERE user_id = ?1 AND resolved_at IS NULL ORDER BY started_at DESC");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id], row_to_health_entry)?;
@@ -63,7 +62,7 @@ impl Database {
 
     pub fn list_health_entries_by_type(
         &self,
-        user_id: &str,
+        user_id: i64,
         entry_type: HealthEntryType,
         limit: usize,
     ) -> anyhow::Result<Vec<HealthEntry>> {
@@ -73,19 +72,19 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list health entries by type")
     }
 
-    pub fn list_health_history(&self, user_id: &str, limit: usize) -> anyhow::Result<Vec<HealthEntry>> {
+    pub fn list_health_history(&self, user_id: i64, limit: usize) -> anyhow::Result<Vec<HealthEntry>> {
         let sql = format!("{SELECT_HEALTH} WHERE user_id = ?1 ORDER BY started_at DESC LIMIT ?2");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, limit as i64], row_to_health_entry)?;
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list health history")
     }
 
-    pub fn resolve_health_entry(&self, id: &str) -> anyhow::Result<()> {
+    pub fn resolve_health_entry(&self, id: i64) -> anyhow::Result<()> {
         let rows = self
             .conn()
             .execute("UPDATE health_entries SET resolved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1", params![id])?;
         anyhow::ensure!(rows > 0, "Health entry with id {id} not found");
-        tracing::debug!(id = %id, "DB: resolved health entry");
+        tracing::debug!(id, "DB: resolved health entry");
         Ok(())
     }
 
@@ -120,15 +119,14 @@ mod tests {
     #[test]
     fn insert_and_list_active() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let mut entry = new_health_entry(&user.id, HealthEntryType::Injury, "Shoulder pain");
+        let mut entry = new_health_entry(user_id, HealthEntryType::Injury, "Shoulder pain");
         entry.body_part = Some("shoulder".into());
         entry.severity = "moderate".into();
         db.insert_health_entry(&entry).unwrap();
 
-        let active = db.list_active_health_entries(&user.id).unwrap();
+        let active = db.list_active_health_entries(user_id).unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].entry_type, HealthEntryType::Injury);
     }
@@ -136,47 +134,39 @@ mod tests {
     #[test]
     fn list_by_type() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let injury = new_health_entry(&user.id, HealthEntryType::Injury, "Bad knee");
-        let illness = new_health_entry(&user.id, HealthEntryType::Illness, "Cold");
-        db.insert_health_entry(&injury).unwrap();
-        db.insert_health_entry(&illness).unwrap();
+        db.insert_health_entry(&new_health_entry(user_id, HealthEntryType::Injury, "Bad knee")).unwrap();
+        db.insert_health_entry(&new_health_entry(user_id, HealthEntryType::Illness, "Cold")).unwrap();
 
-        let injuries = db.list_health_entries_by_type(&user.id, HealthEntryType::Injury, 10).unwrap();
+        let injuries = db.list_health_entries_by_type(user_id, HealthEntryType::Injury, 10).unwrap();
         assert_eq!(injuries.len(), 1);
     }
 
     #[test]
     fn resolve_health_entry() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let entry = new_health_entry(&user.id, HealthEntryType::Injury, "Sprained ankle");
-        db.insert_health_entry(&entry).unwrap();
+        let entry_id = db.insert_health_entry(&new_health_entry(user_id, HealthEntryType::Injury, "Sprained ankle")).unwrap();
 
-        db.resolve_health_entry(&entry.id).unwrap();
-        let fetched = db.get_health_entry(&entry.id).unwrap().unwrap();
+        db.resolve_health_entry(entry_id).unwrap();
+        let fetched = db.get_health_entry(entry_id).unwrap().unwrap();
         assert!(fetched.resolved_at.is_some());
 
-        let active = db.list_active_health_entries(&user.id).unwrap();
+        let active = db.list_active_health_entries(user_id).unwrap();
         assert!(active.is_empty());
     }
 
     #[test]
     fn list_history_ordered_by_date() {
         let db = test_db();
-        let user = new_user("Tester", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
 
-        let e1 = new_health_entry(&user.id, HealthEntryType::Injury, "First");
-        let e2 = new_health_entry(&user.id, HealthEntryType::Illness, "Second");
-        db.insert_health_entry(&e1).unwrap();
-        db.insert_health_entry(&e2).unwrap();
+        db.insert_health_entry(&new_health_entry(user_id, HealthEntryType::Injury, "First")).unwrap();
+        db.insert_health_entry(&new_health_entry(user_id, HealthEntryType::Illness, "Second")).unwrap();
 
-        let history = db.list_health_history(&user.id, 10).unwrap();
+        let history = db.list_health_history(user_id, 10).unwrap();
         assert_eq!(history.len(), 2);
     }
 }

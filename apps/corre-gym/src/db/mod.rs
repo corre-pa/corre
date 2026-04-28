@@ -2,16 +2,15 @@ mod access;
 mod conversation;
 mod dashboard;
 mod database;
-mod exercises;
+mod entries;
+mod exercise_types;
 mod goals;
 mod groups;
 mod health;
-mod logs;
 mod migrations;
 mod models;
 mod progress;
 mod schedules;
-mod seed;
 mod users;
 
 pub use database::Database;

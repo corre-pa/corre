@@ -19,17 +19,18 @@ pub(super) fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
 const SELECT_USER: &str = "SELECT id, name, telegram_id, signal_id, timezone, created_at, updated_at FROM users";
 
 impl Database {
-    pub fn insert_user(&self, user: &User) -> anyhow::Result<()> {
+    /// Insert a user. Returns the generated id.
+    pub fn insert_user(&self, user: &User) -> anyhow::Result<i64> {
         self.conn().execute(
-            "INSERT INTO users (id, name, telegram_id, signal_id, timezone, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![user.id, user.name, user.telegram_id, user.signal_id, user.timezone, user.created_at, user.updated_at],
+            "INSERT INTO users (name, telegram_id, signal_id, timezone) VALUES (?1, ?2, ?3, ?4)",
+            params![user.name, user.telegram_id, user.signal_id, user.timezone],
         )?;
-        tracing::debug!(id = %user.id, name = %user.name, telegram_id = ?user.telegram_id, "DB: inserted user");
-        Ok(())
+        let id = self.conn().last_insert_rowid();
+        tracing::debug!(id, name = %user.name, telegram_id = ?user.telegram_id, "DB: inserted user");
+        Ok(id)
     }
 
-    pub fn get_user(&self, id: &str) -> anyhow::Result<Option<User>> {
+    pub fn get_user(&self, id: i64) -> anyhow::Result<Option<User>> {
         let sql = format!("{SELECT_USER} WHERE id = ?1");
         let mut stmt = self.conn().prepare(&sql)?;
         let mut rows = stmt.query_map(params![id], row_to_user)?;
@@ -57,14 +58,14 @@ impl Database {
             params![user.name, user.telegram_id, user.signal_id, user.timezone, user.id],
         )?;
         anyhow::ensure!(rows > 0, "User with id {} not found", user.id);
-        tracing::debug!(id = %user.id, "DB: updated user");
+        tracing::debug!(id = user.id, "DB: updated user");
         Ok(())
     }
 
-    pub fn delete_user(&self, id: &str) -> anyhow::Result<()> {
+    pub fn delete_user(&self, id: i64) -> anyhow::Result<()> {
         let rows = self.conn().execute("DELETE FROM users WHERE id = ?1", params![id])?;
         anyhow::ensure!(rows > 0, "User with id {id} not found");
-        tracing::debug!(id = %id, "DB: deleted user");
+        tracing::debug!(id, "DB: deleted user");
         Ok(())
     }
 
@@ -78,7 +79,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::super::models::new_user;
+    use super::super::models::{MeasurementType, new_exercise_entry, new_exercise_set, new_user};
     use super::*;
 
     fn test_db() -> Database {
@@ -89,9 +90,9 @@ mod tests {
     fn insert_and_get_user() {
         let db = test_db();
         let user = new_user("Alice", Some("alice_tg"), "Europe/London");
-        db.insert_user(&user).unwrap();
+        let id = db.insert_user(&user).unwrap();
 
-        let fetched = db.get_user(&user.id).unwrap().unwrap();
+        let fetched = db.get_user(id).unwrap().unwrap();
         assert_eq!(fetched.name, "Alice");
         assert_eq!(fetched.telegram_id.as_deref(), Some("alice_tg"));
         assert_eq!(fetched.timezone, "Europe/London");
@@ -101,10 +102,10 @@ mod tests {
     fn get_by_telegram_id() {
         let db = test_db();
         let user = new_user("Bob", Some("bob_tg"), "UTC");
-        db.insert_user(&user).unwrap();
+        let id = db.insert_user(&user).unwrap();
 
         let fetched = db.get_user_by_telegram_id("bob_tg").unwrap().unwrap();
-        assert_eq!(fetched.id, user.id);
+        assert_eq!(fetched.id, id);
     }
 
     #[test]
@@ -119,39 +120,35 @@ mod tests {
     #[test]
     fn update_user() {
         let db = test_db();
-        let mut user = new_user("Alice", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user = new_user("Alice", None, "UTC");
+        let id = db.insert_user(&user).unwrap();
 
-        user.name = "Alicia".into();
-        user.telegram_id = Some("alicia_tg".into());
-        db.update_user(&user).unwrap();
+        let mut fetched = db.get_user(id).unwrap().unwrap();
+        fetched.name = "Alicia".into();
+        fetched.telegram_id = Some("alicia_tg".into());
+        db.update_user(&fetched).unwrap();
 
-        let fetched = db.get_user(&user.id).unwrap().unwrap();
-        assert_eq!(fetched.name, "Alicia");
-        assert_eq!(fetched.telegram_id.as_deref(), Some("alicia_tg"));
+        let after = db.get_user(id).unwrap().unwrap();
+        assert_eq!(after.name, "Alicia");
+        assert_eq!(after.telegram_id.as_deref(), Some("alicia_tg"));
     }
 
     #[test]
     fn delete_user_cascades() {
         let db = test_db();
         let user = new_user("Alice", None, "UTC");
-        db.insert_user(&user).unwrap();
+        let user_id = db.insert_user(&user).unwrap();
 
-        // Insert an exercise and a log for the user
-        db.seed_exercises().unwrap();
-        let exercises = db.list_exercises().unwrap();
-        let ex = &exercises[0];
+        let bp = db.get_exercise_type_by_name("Bench Press").unwrap().unwrap();
+        let session = db.start_session(user_id, None).unwrap();
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let mut s = new_exercise_set(entry_id, bp.id, MeasurementType::WeightReps, 60.0);
+        s.count = Some(10);
+        db.insert_set(&s).unwrap();
 
-        let session = db.start_session(&user.id, None).unwrap();
-        let mut log = super::super::models::new_exercise_log(&user.id, &ex.id, Some(&session.id));
-        log.sets = Some(3);
-        log.reps = Some(10);
-        log.weight_kg = Some(60.0);
-        db.insert_log(&log).unwrap();
-
-        // Delete user — cascades should remove session + log
-        db.delete_user(&user.id).unwrap();
-        assert!(db.get_user(&user.id).unwrap().is_none());
-        assert!(db.get_session(&session.id).unwrap().is_none());
+        db.delete_user(user_id).unwrap();
+        assert!(db.get_user(user_id).unwrap().is_none());
+        assert!(db.get_session(session.id).unwrap().is_none());
+        assert!(db.get_entry(entry_id).unwrap().is_none());
     }
 }

@@ -10,15 +10,13 @@ fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<Group> {
 }
 
 impl Database {
-    pub fn insert_group(&self, group: &Group) -> anyhow::Result<()> {
-        self.conn().execute(
-            "INSERT INTO groups (id, name, description, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![group.id, group.name, group.description, group.created_at],
-        )?;
-        Ok(())
+    pub fn insert_group(&self, group: &Group) -> anyhow::Result<i64> {
+        self.conn()
+            .execute("INSERT INTO groups (name, description) VALUES (?1, ?2)", params![group.name, group.description])?;
+        Ok(self.conn().last_insert_rowid())
     }
 
-    pub fn get_group(&self, id: &str) -> anyhow::Result<Option<Group>> {
+    pub fn get_group(&self, id: i64) -> anyhow::Result<Option<Group>> {
         let mut stmt = self.conn().prepare("SELECT id, name, description, created_at FROM groups WHERE id = ?1")?;
         let mut rows = stmt.query_map(params![id], row_to_group)?;
         rows.next().transpose().context("Failed to read group row")
@@ -38,13 +36,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn delete_group(&self, id: &str) -> anyhow::Result<()> {
+    pub fn delete_group(&self, id: i64) -> anyhow::Result<()> {
         let rows = self.conn().execute("DELETE FROM groups WHERE id = ?1", params![id])?;
         anyhow::ensure!(rows > 0, "Group with id {id} not found");
         Ok(())
     }
 
-    pub fn add_member(&self, user_id: &str, group_id: &str, level: AccessLevel) -> anyhow::Result<()> {
+    pub fn add_member(&self, user_id: i64, group_id: i64, level: AccessLevel) -> anyhow::Result<()> {
         self.conn().execute(
             "INSERT INTO group_members (user_id, group_id, level) VALUES (?1, ?2, ?3)",
             params![user_id, group_id, level.as_str()],
@@ -52,13 +50,13 @@ impl Database {
         Ok(())
     }
 
-    pub fn remove_member(&self, user_id: &str, group_id: &str) -> anyhow::Result<()> {
+    pub fn remove_member(&self, user_id: i64, group_id: i64) -> anyhow::Result<()> {
         let rows = self.conn().execute("DELETE FROM group_members WHERE user_id = ?1 AND group_id = ?2", params![user_id, group_id])?;
         anyhow::ensure!(rows > 0, "Membership not found for user {user_id} in group {group_id}");
         Ok(())
     }
 
-    pub fn set_member_level(&self, user_id: &str, group_id: &str, level: AccessLevel) -> anyhow::Result<()> {
+    pub fn set_member_level(&self, user_id: i64, group_id: i64, level: AccessLevel) -> anyhow::Result<()> {
         let rows = self.conn().execute(
             "UPDATE group_members SET level = ?1 WHERE user_id = ?2 AND group_id = ?3",
             params![level.as_str(), user_id, group_id],
@@ -67,7 +65,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn list_group_members(&self, group_id: &str) -> anyhow::Result<Vec<(User, AccessLevel)>> {
+    pub fn list_group_members(&self, group_id: i64) -> anyhow::Result<Vec<(User, AccessLevel)>> {
         let mut stmt = self.conn().prepare(
             "SELECT u.id, u.name, u.telegram_id, u.signal_id, u.timezone, u.created_at, u.updated_at, gm.level \
              FROM users u \
@@ -82,7 +80,7 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list group members")
     }
 
-    pub fn list_user_groups(&self, user_id: &str) -> anyhow::Result<Vec<(Group, AccessLevel)>> {
+    pub fn list_user_groups(&self, user_id: i64) -> anyhow::Result<Vec<(Group, AccessLevel)>> {
         let mut stmt = self.conn().prepare(
             "SELECT g.id, g.name, g.description, g.created_at, gm.level \
              FROM groups g \
@@ -108,86 +106,70 @@ mod tests {
     }
 
     fn make_group(name: &str) -> Group {
-        Group { id: uuid::Uuid::new_v4().to_string(), name: name.to_string(), description: None, created_at: "2025-01-01 00:00:00".into() }
+        Group { id: 0, name: name.to_string(), description: None, created_at: "2025-01-01 00:00:00".into() }
     }
 
     #[test]
     fn create_group_and_add_members() {
         let db = test_db();
-        let group = make_group("Gym Buddies");
-        db.insert_group(&group).unwrap();
+        let group_id = db.insert_group(&make_group("Gym Buddies")).unwrap();
 
-        let u1 = new_user("Alice", None, "UTC");
-        let u2 = new_user("Bob", None, "UTC");
-        db.insert_user(&u1).unwrap();
-        db.insert_user(&u2).unwrap();
+        let u1_id = db.insert_user(&new_user("Alice", None, "UTC")).unwrap();
+        let u2_id = db.insert_user(&new_user("Bob", None, "UTC")).unwrap();
 
-        db.add_member(&u1.id, &group.id, AccessLevel::Admin).unwrap();
-        db.add_member(&u2.id, &group.id, AccessLevel::Read).unwrap();
+        db.add_member(u1_id, group_id, AccessLevel::Admin).unwrap();
+        db.add_member(u2_id, group_id, AccessLevel::Read).unwrap();
 
-        let members = db.list_group_members(&group.id).unwrap();
+        let members = db.list_group_members(group_id).unwrap();
         assert_eq!(members.len(), 2);
     }
 
     #[test]
     fn remove_member() {
         let db = test_db();
-        let group = make_group("Test Group");
-        db.insert_group(&group).unwrap();
+        let group_id = db.insert_group(&make_group("Test Group")).unwrap();
+        let user_id = db.insert_user(&new_user("Alice", None, "UTC")).unwrap();
+        db.add_member(user_id, group_id, AccessLevel::Read).unwrap();
+        db.remove_member(user_id, group_id).unwrap();
 
-        let user = new_user("Alice", None, "UTC");
-        db.insert_user(&user).unwrap();
-        db.add_member(&user.id, &group.id, AccessLevel::Read).unwrap();
-        db.remove_member(&user.id, &group.id).unwrap();
-
-        let members = db.list_group_members(&group.id).unwrap();
+        let members = db.list_group_members(group_id).unwrap();
         assert!(members.is_empty());
     }
 
     #[test]
     fn set_member_level() {
         let db = test_db();
-        let group = make_group("Test Group");
-        db.insert_group(&group).unwrap();
+        let group_id = db.insert_group(&make_group("Test Group")).unwrap();
+        let user_id = db.insert_user(&new_user("Alice", None, "UTC")).unwrap();
+        db.add_member(user_id, group_id, AccessLevel::Read).unwrap();
+        db.set_member_level(user_id, group_id, AccessLevel::Admin).unwrap();
 
-        let user = new_user("Alice", None, "UTC");
-        db.insert_user(&user).unwrap();
-        db.add_member(&user.id, &group.id, AccessLevel::Read).unwrap();
-        db.set_member_level(&user.id, &group.id, AccessLevel::Admin).unwrap();
-
-        let members = db.list_group_members(&group.id).unwrap();
+        let members = db.list_group_members(group_id).unwrap();
         assert_eq!(members[0].1, AccessLevel::Admin);
     }
 
     #[test]
     fn delete_group_removes_memberships() {
         let db = test_db();
-        let group = make_group("Doomed Group");
-        db.insert_group(&group).unwrap();
+        let group_id = db.insert_group(&make_group("Doomed Group")).unwrap();
+        let user_id = db.insert_user(&new_user("Alice", None, "UTC")).unwrap();
+        db.add_member(user_id, group_id, AccessLevel::Read).unwrap();
 
-        let user = new_user("Alice", None, "UTC");
-        db.insert_user(&user).unwrap();
-        db.add_member(&user.id, &group.id, AccessLevel::Read).unwrap();
-
-        db.delete_group(&group.id).unwrap();
-        let groups = db.list_user_groups(&user.id).unwrap();
+        db.delete_group(group_id).unwrap();
+        let groups = db.list_user_groups(user_id).unwrap();
         assert!(groups.is_empty());
     }
 
     #[test]
     fn list_user_groups() {
         let db = test_db();
-        let g1 = make_group("Group A");
-        let g2 = make_group("Group B");
-        db.insert_group(&g1).unwrap();
-        db.insert_group(&g2).unwrap();
+        let g1 = db.insert_group(&make_group("Group A")).unwrap();
+        let g2 = db.insert_group(&make_group("Group B")).unwrap();
+        let user_id = db.insert_user(&new_user("Alice", None, "UTC")).unwrap();
+        db.add_member(user_id, g1, AccessLevel::Write).unwrap();
+        db.add_member(user_id, g2, AccessLevel::Admin).unwrap();
 
-        let user = new_user("Alice", None, "UTC");
-        db.insert_user(&user).unwrap();
-        db.add_member(&user.id, &g1.id, AccessLevel::Write).unwrap();
-        db.add_member(&user.id, &g2.id, AccessLevel::Admin).unwrap();
-
-        let groups = db.list_user_groups(&user.id).unwrap();
+        let groups = db.list_user_groups(user_id).unwrap();
         assert_eq!(groups.len(), 2);
     }
 }
