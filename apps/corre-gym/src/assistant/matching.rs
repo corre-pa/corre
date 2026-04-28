@@ -83,6 +83,7 @@ mod tests {
                 purpose: Some("strength".to_string()),
                 measurement_type: Some(MeasurementType::WeightReps),
                 description: None,
+                url: None,
                 created_at: String::new(),
             },
             muscle_group: Some(muscle_group.to_string()),

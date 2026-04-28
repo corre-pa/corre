@@ -39,6 +39,7 @@ CREATE TABLE exercise_types (
     purpose             TEXT,
     measurement_type_id INTEGER REFERENCES measurement_types(id),
     description         TEXT,
+    url                 TEXT,  -- relative path to an illustrative image/video; populated for muscle_group / specific_muscle, NULL for exercises and variations until per-exercise media is sourced
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (parent_id, name),
     CHECK ((level = 'muscle_group' AND parent_id IS NULL)
@@ -224,22 +225,22 @@ CREATE INDEX idx_conversation_user_time ON conversation_history(user_id, timesta
 -- ============================================
 -- Level 1: muscle groups
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (1, 'Chest',     NULL, 'muscle_group'),
-    (2, 'Back',      NULL, 'muscle_group'),
-    (3, 'Shoulders', NULL, 'muscle_group'),
-    (4, 'Arms',      NULL, 'muscle_group'),
-    (5, 'Legs',      NULL, 'muscle_group'),
-    (6, 'Core',      NULL, 'muscle_group'),
-    (7, 'Cardio',    NULL, 'muscle_group');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (1, 'Chest',     NULL, 'muscle_group', '/static/muscles/chest.png'),
+    (2, 'Back',      NULL, 'muscle_group', '/static/muscles/back.png'),
+    (3, 'Shoulders', NULL, 'muscle_group', '/static/muscles/shoulders.png'),
+    (4, 'Arms',      NULL, 'muscle_group', '/static/muscles/arms.png'),
+    (5, 'Legs',      NULL, 'muscle_group', NULL),
+    (6, 'Core',      NULL, 'muscle_group', '/static/muscles/core.png'),
+    (7, 'Cardio',    NULL, 'muscle_group', NULL);
 
 
 -- ============================================
 -- CHEST  (id 1)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (100, 'Pectoral',          1, 'specific_muscle'),
-    (101, 'Serratus Anterior', 1, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (100, 'Pectoral',          1, 'specific_muscle', '/static/muscles/pectoral.png'),
+    (101, 'Serratus Anterior', 1, 'specific_muscle', '/static/muscles/serratus-anterior.png');
 
 -- Pectoral exercises
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
@@ -279,10 +280,10 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, pur
 -- ============================================
 -- BACK  (id 2)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (200, 'Latissimus Dorsi', 2, 'specific_muscle'),
-    (201, 'Rhomboid',         2, 'specific_muscle'),
-    (202, 'Trapezius',        2, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (200, 'Latissimus Dorsi', 2, 'specific_muscle', '/static/muscles/latissimus-dorsi.png'),
+    (201, 'Rhomboid',         2, 'specific_muscle', '/static/muscles/rhomboid.png'),
+    (202, 'Trapezius',        2, 'specific_muscle', '/static/muscles/trapezius.png');
 
 -- Latissimus Dorsi exercises
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
@@ -332,10 +333,10 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, ali
 -- ============================================
 -- SHOULDERS  (id 3)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (300, 'Anterior Deltoid',  3, 'specific_muscle'),
-    (301, 'Lateral Deltoid',   3, 'specific_muscle'),
-    (302, 'Posterior Deltoid', 3, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (300, 'Anterior Deltoid',  3, 'specific_muscle', '/static/muscles/anterior-deltoid.png'),
+    (301, 'Lateral Deltoid',   3, 'specific_muscle', '/static/muscles/lateral-deltoid.png'),
+    (302, 'Posterior Deltoid', 3, 'specific_muscle', '/static/muscles/posterior-deltoid.png');
 
 -- Anterior Deltoid exercises
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
@@ -378,10 +379,10 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, ali
 -- ============================================
 -- ARMS  (id 4)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (400, 'Biceps',  4, 'specific_muscle'),
-    (401, 'Triceps', 4, 'specific_muscle'),
-    (402, 'Forearm', 4, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (400, 'Biceps',  4, 'specific_muscle', '/static/muscles/biceps.png'),
+    (401, 'Triceps', 4, 'specific_muscle', '/static/muscles/triceps.png'),
+    (402, 'Forearm', 4, 'specific_muscle', NULL);
 
 -- Biceps exercises
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
@@ -418,11 +419,11 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, pur
 -- ============================================
 -- LEGS  (id 5)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (500, 'Quadriceps', 5, 'specific_muscle'),
-    (501, 'Hamstrings', 5, 'specific_muscle'),
-    (502, 'Glutes',     5, 'specific_muscle'),
-    (503, 'Calves',     5, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (500, 'Quadriceps', 5, 'specific_muscle', NULL),
+    (501, 'Hamstrings', 5, 'specific_muscle', NULL),
+    (502, 'Glutes',     5, 'specific_muscle', '/static/muscles/glutes.png'),
+    (503, 'Calves',     5, 'specific_muscle', '/static/muscles/calves.png');
 
 -- Quadriceps exercises
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
@@ -489,10 +490,10 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, ali
 -- ============================================
 -- CORE  (id 6)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (600, 'Rectus Abdominis',     6, 'specific_muscle'),
-    (601, 'Oblique',              6, 'specific_muscle'),
-    (602, 'Transverse Abdominis', 6, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (600, 'Rectus Abdominis',     6, 'specific_muscle', '/static/muscles/rectus-abdominis.png'),
+    (601, 'Oblique',              6, 'specific_muscle', NULL),
+    (602, 'Transverse Abdominis', 6, 'specific_muscle', NULL);
 
 -- Rectus Abdominis exercises
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
@@ -538,8 +539,8 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, ali
 -- ============================================
 -- CARDIO  (id 7)
 -- ============================================
-INSERT INTO exercise_types (id, name, parent_id, level) VALUES
-    (700, 'Cardiovascular', 7, 'specific_muscle');
+INSERT INTO exercise_types (id, name, parent_id, level, url) VALUES
+    (700, 'Cardiovascular', 7, 'specific_muscle', NULL);
 
 INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, purpose, aliases) VALUES
     (7000, 'Running',   700, 'exercise', 3, 'cardio', 'run,jog,jogging'),
@@ -547,4 +548,4 @@ INSERT INTO exercise_types (id, name, parent_id, level, measurement_type_id, pur
     (7002, 'Rowing',    700, 'exercise', 3, 'cardio', 'erg,rower,rowing'),
     (7003, 'Swimming',  700, 'exercise', 3, 'cardio', 'swim,laps'),
     (7004, 'Jump Rope', 700, 'exercise', 2, 'cardio', 'skipping,skip rope'),
-    (7004, 'Padel',     700, 'exercise', 3, 'cardio', 'padel');
+    (7005, 'Padel',     700, 'exercise', 3, 'cardio', 'padel');

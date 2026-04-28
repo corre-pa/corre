@@ -5,7 +5,7 @@ use super::database::Database;
 use super::models::{ExerciseLevel, ExerciseType, ExerciseTypeWithAncestry, MeasurementType};
 
 const SELECT_EXERCISE_TYPE: &str = "\
-    SELECT id, name, parent_id, level, aliases, purpose, measurement_type_id, description, created_at \
+    SELECT id, name, parent_id, level, aliases, purpose, measurement_type_id, description, url, created_at \
     FROM exercise_types";
 
 fn row_to_exercise_type(row: &Row) -> rusqlite::Result<ExerciseType> {
@@ -18,7 +18,8 @@ fn row_to_exercise_type(row: &Row) -> rusqlite::Result<ExerciseType> {
         purpose: row.get(5)?,
         measurement_type: row.get::<_, Option<i64>>(6)?.map(MeasurementType::from_id),
         description: row.get(7)?,
-        created_at: row.get(8)?,
+        url: row.get(8)?,
+        created_at: row.get(9)?,
     })
 }
 
@@ -26,9 +27,9 @@ fn row_to_exercise_type_with_ancestry(row: &Row) -> rusqlite::Result<ExerciseTyp
     let exercise_type = row_to_exercise_type(row)?;
     Ok(ExerciseTypeWithAncestry {
         exercise_type,
-        muscle_group: row.get(9)?,
-        specific_muscle: row.get(10)?,
-        exercise: row.get(11)?,
+        muscle_group: row.get(10)?,
+        specific_muscle: row.get(11)?,
+        exercise: row.get(12)?,
     })
 }
 
@@ -60,9 +61,9 @@ impl Database {
         let mt_id = et.measurement_type.map(|m| m.id());
         self.conn().execute(
             "INSERT INTO exercise_types \
-                (name, parent_id, level, aliases, purpose, measurement_type_id, description) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![et.name, et.parent_id, et.level.as_str(), et.aliases, et.purpose, mt_id, et.description,],
+                (name, parent_id, level, aliases, purpose, measurement_type_id, description, url) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![et.name, et.parent_id, et.level.as_str(), et.aliases, et.purpose, mt_id, et.description, et.url,],
         )?;
         Ok(self.conn().last_insert_rowid())
     }
@@ -126,16 +127,16 @@ impl Database {
     pub fn list_exercise_types_with_ancestry(&self) -> anyhow::Result<Vec<ExerciseTypeWithAncestry>> {
         let sql = "\
             WITH RECURSIVE ancestors(id, name, parent_id, level, aliases, purpose, \
-                                     measurement_type_id, description, created_at, \
+                                     measurement_type_id, description, url, created_at, \
                                      ex_name, sm_name, mg_name) AS (\
                 SELECT et.id, et.name, et.parent_id, et.level, et.aliases, et.purpose, \
-                       et.measurement_type_id, et.description, et.created_at, \
+                       et.measurement_type_id, et.description, et.url, et.created_at, \
                        NULL, NULL, NULL \
                 FROM exercise_types et \
                 WHERE et.level = 'muscle_group' \
                 UNION ALL \
                 SELECT et.id, et.name, et.parent_id, et.level, et.aliases, et.purpose, \
-                       et.measurement_type_id, et.description, et.created_at, \
+                       et.measurement_type_id, et.description, et.url, et.created_at, \
                        CASE et.level \
                            WHEN 'variation' THEN a.name \
                            ELSE a.ex_name \
@@ -152,7 +153,7 @@ impl Database {
                 FROM exercise_types et \
                 JOIN ancestors a ON et.parent_id = a.id \
             ) \
-            SELECT id, name, parent_id, level, aliases, purpose, measurement_type_id, description, created_at, \
+            SELECT id, name, parent_id, level, aliases, purpose, measurement_type_id, description, url, created_at, \
                    mg_name, sm_name, ex_name \
             FROM ancestors \
             ORDER BY level, name";
@@ -170,7 +171,7 @@ impl Database {
                 SELECT et.id FROM exercise_types et JOIN tree t ON et.parent_id = t.id \
             ) \
             SELECT et.id, et.name, et.parent_id, et.level, et.aliases, et.purpose, \
-                   et.measurement_type_id, et.description, et.created_at \
+                   et.measurement_type_id, et.description, et.url, et.created_at \
             FROM exercise_types et \
             JOIN tree t ON et.id = t.id \
             ORDER BY et.level, et.name";
@@ -197,9 +198,9 @@ impl Database {
         let mt_id = et.measurement_type.map(|m| m.id());
         let rows = self.conn().execute(
             "UPDATE exercise_types SET name = ?1, parent_id = ?2, level = ?3, \
-                 aliases = ?4, purpose = ?5, measurement_type_id = ?6, description = ?7 \
-             WHERE id = ?8",
-            params![et.name, et.parent_id, et.level.as_str(), et.aliases, et.purpose, mt_id, et.description, et.id,],
+                 aliases = ?4, purpose = ?5, measurement_type_id = ?6, description = ?7, url = ?8 \
+             WHERE id = ?9",
+            params![et.name, et.parent_id, et.level.as_str(), et.aliases, et.purpose, mt_id, et.description, et.url, et.id,],
         )?;
         anyhow::ensure!(rows > 0, "exercise_type id {} not found", et.id);
         Ok(())
@@ -300,6 +301,7 @@ mod tests {
             purpose: None,
             measurement_type: None,
             description: None,
+            url: None,
             created_at: String::new(),
         };
         assert!(db.insert_exercise_type(&bad).is_err());
@@ -318,6 +320,7 @@ mod tests {
             purpose: None,
             measurement_type: None,
             description: None,
+            url: None,
             created_at: String::new(),
         };
         assert!(db.insert_exercise_type(&bad).is_err());
@@ -338,6 +341,7 @@ mod tests {
             purpose: Some("strength".to_string()),
             measurement_type: Some(MeasurementType::WeightReps),
             description: None,
+            url: None,
             created_at: String::new(),
         };
         let new_id = db.insert_exercise_type(&new_var).unwrap();

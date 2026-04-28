@@ -70,6 +70,10 @@ async fn static_handler(axum::extract::Path(path): axum::extract::Path<String>) 
         "image/svg+xml"
     } else if path.ends_with(".png") {
         "image/png"
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if path.ends_with(".gif") {
+        "image/gif"
     } else if path.ends_with(".ico") {
         "image/x-icon"
     } else {

@@ -301,6 +301,7 @@ pub struct ExerciseType {
     pub purpose: Option<String>,
     pub measurement_type: Option<MeasurementType>,
     pub description: Option<String>,
+    pub url: Option<String>,
     pub created_at: String,
 }
 
