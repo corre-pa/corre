@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS conversation_history;
+DROP TABLE IF EXISTS health_entries;
+DROP TABLE IF EXISTS schedule_exercises;
+DROP TABLE IF EXISTS schedules;
+DROP TABLE IF EXISTS exercise_logs;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS exercise_goals;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS exercises;
+DROP TABLE IF EXISTS measurement_types;
+DROP TABLE IF EXISTS muscle_groups;

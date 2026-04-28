@@ -33,6 +33,8 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 rust-embed = { workspace = true }
 rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }
+include_dir = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use rusqlite::Connection;
 
-use super::migrations::{MIGRATIONS, MIGRATIONS_V2};
+use super::migrations::MIGRATIONS;
 
 pub struct Database {
     conn: Connection,
@@ -14,36 +14,32 @@ impl Database {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| format!("Failed to create database directory {}", parent.display()))?;
         }
-        let conn = Connection::open(path).with_context(|| format!("Failed to open database at {}", path.display()))?;
+        let mut conn = Connection::open(path).with_context(|| format!("Failed to open database at {}", path.display()))?;
+        run_migrations(&mut conn)?;
         let db = Self { conn };
-        db.run_migrations()?;
+        super::seed::seed_exercises(&db).context("Failed to seed exercises")?;
+        tracing::debug!("Database migrations applied");
         Ok(db)
     }
 
     pub fn open_in_memory() -> anyhow::Result<Self> {
-        let conn = Connection::open_in_memory().context("Failed to open in-memory database")?;
+        let mut conn = Connection::open_in_memory().context("Failed to open in-memory database")?;
+        run_migrations(&mut conn)?;
         let db = Self { conn };
-        db.run_migrations()?;
-        Ok(db)
-    }
-
-    fn run_migrations(&self) -> anyhow::Result<()> {
-        self.conn.execute_batch("PRAGMA journal_mode = WAL;")?;
-        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        self.conn.execute_batch(MIGRATIONS).context("Failed to run database migrations")?;
-        match self.conn.execute_batch(MIGRATIONS_V2) {
-            Ok(()) => {}
-            Err(e) if e.to_string().contains("duplicate column name") => {}
-            Err(e) => return Err(e).context("Failed to run v2 migrations"),
-        }
-        super::seed::seed_exercises(self).context("Failed to seed exercises")?;
+        super::seed::seed_exercises(&db).context("Failed to seed exercises")?;
         tracing::debug!("Database migrations applied");
-        Ok(())
+        Ok(db)
     }
 
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+}
+
+fn run_migrations(conn: &mut Connection) -> anyhow::Result<()> {
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+    MIGRATIONS.to_latest(conn).context("Failed to apply database migrations")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -94,5 +90,12 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let count: i64 = db.conn().query_row("SELECT COUNT(*) FROM measurement_types", [], |row| row.get(0)).unwrap();
         assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn user_version_set_to_latest() {
+        let db = Database::open_in_memory().unwrap();
+        let version: i64 = db.conn().query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+        assert_eq!(version, 2);
     }
 }
