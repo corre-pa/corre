@@ -11,9 +11,7 @@ use anyhow::{Context as _, anyhow};
 use cucumber::gherkin::Table;
 use tokio::sync::Mutex;
 
-use corre_gym::db::{
-    Database, Difficulty, ExerciseLevel, ExerciseSet, ExerciseType, HealthEntry, MeasurementType, Session,
-};
+use corre_gym::db::{Database, Difficulty, ExerciseLevel, ExerciseSet, ExerciseType, HealthEntry, MeasurementType, Session};
 
 // ── Table helpers ─────────────────────────────────────────────────────────────
 
@@ -45,13 +43,8 @@ pub fn table_to_map(table: &Table) -> anyhow::Result<HashMap<String, String>> {
 /// already handles aliases internally). Falls back to titlecased and normalised forms so
 /// "bench press", "Bench Press", and "BENCH PRESS" all resolve.
 pub async fn resolve_exercise_type(db: &Arc<Mutex<Database>>, name: &str) -> anyhow::Result<ExerciseType> {
-    let candidates = [
-        name.to_string(),
-        name.trim().to_string(),
-        titlecase(name.trim()),
-        name.trim().to_lowercase(),
-        name.trim().to_uppercase(),
-    ];
+    let candidates =
+        [name.to_string(), name.trim().to_string(), titlecase(name.trim()), name.trim().to_lowercase(), name.trim().to_uppercase()];
     let db = db.lock().await;
     for candidate in &candidates {
         if let Some(et) = db.get_exercise_type_by_name(candidate)? {
@@ -146,7 +139,11 @@ async fn match_set_field(db: &Arc<Mutex<Database>>, set: &ExerciseSet, field: &s
         }
         "measurement_type" => {
             let expected = MeasurementType::from_str_loose(value);
-            anyhow::ensure!(set.measurement_type == expected, "measurement_type mismatch: expected `{value}`, got `{}`", set.measurement_type);
+            anyhow::ensure!(
+                set.measurement_type == expected,
+                "measurement_type mismatch: expected `{value}`, got `{}`",
+                set.measurement_type
+            );
         }
         "count" | "reps" => {
             let expected: i32 = value.parse().with_context(|| format!("parsing {field} `{value}` as i32"))?;
@@ -155,11 +152,7 @@ async fn match_set_field(db: &Arc<Mutex<Database>>, set: &ExerciseSet, field: &s
         }
         "value" | "weight_kg" => {
             let expected: f64 = value.parse().with_context(|| format!("parsing {field} `{value}` as f64"))?;
-            anyhow::ensure!(
-                (set.value - expected).abs() < 0.01,
-                "{field} mismatch: expected {expected:.2}, got {:.2}",
-                set.value
-            );
+            anyhow::ensure!((set.value - expected).abs() < 0.01, "{field} mismatch: expected {expected:.2}, got {:.2}", set.value);
         }
         "perceived_difficulty" | "difficulty" => {
             let expected = Difficulty::from_str_loose(value);
@@ -187,9 +180,8 @@ async fn match_set_field(db: &Arc<Mutex<Database>>, set: &ExerciseSet, field: &s
 /// Apply a 2-column key/value table to the most-recently logged set for a user.
 pub async fn assert_last_set_matches(db: &Arc<Mutex<Database>>, user_id: i64, table: &Table) -> anyhow::Result<()> {
     let map = table_to_map(table)?;
-    let set = last_set(db, user_id)
-        .await?
-        .ok_or_else(|| anyhow!("expected a logged set for user {user_id}, but the sets table is empty"))?;
+    let set =
+        last_set(db, user_id).await?.ok_or_else(|| anyhow!("expected a logged set for user {user_id}, but the sets table is empty"))?;
     for (key, value) in &map {
         match_set_field(db, &set, key, value.trim()).await.with_context(|| format!("checking field `{key}` on last set"))?;
     }

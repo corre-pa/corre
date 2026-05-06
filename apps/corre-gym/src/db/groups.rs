@@ -11,8 +11,7 @@ fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<Group> {
 
 impl Database {
     pub fn insert_group(&self, group: &Group) -> anyhow::Result<i64> {
-        self.conn()
-            .execute("INSERT INTO groups (name, description) VALUES (?1, ?2)", params![group.name, group.description])?;
+        self.conn().execute("INSERT INTO groups (name, description) VALUES (?1, ?2)", params![group.name, group.description])?;
         Ok(self.conn().last_insert_rowid())
     }
 

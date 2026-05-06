@@ -37,10 +37,7 @@ pub async fn register_user(
     };
     let raw_set_cookie = create_session_cookie(app_state, &user, telegram_id);
     let cookie_pair = raw_set_cookie.split(';').next().context("Set-Cookie had no '=' segment")?.trim().to_string();
-    debug_assert!(
-        cookie_pair.starts_with(&format!("{SESSION_COOKIE_NAME}=")),
-        "minted cookie does not start with expected session name"
-    );
+    debug_assert!(cookie_pair.starts_with(&format!("{SESSION_COOKIE_NAME}=")), "minted cookie does not start with expected session name");
     tracing::debug!(
         user_id = user.id,
         telegram_id,

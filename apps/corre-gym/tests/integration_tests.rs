@@ -24,17 +24,16 @@ fn fixture_loads_completely() {
 #[test]
 fn invariant_closed_sessions_have_no_open_entries() {
     let f = build_fixture();
-    let leaks: i64 = f
-        .db
-        .conn()
-        .query_row(
-            "SELECT COUNT(*) FROM exercise_entry ee \
+    let leaks: i64 =
+        f.db.conn()
+            .query_row(
+                "SELECT COUNT(*) FROM exercise_entry ee \
              JOIN sessions s ON ee.session_id = s.id \
              WHERE s.ended_at IS NOT NULL AND ee.end_timestamp IS NULL",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
     assert_eq!(leaks, 0, "ended sessions must have no open exercise_entries");
 }
 
@@ -128,11 +127,10 @@ fn access_control_across_seeded_groups() {
 #[test]
 fn conversation_history_present() {
     let f = build_fixture();
-    let msg_count: i64 = f
-        .db
-        .conn()
-        .query_row("SELECT COUNT(*) FROM conversation_history WHERE user_id = ?1", rusqlite::params![f.alice_id], |r| r.get(0))
-        .unwrap();
+    let msg_count: i64 =
+        f.db.conn()
+            .query_row("SELECT COUNT(*) FROM conversation_history WHERE user_id = ?1", rusqlite::params![f.alice_id], |r| r.get(0))
+            .unwrap();
     assert!(msg_count >= 20);
 }
 

@@ -10,9 +10,7 @@ async fn following_set_recorded(world: &mut GymWorld, step: &Step) {
     let alias = world.current_user.clone().expect("no current user");
     let user_id = world.user(&alias).expect("user lookup").user.id;
     let table = step.table.as_ref().expect("`the following set is recorded:` requires a data table");
-    assertions::assert_last_set_matches(world.db(), user_id, table)
-        .await
-        .expect("set assertion failed");
+    assertions::assert_last_set_matches(world.db(), user_id, table).await.expect("set assertion failed");
 }
 
 /// Matches `the session has 1 set recorded`, `the session has 5 sets recorded`, with or
@@ -21,11 +19,10 @@ async fn following_set_recorded(world: &mut GymWorld, step: &Step) {
 async fn session_set_count(world: &mut GymWorld, expected: usize) {
     let alias = world.current_user.clone().expect("no current user");
     let user_id = world.user(&alias).expect("user lookup").user.id;
-    let actual = assertions::active_session_set_count(world.db(), user_id)
-        .await
-        .expect("counting sets in active session");
+    let actual = assertions::active_session_set_count(world.db(), user_id).await.expect("counting sets in active session");
     assert_eq!(
-        actual, expected,
+        actual,
+        expected,
         "expected {expected} set(s) in active session, found {actual}. Last reply: {:?}",
         world.last_reply.as_ref().map(|r| r.text.as_str())
     );
@@ -39,7 +36,5 @@ async fn recorded_sets_are(world: &mut GymWorld, step: &Step) {
     let alias = world.current_user.clone().expect("no current user");
     let user_id = world.user(&alias).expect("user lookup").user.id;
     let table = step.table.as_ref().expect("`the recorded sets are:` requires a data table");
-    assertions::assert_active_session_sets_match(world.db(), user_id, table)
-        .await
-        .expect("multi-row sets assertion failed");
+    assertions::assert_active_session_sets_match(world.db(), user_id, table).await.expect("multi-row sets assertion failed");
 }

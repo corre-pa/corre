@@ -16,8 +16,7 @@ impl Database {
     pub fn start_session(&self, user_id: i64, notes: Option<&str>) -> anyhow::Result<Session> {
         self.conn().execute("INSERT INTO sessions (user_id, notes) VALUES (?1, ?2)", params![user_id, notes])?;
         let id = self.conn().last_insert_rowid();
-        let session =
-            self.get_session(id)?.context("Session disappeared immediately after insert")?;
+        let session = self.get_session(id)?.context("Session disappeared immediately after insert")?;
         Ok(session)
     }
 
@@ -27,10 +26,7 @@ impl Database {
     pub fn end_session(&self, session_id: i64) -> anyhow::Result<()> {
         let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
-        let rows = tx.execute(
-            "UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1 AND ended_at IS NULL",
-            params![session_id],
-        )?;
+        let rows = tx.execute("UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1 AND ended_at IS NULL", params![session_id])?;
         anyhow::ensure!(rows > 0, "session id {session_id} not found or already ended");
         tx.execute(
             "UPDATE exercise_entry \
@@ -85,13 +81,8 @@ impl Database {
              ORDER BY s.started_at DESC",
         )?;
         let rows = stmt.query_map(params![user_id, from, to], |row| {
-            let session = Session {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                started_at: row.get(2)?,
-                ended_at: row.get(3)?,
-                notes: row.get(4)?,
-            };
+            let session =
+                Session { id: row.get(0)?, user_id: row.get(1)?, started_at: row.get(2)?, ended_at: row.get(3)?, notes: row.get(4)? };
             Ok(SessionSummary { session, exercise_count: row.get(5)?, duration_mins: row.get(6)? })
         })?;
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list session summaries")
@@ -221,9 +212,8 @@ impl Database {
     /// Number of sets in an exercise_entry. Used by the set-count checkpoint and
     /// the premature-close pushback in the assistant handler.
     pub fn count_sets_for_entry(&self, entry_id: i64) -> anyhow::Result<i64> {
-        let count: i64 = self
-            .conn()
-            .query_row("SELECT COUNT(*) FROM sets WHERE exercise_entry_id = ?1", params![entry_id], |row| row.get(0))?;
+        let count: i64 =
+            self.conn().query_row("SELECT COUNT(*) FROM sets WHERE exercise_entry_id = ?1", params![entry_id], |row| row.get(0))?;
         Ok(count)
     }
 

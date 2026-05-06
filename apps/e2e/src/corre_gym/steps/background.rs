@@ -55,18 +55,11 @@ async fn telegram_user(world: &mut GymWorld, step: &Step) {
 #[given(expr = "a clean corre-gym instance")]
 async fn clean_instance(world: &mut GymWorld) {
     let db = world.db().lock().await;
-    let user_count: i64 =
-        db.conn().query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).expect("counting users");
-    let session_count: i64 =
-        db.conn().query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0)).expect("counting sessions");
-    let set_count: i64 =
-        db.conn().query_row("SELECT COUNT(*) FROM sets", [], |row| row.get(0)).expect("counting sets");
+    let user_count: i64 = db.conn().query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0)).expect("counting users");
+    let session_count: i64 = db.conn().query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0)).expect("counting sessions");
+    let set_count: i64 = db.conn().query_row("SELECT COUNT(*) FROM sets", [], |row| row.get(0)).expect("counting sets");
 
-    assert!(
-        user_count as usize == world.users.len(),
-        "expected {} registered users, DB has {user_count}",
-        world.users.len()
-    );
+    assert!(user_count as usize == world.users.len(), "expected {} registered users, DB has {user_count}", world.users.len());
     assert_eq!(session_count, 0, "fresh corre-gym should have no sessions, found {session_count}");
     assert_eq!(set_count, 0, "fresh corre-gym should have no sets, found {set_count}");
 }

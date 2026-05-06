@@ -141,12 +141,7 @@ pub async fn telegram_login_callback(State(state): State<Arc<AppState>>, Query(p
 fn exercise_types_to_json(catalogue: &[ExerciseTypeWithAncestry]) -> String {
     let list: Vec<serde_json::Value> = catalogue
         .iter()
-        .filter(|e| {
-            matches!(
-                e.exercise_type.level,
-                crate::db::ExerciseLevel::Exercise | crate::db::ExerciseLevel::Variation
-            )
-        })
+        .filter(|e| matches!(e.exercise_type.level, crate::db::ExerciseLevel::Exercise | crate::db::ExerciseLevel::Variation))
         .map(|e| {
             serde_json::json!({
                 "id": e.exercise_type.id,

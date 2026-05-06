@@ -23,9 +23,7 @@ pub fn load_test_config() -> anyhow::Result<CorreConfig> {
     cfg.llm.base_url = corre_core::secret::resolve_value(&cfg.llm.base_url).context("resolving LLM base_url")?;
     cfg.llm.model = corre_core::secret::resolve_value(&cfg.llm.model).context("resolving LLM model")?;
     if cfg.llm.base_url.trim().is_empty() {
-        anyhow::bail!(
-            "CORRE_TEST_LLM_BASE_URL is empty. Copy apps/e2e/tests/fixtures/.env.example to .env and fill it in."
-        );
+        anyhow::bail!("CORRE_TEST_LLM_BASE_URL is empty. Copy apps/e2e/tests/fixtures/.env.example to .env and fill it in.");
     }
     if cfg.llm.model.trim().is_empty() {
         anyhow::bail!("CORRE_TEST_LLM_MODEL is empty");

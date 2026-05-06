@@ -319,9 +319,9 @@ mod tests {
     fn is_group_member_works() {
         let db = Database::open_in_memory().unwrap();
         let user_id = db.insert_user(&new_user("Tester", None, "UTC")).unwrap();
-        let group_id =
-            db.insert_group(&Group { id: 0, name: "Test Group".into(), description: None, created_at: "2025-01-01 00:00:00".into() })
-                .unwrap();
+        let group_id = db
+            .insert_group(&Group { id: 0, name: "Test Group".into(), description: None, created_at: "2025-01-01 00:00:00".into() })
+            .unwrap();
         db.add_member(user_id, group_id, AccessLevel::Read).unwrap();
         assert!(db.is_group_member(user_id, group_id).unwrap());
         assert!(!db.is_group_member(user_id, 99999).unwrap());

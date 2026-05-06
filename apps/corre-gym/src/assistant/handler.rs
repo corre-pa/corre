@@ -463,12 +463,7 @@ impl AssistantHandler {
                 .find(|e| e.exercise_type.id == p.exercise_type_id)
                 .map(|e| e.exercise_type.name.clone())
                 .unwrap_or_else(|| "unknown".to_string());
-            PlanExerciseView {
-                exercise_name,
-                target_sets: p.target_sets,
-                target_reps: p.target_reps,
-                target_weight_kg: p.target_weight_kg,
-            }
+            PlanExerciseView { exercise_name, target_sets: p.target_sets, target_reps: p.target_reps, target_weight_kg: p.target_weight_kg }
         });
         Ok(Some(ActivePlanView { name: schedule.name, completed_exercise_ids: completed_exercise_ids.to_vec(), next }))
     }
@@ -487,7 +482,7 @@ impl AssistantHandler {
 
         messages.push(LlmMessage { role: LlmRole::User, content: user_text.to_string() });
 
-        let request = LlmRequest { messages, temperature: Some(0.3), max_completion_tokens: Some(1024), json_mode: false };
+        let request = LlmRequest { messages, temperature: Some(0.1), max_completion_tokens: Some(1024), json_mode: true };
 
         let response = self.llm.complete(request).await.context("LLM completion failed")?;
         Ok(response.content)
@@ -498,30 +493,26 @@ impl AssistantHandler {
     async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<Option<String>> {
         tracing::debug!(action = ?action, user_id = user.id, "Executing action");
         match action {
-            AssistantAction::LogExercise { exercise, sets, reps, weight_kg, perceived_difficulty, comment } => {
-                let et = find_exercise_type(&self.catalogue, exercise)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+            AssistantAction::LogExercise { exercise, reps, weight_kg, perceived_difficulty, comment, .. } => {
+                let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
                 let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
-                let n_sets = sets.unwrap_or(1).max(1);
                 let weight = weight_kg.unwrap_or(0.0);
                 let pd = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 {
                     let db = self.db.lock().await;
-                    for i in 0..n_sets {
-                        let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::WeightReps, weight);
-                        s.count = *reps;
-                        s.order_idx = i;
-                        s.perceived_difficulty = pd;
-                        s.comment = comment.clone();
-                        db.insert_set(&s)?;
-                    }
+                    let existing = db.list_sets_for_entry(entry_id)?.len() as i32;
+                    let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::WeightReps, weight);
+                    s.count = *reps;
+                    s.order_idx = existing;
+                    s.perceived_difficulty = pd;
+                    s.comment = comment.clone();
+                    db.insert_set(&s)?;
                 }
                 Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
             AssistantAction::LogExerciseTimed { exercise, duration_secs, perceived_difficulty, comment } => {
-                let et = find_exercise_type(&self.catalogue, exercise)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
                 let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::TimeBased, *duration_secs as f64);
@@ -531,8 +522,7 @@ impl AssistantHandler {
                 Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
             AssistantAction::LogExerciseDistance { exercise, distance_m, duration_secs, perceived_difficulty, comment } => {
-                let et = find_exercise_type(&self.catalogue, exercise)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
                 let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
                 let value = distance_m.unwrap_or_else(|| duration_secs.unwrap_or(0) as f64);
@@ -624,8 +614,7 @@ impl AssistantHandler {
                 Ok(None)
             }
             AssistantAction::SetGoal { exercise, target_value, end_date } => {
-                let et = find_exercise_type(&self.catalogue, exercise)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+                let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let mut goal = new_exercise_goal(user.id, et.exercise_type.id, *target_value);
                 goal.end_date = end_date.clone();
                 tracing::debug!(exercise = %et.exercise_type.name, target = %target_value, end_date = ?end_date, "Inserting goal");
@@ -687,12 +676,9 @@ impl AssistantHandler {
             let session = active.as_ref().ok_or_else(|| anyhow::anyhow!("no active session"))?;
             let open = db.list_open_entries_for_session(session.id)?;
             let entry = if let Some(name) = exercise {
-                let et = find_exercise_type(&self.catalogue, name)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {name}"))?;
+                let et = find_exercise_type(&self.catalogue, name).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {name}"))?;
                 open.into_iter().find(|e| {
-                    db.list_sets_for_entry(e.id)
-                        .map(|sets| sets.iter().any(|s| s.exercise_type_id == et.exercise_type.id))
-                        .unwrap_or(false)
+                    db.list_sets_for_entry(e.id).map(|sets| sets.iter().any(|s| s.exercise_type_id == et.exercise_type.id)).unwrap_or(false)
                 })
             } else {
                 open.into_iter().last()
@@ -718,9 +704,7 @@ impl AssistantHandler {
     async fn set_count_checkpoint_suffix(&self, entry_id: i64, exercise_name: &str) -> anyhow::Result<Option<String>> {
         let count = self.db.lock().await.count_sets_for_entry(entry_id)?;
         if count >= 3 {
-            Ok(Some(format!(
-                "You've logged {count} sets of {exercise_name}. Want another set, or move to the next exercise?"
-            )))
+            Ok(Some(format!("You've logged {count} sets of {exercise_name}. Want another set, or move to the next exercise?")))
         } else {
             Ok(None)
         }
@@ -824,11 +808,7 @@ fn escape_html(s: &str) -> String {
 /// Resolve the exercise an entry "belongs to" via its first set. Returns
 /// `"unknown"` if the entry has no sets yet (which only happens transiently
 /// before the first insert).
-pub(crate) fn entry_exercise_name(
-    db: &Database,
-    catalogue: &[ExerciseTypeWithAncestry],
-    entry_id: i64,
-) -> anyhow::Result<String> {
+pub(crate) fn entry_exercise_name(db: &Database, catalogue: &[ExerciseTypeWithAncestry], entry_id: i64) -> anyhow::Result<String> {
     let sets = db.list_sets_for_entry(entry_id)?;
     let Some(first) = sets.first() else {
         return Ok("unknown".to_string());
@@ -920,7 +900,6 @@ fn build_leaked_view(
     Ok(views)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,10 +913,7 @@ mod tests {
 
     impl MockLlm {
         fn new(response: &str) -> Self {
-            Self {
-                response: std::sync::Mutex::new(response.to_string()),
-                recorded: std::sync::Mutex::new(Vec::new()),
-            }
+            Self { response: std::sync::Mutex::new(response.to_string()), recorded: std::sync::Mutex::new(Vec::new()) }
         }
 
         fn set_response(&self, response: &str) {
@@ -1026,7 +1002,9 @@ mod tests {
     #[tokio::test]
     async fn exercise_logging_creates_records() {
         let response = r#"{"message": "Logged your bench press!", "actions": [
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
         ]}"#;
         let (handler, _) = setup_handler(response).await;
         let msg = make_message(12345, "hello");
@@ -1048,8 +1026,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_auto_start() {
-        let response =
-            r#"{"message": "Logged!", "actions": [{"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 1}]}"#;
+        let response = r#"{"message": "Logged!", "actions": [{"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 1}]}"#;
         let (handler, _) = setup_handler(response).await;
         let msg = make_message(12345, "hello");
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
@@ -1088,7 +1065,9 @@ mod tests {
     async fn multiple_actions_execute() {
         let response = r#"{"message": "Started session and logged exercise!", "actions": [
             {"type": "start_session", "notes": "Chest day"},
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
         ]}"#;
         let (handler, _) = setup_handler(response).await;
         let msg = make_message(12345, "hello");
@@ -1249,8 +1228,8 @@ mod tests {
             .find(|m| matches!(m.role, LlmRole::Assistant))
             .expect("turn-2 history must include the prior assistant turn");
 
-        let parsed: crate::assistant::actions::AssistantResponse = serde_json::from_str(&assistant_turn.content)
-            .expect("assistant turn in history must round-trip as the JSON envelope");
+        let parsed: crate::assistant::actions::AssistantResponse =
+            serde_json::from_str(&assistant_turn.content).expect("assistant turn in history must round-trip as the JSON envelope");
         assert!(
             !parsed.actions.is_empty(),
             "expected the prior assistant turn to retain its actions array, got: {}",
@@ -1302,10 +1281,7 @@ mod tests {
         let session = db.get_active_session(user.id).unwrap().unwrap();
         let entries = db.list_entries_for_session(session.id).unwrap();
         assert_eq!(entries.len(), 2, "two distinct entries for two exercises (superset)");
-        let mut counts: Vec<usize> = entries
-            .iter()
-            .map(|e| db.list_sets_for_entry(e.id).unwrap().len())
-            .collect();
+        let mut counts: Vec<usize> = entries.iter().map(|e| db.list_sets_for_entry(e.id).unwrap().len()).collect();
         counts.sort();
         assert_eq!(counts, vec![1, 2], "Pull-Up=1, Bench Press=2");
         for e in &entries {
@@ -1316,7 +1292,9 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_suffix_appears_at_3_sets_and_repeats_at_4() {
         let log_three = r#"{"message": "Done!", "actions": [
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
         ]}"#;
         let (handler, llm) = setup_handler(log_three).await;
         let msg = make_message(12345, "hello");
@@ -1338,7 +1316,8 @@ mod tests {
     #[tokio::test]
     async fn premature_close_pushback_at_2_sets() {
         let response_log = r#"{"message": "Logged.", "actions": [
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 2, "reps": 8, "weight_kg": 80.0}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
         ]}"#;
         let (handler, llm) = setup_handler(response_log).await;
         let msg = make_message(12345, "hello");
@@ -1364,7 +1343,8 @@ mod tests {
     #[tokio::test]
     async fn confirm_close_after_pushback_actually_closes() {
         let response_log = r#"{"message": "Logged.", "actions": [
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 2, "reps": 8, "weight_kg": 80.0}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
         ]}"#;
         let (handler, llm) = setup_handler(response_log).await;
         let msg = make_message(12345, "hello");
@@ -1388,7 +1368,9 @@ mod tests {
     #[tokio::test]
     async fn close_exercise_entry_with_three_sets_succeeds() {
         let response_log = r#"{"message": "Logged.", "actions": [
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
         ]}"#;
         let (handler, llm) = setup_handler(response_log).await;
         let msg = make_message(12345, "hello");
@@ -1451,10 +1433,8 @@ mod tests {
         // The original session is still the active one — no new session was created.
         let db = handler.db.lock().await;
         let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
-        let session_count: i64 = db
-            .conn()
-            .query_row("SELECT COUNT(*) FROM sessions WHERE user_id = ?1", rusqlite::params![user.id], |r| r.get(0))
-            .unwrap();
+        let session_count: i64 =
+            db.conn().query_row("SELECT COUNT(*) FROM sessions WHERE user_id = ?1", rusqlite::params![user.id], |r| r.get(0)).unwrap();
         assert_eq!(session_count, 1);
     }
 
@@ -1502,16 +1482,16 @@ mod tests {
     #[tokio::test]
     async fn cmd_status_renders_completed_section() {
         let log = r#"{"message": "ok", "actions": [
-            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
         ]}"#;
         let (handler, llm) = setup_handler(log).await;
         let msg = make_message(12345, "hello");
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         let _ = handler.handle_text_message(&msg, "3 sets bench").await.unwrap();
 
-        llm.set_response(
-            r#"{"message": "ok", "actions": [{"type": "close_exercise_entry", "exercise": "Bench Press"}]}"#,
-        );
+        llm.set_response(r#"{"message": "ok", "actions": [{"type": "close_exercise_entry", "exercise": "Bench Press"}]}"#);
         let _ = handler.handle_text_message(&msg, "done").await.unwrap();
 
         let reply = handler.handle_text_message(&msg, "/status").await.unwrap();

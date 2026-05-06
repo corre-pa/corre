@@ -25,12 +25,7 @@ fn row_to_exercise_type(row: &Row) -> rusqlite::Result<ExerciseType> {
 
 fn row_to_exercise_type_with_ancestry(row: &Row) -> rusqlite::Result<ExerciseTypeWithAncestry> {
     let exercise_type = row_to_exercise_type(row)?;
-    Ok(ExerciseTypeWithAncestry {
-        exercise_type,
-        muscle_group: row.get(10)?,
-        specific_muscle: row.get(11)?,
-        exercise: row.get(12)?,
-    })
+    Ok(ExerciseTypeWithAncestry { exercise_type, muscle_group: row.get(10)?, specific_muscle: row.get(11)?, exercise: row.get(12)? })
 }
 
 impl Database {
@@ -89,9 +84,9 @@ impl Database {
                 params![name, lvl.as_str()],
                 |r| r.get::<_, i64>(0),
             ),
-            None => self.conn().query_row("SELECT id FROM exercise_types WHERE name = ?1 COLLATE NOCASE", params![name], |r| {
-                r.get::<_, i64>(0)
-            }),
+            None => {
+                self.conn().query_row("SELECT id FROM exercise_types WHERE name = ?1 COLLATE NOCASE", params![name], |r| r.get::<_, i64>(0))
+            }
         };
         match row {
             Ok(id) => Ok(Some(id)),
@@ -220,10 +215,8 @@ fn validate_parent_level(db: &Database, et: &ExerciseType) -> anyhow::Result<()>
         (ExerciseLevel::MuscleGroup, Some(_)) => anyhow::bail!("muscle_group rows must have parent_id = NULL"),
         (lvl, None) => anyhow::bail!("{lvl} rows require a parent_id"),
         (lvl, Some(pid)) => {
-            let parent_level: Option<String> = db
-                .conn()
-                .query_row("SELECT level FROM exercise_types WHERE id = ?1", params![pid], |r| r.get(0))
-                .ok();
+            let parent_level: Option<String> =
+                db.conn().query_row("SELECT level FROM exercise_types WHERE id = ?1", params![pid], |r| r.get(0)).ok();
             let parent_level = parent_level.context("parent_id does not reference an existing exercise_type")?;
             let parent = ExerciseLevel::from_str_loose(&parent_level).context("parent has unknown level")?;
             let expected = lvl.parent().expect("non-muscle_group level always has a parent tier");

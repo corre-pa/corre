@@ -46,12 +46,7 @@ impl Database {
         Ok(msgs)
     }
 
-    pub fn get_recent_messages_for_platform(
-        &self,
-        user_id: i64,
-        platform: &str,
-        limit: usize,
-    ) -> anyhow::Result<Vec<ConversationMessage>> {
+    pub fn get_recent_messages_for_platform(&self, user_id: i64, platform: &str, limit: usize) -> anyhow::Result<Vec<ConversationMessage>> {
         let sql =
             format!("{SELECT_MSG} WHERE user_id = ?1 AND platform = ?2 AND exclude_from_context = 0 ORDER BY timestamp DESC LIMIT ?3");
         let mut stmt = self.conn().prepare(&sql)?;

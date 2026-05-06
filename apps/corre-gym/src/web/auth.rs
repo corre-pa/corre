@@ -80,8 +80,7 @@ fn signing_key(state: &AppState) -> Vec<u8> {
 }
 
 pub fn create_session_cookie(state: &AppState, user: &User, telegram_id: i64) -> String {
-    let payload =
-        SessionPayload { user_id: user.id, telegram_id, name: user.name.clone(), created_at: chrono::Utc::now().timestamp() };
+    let payload = SessionPayload { user_id: user.id, telegram_id, name: user.name.clone(), created_at: chrono::Utc::now().timestamp() };
     let json = serde_json::to_string(&payload).expect("session payload serializes");
     let b64 = BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes());
 

@@ -6,9 +6,9 @@ pub struct PromptContext {
     pub current_time: String,
     pub active_session: Option<Session>,
     pub session_sets: Vec<(ExerciseSet, String)>, // (set, exercise_type name) — flat view, kept for backward compat
-    pub session_entries: Vec<EntryView>,           // closed + open entries in the active session, in insertion order
-    pub leaked_open_entries: Vec<EntryView>,       // open entries belonging to ENDED prior sessions or the active session
-    pub active_plan: Option<ActivePlanView>,       // populated when the active session was started with a `plan:` sentinel
+    pub session_entries: Vec<EntryView>,          // closed + open entries in the active session, in insertion order
+    pub leaked_open_entries: Vec<EntryView>,      // open entries belonging to ENDED prior sessions or the active session
+    pub active_plan: Option<ActivePlanView>,      // populated when the active session was started with a `plan:` sentinel
     pub health_entries: Vec<HealthEntry>,
     pub recent_summaries: Vec<SessionSummary>,
     pub recent_sets: Vec<ExerciseSet>,
@@ -72,8 +72,10 @@ RESPONSE FORMAT: You MUST respond with ONLY a JSON object. No text before or aft
 }}\n\
 \n\
 ACTION TYPES:\n\
-- {{\"type\": \"log_exercise\", \"exercise\": \"<EXACT NAME>\", \"sets\": N, \"reps\": N, \
+- {{\"type\": \"log_exercise\", \"exercise\": \"<EXACT NAME>\", \"reps\": N, \
 \"weight_kg\": N.N, \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
+  Each log_exercise action records EXACTLY ONE set. To log multiple sets in one \
+message, emit one log_exercise per set in the actions array.\n\
 - {{\"type\": \"log_exercise_timed\", \"exercise\": \"<EXACT NAME>\", \"duration_secs\": N, \
 \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
 - {{\"type\": \"log_exercise_distance\", \"exercise\": \"<EXACT NAME>\", \"distance_m\": N.N, \
@@ -126,6 +128,12 @@ reply. If LEAKED OPEN ENTRIES is empty, behave normally.\n\
 \n\
 GUIDELINES:\n\
 - When the user reports an exercise, include a log_exercise action\n\
+- When the user clearly indicates they want to start a workout (e.g. \"starting my \
+workout\", \"open a session\", \"let's begin\", \"I'm at the gym\"), you MUST emit \
+start_session in the same response. Do not ask follow-up questions when intent is \
+clear.\n\
+- When the user clearly indicates they are done (e.g. \"I'm done\", \"end the workout\", \
+\"that's it\"), you MUST emit end_session.\n\
 - Auto-start a session (start_session action) before logging if no session is active\n\
 - If the user mentions pain, injury, or illness, log it with log_health\n\
 - Keep responses concise -- this is a chat interface\n\
@@ -134,23 +142,29 @@ GUIDELINES:\n\
 imperial, convert to metric in the action and mention the conversion in your message\n\
 \n\
 COLLECTING DATA BEFORE LOGGING:\n\
+This rule applies ONLY to data-collection actions (log_exercise, log_exercise_timed, \
+log_exercise_distance, log_health, set_goal). Navigation actions (start_session, \
+end_session, close_exercise_entry, confirm_close_exercise_entry, \
+close_all_open_entries, delete_exercise_entry) MUST be emitted as soon as the user's \
+intent is clear, even with no other data.\n\
+\n\
 Do NOT emit any log_exercise action until you have ALL required data. Respond with \
 \"actions\": [] while gathering info. Collect data across multiple messages using \
 conversation history to build up the complete picture.\n\
 \n\
-For weight_reps exercises, you need: exercise name, total sets, reps, weight, and difficulty.\n\
+For weight_reps exercises, you need: exercise name, reps, weight, and difficulty.\n\
 \n\
-1. SETS: Users often report one set at a time (e.g. \"bench 80kg 8 reps\", then later \
-\"another set, 6 reps\"). When the user reports a set without specifying a total number \
-of sets, ask if they are done with the exercise or have more sets to go. Keep a running \
-count from conversation history. Only when they confirm they are finished (or report a \
-specific total like \"3 sets\"), move on to ask about difficulty.\n\
-2. DIFFICULTY: Once all sets are accounted for, ask how it felt: easy, medium, hard, or \
-failure. Do not guess.\n\
-3. FINAL LOG: Only when you have the exercise name, total sets, reps, weight, AND \
-difficulty, emit the log_exercise action with the complete data.\n\
+1. ONE ACTION PER SET: Each log_exercise action records exactly ONE set. If the user \
+reports a single set, emit one log_exercise action. If the user reports three sets in \
+one message (e.g. \"3 sets bench 80kg 8 reps, felt hard\"), emit THREE log_exercise \
+actions in the actions array. Never include a \"sets\" field — it does not exist in \
+the schema.\n\
+2. DIFFICULTY: Once you have reps and weight for a set, ask how it felt: easy, medium, \
+hard, or failure. Do not guess.\n\
+3. FINAL LOG: Only when you have exercise name, reps, weight, AND difficulty for a set, \
+emit the log_exercise action.\n\
 \n\
-If the user reports everything in one message (e.g. \"3 sets bench 80kg 8 reps, felt hard\"), \
+If the user reports everything in one message (e.g. \"bench 80kg 8 reps, felt hard\"), \
 emit the action immediately -- no need to ask follow-ups.\n\
 \n\
 When the user answers a follow-up (e.g. \"done\", \"easy\", \"one more\"), use conversation \
@@ -262,12 +276,7 @@ pub fn format_exercise_list(catalogue: &[ExerciseTypeWithAncestry]) -> String {
     // Only `exercise` and `variation` rows are loggable directly. List those.
     let loggable: Vec<&ExerciseTypeWithAncestry> = catalogue
         .iter()
-        .filter(|e| {
-            matches!(
-                e.exercise_type.level,
-                crate::db::ExerciseLevel::Exercise | crate::db::ExerciseLevel::Variation
-            )
-        })
+        .filter(|e| matches!(e.exercise_type.level, crate::db::ExerciseLevel::Exercise | crate::db::ExerciseLevel::Variation))
         .collect();
 
     let mut sorted = loggable;
@@ -303,7 +312,10 @@ pub fn format_health_entries(entries: &[HealthEntry]) -> String {
     let mut result = "ACTIVE HEALTH ISSUES:\n".to_string();
     for entry in entries {
         let body = entry.body_part.as_deref().unwrap_or("general");
-        result.push_str(&format!("- {} ({}, {body}): {} (since {})\n", entry.entry_type, entry.severity, entry.description, entry.started_at,));
+        result.push_str(&format!(
+            "- {} ({}, {body}): {} (since {})\n",
+            entry.entry_type, entry.severity, entry.description, entry.started_at,
+        ));
     }
     result
 }
@@ -361,8 +373,8 @@ pub fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{ExerciseLevel, ExerciseType, GoalProgress, HealthEntry, HealthEntryType, MeasurementType, Session};
     use crate::db::{ExerciseGoal, GoalStatus};
+    use crate::db::{ExerciseLevel, ExerciseType, GoalProgress, HealthEntry, HealthEntryType, MeasurementType, Session};
 
     fn make_exercise_type(id: i64, name: &str, aliases: &str, muscle_group: &str, mt: MeasurementType) -> ExerciseTypeWithAncestry {
         ExerciseTypeWithAncestry {
@@ -416,13 +428,8 @@ mod tests {
     #[test]
     fn prompt_includes_active_session_with_entries() {
         let mut ctx = base_context();
-        ctx.active_session = Some(Session {
-            id: 1,
-            user_id: 1,
-            started_at: "2026-03-23 09:00:00".to_string(),
-            ended_at: None,
-            notes: None,
-        });
+        ctx.active_session =
+            Some(Session { id: 1, user_id: 1, started_at: "2026-03-23 09:00:00".to_string(), ended_at: None, notes: None });
         ctx.session_entries = vec![EntryView {
             id: 7,
             exercise_name: "Bench Press".to_string(),

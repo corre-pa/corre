@@ -12,11 +12,10 @@ pub struct AssistantResponse {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantAction {
-    /// Weight × reps logging. `sets` is the number of identical sets to record;
-    /// the handler creates one row in `sets` per repetition group.
+    /// Records exactly ONE weight × reps set. To log multiple sets in one message
+    /// the LLM must emit one `LogExercise` per set.
     LogExercise {
         exercise: String,
-        sets: Option<i32>,
         reps: Option<i32>,
         weight_kg: Option<f64>,
         #[serde(default, alias = "difficulty")]
@@ -100,12 +99,11 @@ mod tests {
 
     #[test]
     fn parse_log_exercise_action() {
-        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "hard"}"#;
+        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "hard"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
-            AssistantAction::LogExercise { exercise, sets, reps, weight_kg, perceived_difficulty, comment } => {
+            AssistantAction::LogExercise { exercise, reps, weight_kg, perceived_difficulty, comment, .. } => {
                 assert_eq!(exercise, "Bench Press");
-                assert_eq!(sets, Some(3));
                 assert_eq!(reps, Some(8));
                 assert_eq!(weight_kg, Some(80.0));
                 assert_eq!(perceived_difficulty, Some(Difficulty::Hard));
@@ -117,7 +115,7 @@ mod tests {
 
     #[test]
     fn parse_log_exercise_legacy_difficulty_alias() {
-        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "difficulty": "easy"}"#;
+        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "difficulty": "easy"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
             AssistantAction::LogExercise { perceived_difficulty, .. } => assert_eq!(perceived_difficulty, Some(Difficulty::Easy)),
@@ -245,8 +243,7 @@ mod tests {
         let json = r#"{"type": "log_exercise", "exercise": "Bench Press"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
-            AssistantAction::LogExercise { sets, reps, weight_kg, perceived_difficulty, comment, .. } => {
-                assert_eq!(sets, None);
+            AssistantAction::LogExercise { reps, weight_kg, perceived_difficulty, comment, .. } => {
                 assert_eq!(reps, None);
                 assert_eq!(weight_kg, None);
                 assert_eq!(perceived_difficulty, None);
@@ -262,12 +259,14 @@ mod tests {
             "message": "Logged it!",
             "actions": [
                 {"type": "start_session"},
-                {"type": "log_exercise", "exercise": "Bench", "sets": 3, "reps": 8, "weight_kg": 80.0}
+                {"type": "log_exercise", "exercise": "Bench", "reps": 8, "weight_kg": 80.0},
+                {"type": "log_exercise", "exercise": "Bench", "reps": 8, "weight_kg": 80.0},
+                {"type": "log_exercise", "exercise": "Bench", "reps": 8, "weight_kg": 80.0}
             ]
         }"#;
         let resp: AssistantResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.message, "Logged it!");
-        assert_eq!(resp.actions.len(), 2);
+        assert_eq!(resp.actions.len(), 4);
     }
 
     #[test]

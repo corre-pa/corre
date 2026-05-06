@@ -43,9 +43,8 @@ impl Database {
         };
 
         let mut stmt = self.conn().prepare(sql)?;
-        let rows = stmt.query_map(params![user_id, exercise_type_id, from, to], |row| {
-            Ok(TimeSeriesPoint { date: row.get(0)?, value: row.get(1)? })
-        })?;
+        let rows = stmt
+            .query_map(params![user_id, exercise_type_id, from, to], |row| Ok(TimeSeriesPoint { date: row.get(0)?, value: row.get(1)? }))?;
         rows.collect::<Result<Vec<_>, _>>().context("Failed to query exercise_type time series")
     }
 

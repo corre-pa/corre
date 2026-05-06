@@ -37,14 +37,11 @@ impl TestServer {
 
         let llm = build_llm_provider(corre_cfg).context("building LLM provider")?;
 
-        let mut gym_cfg =
-            GymConfig::from_toml_table(Some(&corre_cfg.gym)).context("parsing [gym] section from test corre.toml")?;
+        let mut gym_cfg = GymConfig::from_toml_table(Some(&corre_cfg.gym)).context("parsing [gym] section from test corre.toml")?;
         gym_cfg.resolve_secrets().context("resolving gym secrets")?;
         gym_cfg.voice = None;
 
-        let handler = Arc::new(
-            AssistantHandler::new(db.clone(), llm, gym_cfg.clone()).await.context("constructing AssistantHandler")?,
-        );
+        let handler = Arc::new(AssistantHandler::new(db.clone(), llm, gym_cfg.clone()).await.context("constructing AssistantHandler")?);
 
         let app_state = Arc::new(AppState {
             db: db.clone(),
@@ -80,11 +77,7 @@ impl Drop for TestServer {
 /// Mirror of `corre-gym/src/main.rs` LLM construction: real provider + optional safety wrap.
 fn build_llm_provider(cfg: &CorreConfig) -> anyhow::Result<Box<dyn LlmProvider>> {
     let raw: Box<dyn LlmProvider> = Box::new(OpenAiCompatProvider::from_config(&cfg.llm)?);
-    if cfg.safety.enabled {
-        Ok(Box::new(corre_safety::SafeLlmProvider::new(raw, &cfg.safety)))
-    } else {
-        Ok(raw)
-    }
+    if cfg.safety.enabled { Ok(Box::new(corre_safety::SafeLlmProvider::new(raw, &cfg.safety))) } else { Ok(raw) }
 }
 
 /// Public so `auth.rs` can reuse the same value when minting cookies if needed for diagnostics.

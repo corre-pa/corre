@@ -112,8 +112,7 @@ fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, pl
         run_set.logged_at = format!("{date} 10:05:00");
         db.insert_set(&run_set).unwrap();
 
-        let prompt =
-            new_conversation_message(user_id, "telegram", ConversationRole::User, &format!("Logged my session on {date}"));
+        let prompt = new_conversation_message(user_id, "telegram", ConversationRole::User, &format!("Logged my session on {date}"));
         db.insert_message(&prompt).unwrap();
         let reply = new_conversation_message(user_id, "telegram", ConversationRole::Assistant, "Nice work! Keep it up.");
         db.insert_message(&reply).unwrap();

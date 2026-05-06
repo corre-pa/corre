@@ -60,12 +60,7 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list active health entries")
     }
 
-    pub fn list_health_entries_by_type(
-        &self,
-        user_id: i64,
-        entry_type: HealthEntryType,
-        limit: usize,
-    ) -> anyhow::Result<Vec<HealthEntry>> {
+    pub fn list_health_entries_by_type(&self, user_id: i64, entry_type: HealthEntryType, limit: usize) -> anyhow::Result<Vec<HealthEntry>> {
         let sql = format!("{SELECT_HEALTH} WHERE user_id = ?1 AND entry_type = ?2 ORDER BY started_at DESC LIMIT ?3");
         let mut stmt = self.conn().prepare(&sql)?;
         let rows = stmt.query_map(params![user_id, entry_type.as_str(), limit as i64], row_to_health_entry)?;

@@ -26,11 +26,8 @@ pub async fn send_chat(world: &GymWorld, alias: &str, message: &str) -> anyhow::
     if !status.is_success() {
         anyhow::bail!("POST /api/chat returned {status}: {body}");
     }
-    let text = body
-        .get("reply")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("/api/chat response missing `reply` string: {body}"))?
-        .to_string();
+    let text =
+        body.get("reply").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("/api/chat response missing `reply` string: {body}"))?.to_string();
     tracing::debug!(reply_len = text.len(), "received /api/chat reply");
     Ok(ChatReply { text })
 }

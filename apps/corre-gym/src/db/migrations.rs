@@ -30,13 +30,8 @@ mod tests {
         let after_down: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(after_down, 0);
 
-        let table_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let table_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", [], |r| r.get(0)).unwrap();
         assert_eq!(table_count, 0, "all app tables should be dropped");
 
         MIGRATIONS.to_latest(&mut conn).expect("re-apply up failed");
@@ -56,9 +51,9 @@ mod tests {
         let total: i64 = conn.query_row("SELECT COUNT(*) FROM exercise_types", [], |r| r.get(0)).unwrap();
         assert!(total >= 100, "expected at least 100 seeded rows, got {total}");
 
-        let cardio: i64 =
-            conn.query_row("SELECT COUNT(*) FROM exercise_types WHERE name = 'Cardio' AND level = 'muscle_group'", [], |r| r.get(0))
-                .unwrap();
+        let cardio: i64 = conn
+            .query_row("SELECT COUNT(*) FROM exercise_types WHERE name = 'Cardio' AND level = 'muscle_group'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(cardio, 1, "Cardio muscle_group must be present");
     }
 }
