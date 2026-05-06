@@ -302,7 +302,15 @@ pub async fn chat_history(auth: AuthUser, State(state): State<Arc<AppState>>, Qu
     let limit = q.limit.unwrap_or(50).min(200);
     let db = state.db.lock().await;
     match db.get_recent_messages_for_platform(auth.user.id, "web", limit) {
-        Ok(data) => Json(data).into_response(),
+        Ok(mut data) => {
+            // Assistant rows are persisted as the raw `{"message": ..., "actions": ...}` envelope
+            // so the LLM sees its own structured output in history. Strip the envelope here so
+            // the chat UI shows just the human-readable message.
+            for msg in data.iter_mut().filter(|m| m.role == crate::db::ConversationRole::Assistant) {
+                msg.content = crate::assistant::parser::parse_assistant_response(&msg.content).message;
+            }
+            Json(data).into_response()
+        }
         Err(e) => {
             tracing::error!("Failed to get chat history: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

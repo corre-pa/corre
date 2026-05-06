@@ -115,9 +115,9 @@ impl AssistantHandler {
         }
 
         if is_refusal {
-            self.store_excluded_conversation_on_platform(user.id, platform, text, &parsed.message).await?;
+            self.store_excluded_conversation_on_platform(user.id, platform, text, &llm_response).await?;
         } else {
-            self.store_conversation_on_platform(user.id, platform, text, &parsed.message).await?;
+            self.store_conversation_on_platform(user.id, platform, text, &llm_response).await?;
         }
 
         self.db.lock().await.prune_old_messages(user.id, self.config.conversation_history_limit * 2)?;
@@ -929,21 +929,30 @@ mod tests {
 
     struct MockLlm {
         response: std::sync::Mutex<String>,
+        recorded: std::sync::Mutex<Vec<LlmRequest>>,
     }
 
     impl MockLlm {
         fn new(response: &str) -> Self {
-            Self { response: std::sync::Mutex::new(response.to_string()) }
+            Self {
+                response: std::sync::Mutex::new(response.to_string()),
+                recorded: std::sync::Mutex::new(Vec::new()),
+            }
         }
 
         fn set_response(&self, response: &str) {
             *self.response.lock().unwrap() = response.to_string();
         }
+
+        fn recorded_requests(&self) -> Vec<LlmRequest> {
+            self.recorded.lock().unwrap().clone()
+        }
     }
 
     #[async_trait::async_trait]
     impl LlmProvider for MockLlm {
-        async fn complete(&self, _request: LlmRequest) -> anyhow::Result<LlmResponse> {
+        async fn complete(&self, request: LlmRequest) -> anyhow::Result<LlmResponse> {
+            self.recorded.lock().unwrap().push(request);
             Ok(LlmResponse { content: self.response.lock().unwrap().clone() })
         }
     }
@@ -1210,6 +1219,43 @@ mod tests {
         let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
         let context_msgs = db.get_recent_messages_for_platform(user.id, "telegram", 100).unwrap();
         assert_eq!(context_msgs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn assistant_history_preserves_json_envelope() {
+        // The LLM is contracted to emit `{"message": "...", "actions": [...]}`. If
+        // we strip the envelope before persisting the assistant turn, the next
+        // call shows the model plain prose in history and it abandons the JSON
+        // contract. Pin the round-trip: turn-2's request must contain the prior
+        // assistant turn as a parseable AssistantResponse with non-empty actions.
+        let canned = r#"{"message":"Logged.","actions":[{"type":"log_exercise","exercise":"Bench Press","sets":1,"reps":8,"weight_kg":60.0,"perceived_difficulty":"easy"}]}"#;
+        let (handler, llm) = setup_handler(canned).await;
+        let msg = make_message(12345, "hello");
+
+        // First call registers the user and returns the welcome reply without
+        // hitting the LLM; subsequent calls are real LLM round-trips.
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench 60 8 reps easy").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "another set, 6 reps at 70 kg, hard").await.unwrap();
+
+        let recorded = llm.recorded_requests();
+        assert_eq!(recorded.len(), 2, "expected two LlmRequests after registration + two user turns");
+
+        let second = &recorded[1];
+        let assistant_turn = second
+            .messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m.role, LlmRole::Assistant))
+            .expect("turn-2 history must include the prior assistant turn");
+
+        let parsed: crate::assistant::actions::AssistantResponse = serde_json::from_str(&assistant_turn.content)
+            .expect("assistant turn in history must round-trip as the JSON envelope");
+        assert!(
+            !parsed.actions.is_empty(),
+            "expected the prior assistant turn to retain its actions array, got: {}",
+            assistant_turn.content
+        );
     }
 
     #[test]
