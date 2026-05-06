@@ -17,6 +17,7 @@ members = [
     "apps/daily-brief",
     "apps/rolodex",
     "apps/corre-gym",
+    "apps/e2e",
 ]
 
 [workspace.package]
@@ -88,6 +89,7 @@ url = "2"
 ammonia = "4"
 aho-corasick = "1"
 base64 = "0.22"
+log = "0.4.29"
 regex = "1"
 rust-embed = "8"
 dialoguer = "0.11"
