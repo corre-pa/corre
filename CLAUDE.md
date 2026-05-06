@@ -19,6 +19,7 @@ When you run the integration tests:
   an agent to write the test and save it under `plans/todos/{unittest}-{slug}.md` in the following format:
 
 ```md
+  status: todo
   instructions: Write a regression unit test for {app/module}....
  
   example input 1:

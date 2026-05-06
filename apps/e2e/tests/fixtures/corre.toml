@@ -1,0 +1,29 @@
+[general]
+data_dir = "."
+log_level = "warn"
+
+[llm]
+provider = "openai-compatible"
+base_url = "${CORRE_TEST_LLM_BASE_URL}"
+model = "${CORRE_TEST_LLM_MODEL}"
+api_key = "${CORRE_TEST_LLM_API_KEY}"
+temperature = 0.1
+max_concurrent = 4
+
+[gym]
+bind = "127.0.0.1:0"
+telegram_bot_token = "test:fake-token"
+default_timezone = "UTC"
+db_path = ":memory:"
+max_message_length = 2000
+session_timeout_hours = 4
+
+[safety]
+enabled = false
+
+[news]
+bind = "127.0.0.1:0"
+title = "unused"
+
+[registry]
+url = "http://localhost:5580"

@@ -2,6 +2,7 @@
 /target-cross
 Cargo.lock
 .env
+**/.env
 *.swp
 *.swo
 .idea/

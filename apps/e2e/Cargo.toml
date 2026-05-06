@@ -5,17 +5,34 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Internal — the system under test
+corre-gym = { path = "../corre-gym" }
+corre-core = { workspace = true }
+corre-llm = { workspace = true }
+corre-safety = { workspace = true }
+
+# Async + HTTP
 anyhow = { workspace = true }
-log = { workspace = true }
-tokio = { workspace = true, features = ["full"]}
+async-trait = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+cucumber = { version = "0.23.0", features = ["libtest"] }
+dashmap = { workspace = true }
+dotenvy = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-dotenvy = "0.15.0"
 env_logger = "0.11.3"
-cucumber = { version = "0.23.0", features = ["libtest"] }
 futures-util = "0.3.30"
+log = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [[test]]
 name = "e2e-corre-gym" # this should be the same as the filename of your test target
 harness = false  # allows Cucumber to print output instead of libtest
-

@@ -1,1 +1,1 @@
-mod corre_gym;
+pub mod corre_gym;
