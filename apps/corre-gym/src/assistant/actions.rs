@@ -43,8 +43,39 @@ pub enum AssistantAction {
     },
     StartSession {
         notes: Option<String>,
+        /// Optional name of a saved schedule the session should follow. Used by the
+        /// host to suggest the next exercise after each entry closes.
+        #[serde(default)]
+        plan: Option<String>,
     },
     EndSession,
+    /// Close one open exercise_entry. The handler resolves the entry by `entry_id`
+    /// first, then by exercise name (against open entries in the active session),
+    /// and finally falls back to the most recent open entry. If the entry has
+    /// fewer than 3 sets, the handler pushes back instead of closing.
+    CloseExerciseEntry {
+        #[serde(default)]
+        exercise: Option<String>,
+        #[serde(default)]
+        entry_id: Option<i64>,
+    },
+    /// Close an open exercise_entry, bypassing the <3-set pushback. Used after the
+    /// user has been asked to keep going and reaffirmed their intent to close.
+    ConfirmCloseExerciseEntry {
+        #[serde(default)]
+        exercise: Option<String>,
+        #[serde(default)]
+        entry_id: Option<i64>,
+    },
+    /// Delete an open exercise_entry outright (used to clean up leaked entries
+    /// from a previous session).
+    DeleteExerciseEntry {
+        entry_id: i64,
+    },
+    /// Close every open exercise_entry currently in the active session. Used in
+    /// response to the user agreeing to clean up leaked open entries before
+    /// starting a new session.
+    CloseAllOpenEntries,
     LogHealth {
         entry_type: HealthEntryType,
         body_part: Option<String>,
@@ -113,9 +144,65 @@ mod tests {
         let json = r#"{"type": "start_session", "notes": "Leg day"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
-            AssistantAction::StartSession { notes } => assert_eq!(notes.as_deref(), Some("Leg day")),
+            AssistantAction::StartSession { notes, plan } => {
+                assert_eq!(notes.as_deref(), Some("Leg day"));
+                assert_eq!(plan, None);
+            }
             _ => panic!("expected StartSession"),
         }
+    }
+
+    #[test]
+    fn parse_start_session_with_plan() {
+        let json = r#"{"type": "start_session", "plan": "Push Day"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::StartSession { notes, plan } => {
+                assert_eq!(notes, None);
+                assert_eq!(plan.as_deref(), Some("Push Day"));
+            }
+            _ => panic!("expected StartSession"),
+        }
+    }
+
+    #[test]
+    fn parse_close_exercise_entry() {
+        let json = r#"{"type": "close_exercise_entry", "exercise": "Bench Press"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::CloseExerciseEntry { exercise, entry_id } => {
+                assert_eq!(exercise.as_deref(), Some("Bench Press"));
+                assert_eq!(entry_id, None);
+            }
+            _ => panic!("expected CloseExerciseEntry"),
+        }
+    }
+
+    #[test]
+    fn parse_confirm_close_exercise_entry() {
+        let json = r#"{"type": "confirm_close_exercise_entry", "entry_id": 42}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::ConfirmCloseExerciseEntry { entry_id, .. } => assert_eq!(entry_id, Some(42)),
+            _ => panic!("expected ConfirmCloseExerciseEntry"),
+        }
+    }
+
+    #[test]
+    fn parse_delete_exercise_entry() {
+        let json = r#"{"type": "delete_exercise_entry", "entry_id": 7}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::DeleteExerciseEntry { entry_id } => assert_eq!(entry_id, 7),
+            _ => panic!("expected DeleteExerciseEntry"),
+        }
+    }
+
+    #[test]
+    fn parse_close_all_open_entries() {
+        let json = r#"{"type": "close_all_open_entries"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        assert!(matches!(action, AssistantAction::CloseAllOpenEntries));
     }
 
     #[test]

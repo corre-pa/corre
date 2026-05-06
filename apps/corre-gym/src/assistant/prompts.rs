@@ -5,7 +5,10 @@ pub struct PromptContext {
     pub timezone: String,
     pub current_time: String,
     pub active_session: Option<Session>,
-    pub session_sets: Vec<(ExerciseSet, String)>, // (set, exercise_type name)
+    pub session_sets: Vec<(ExerciseSet, String)>, // (set, exercise_type name) — flat view, kept for backward compat
+    pub session_entries: Vec<EntryView>,           // closed + open entries in the active session, in insertion order
+    pub leaked_open_entries: Vec<EntryView>,       // open entries belonging to ENDED prior sessions or the active session
+    pub active_plan: Option<ActivePlanView>,       // populated when the active session was started with a `plan:` sentinel
     pub health_entries: Vec<HealthEntry>,
     pub recent_summaries: Vec<SessionSummary>,
     pub recent_sets: Vec<ExerciseSet>,
@@ -14,20 +17,39 @@ pub struct PromptContext {
     pub schedules: Vec<Schedule>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EntryView {
+    pub id: i64,
+    pub exercise_name: String,
+    pub set_count: usize,
+    pub sets_summary: String,
+    pub is_open: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActivePlanView {
+    pub name: String,
+    pub completed_exercise_ids: Vec<i64>,
+    pub next: Option<PlanExerciseView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanExerciseView {
+    pub exercise_name: String,
+    pub target_sets: Option<i32>,
+    pub target_reps: Option<i32>,
+    pub target_weight_kg: Option<f64>,
+}
+
 pub fn build_system_prompt(ctx: &PromptContext) -> String {
     let session_status = match &ctx.active_session {
-        Some(s) => {
-            let summary = if ctx.session_sets.is_empty() {
-                "no sets logged yet".to_string()
-            } else {
-                let entries: Vec<String> = ctx.session_sets.iter().map(|(set, name)| format_set_entry(set, name)).collect();
-                entries.join("; ")
-            };
-            format!("Active (started {}). Logged: {summary}", s.started_at)
-        }
+        Some(s) => format!("Active (started {})", s.started_at),
         None => "No active session".to_string(),
     };
 
+    let entries_section = format_session_entries(&ctx.session_entries);
+    let leaked_section = format_leaked_entries(&ctx.leaked_open_entries);
+    let plan_section = format_active_plan(&ctx.active_plan);
     let health_section = format_health_entries(&ctx.health_entries);
     let history_section = format_recent_history(&ctx.recent_summaries, &ctx.recent_sets, &ctx.exercise_types);
     let goals_section = format_active_goals(&ctx.active_goals);
@@ -56,8 +78,12 @@ ACTION TYPES:\n\
 \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
 - {{\"type\": \"log_exercise_distance\", \"exercise\": \"<EXACT NAME>\", \"distance_m\": N.N, \
 \"duration_secs\": N, \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
-- {{\"type\": \"start_session\", \"notes\": \"<optional>\"}}\n\
+- {{\"type\": \"start_session\", \"notes\": \"<optional>\", \"plan\": \"<optional schedule name>\"}}\n\
 - {{\"type\": \"end_session\"}}\n\
+- {{\"type\": \"close_exercise_entry\", \"exercise\": \"<EXACT NAME, optional>\", \"entry_id\": <optional>}}\n\
+- {{\"type\": \"confirm_close_exercise_entry\", \"exercise\": \"<EXACT NAME, optional>\", \"entry_id\": <optional>}}\n\
+- {{\"type\": \"delete_exercise_entry\", \"entry_id\": N}}\n\
+- {{\"type\": \"close_all_open_entries\"}}\n\
 - {{\"type\": \"log_health\", \"entry_type\": \"injury|illness|wellbeing\", \
 \"body_part\": \"<optional>\", \"severity\": \"mild|moderate|severe\", \"description\": \"...\"}}\n\
 - {{\"type\": \"resolve_health\", \"description\": \"match by description substring\"}}\n\
@@ -73,6 +99,30 @@ EXERCISE NAME RULE: You MUST use exercise names EXACTLY as they appear in double
 in the Available Exercises list below. Do not abbreviate, paraphrase, or invent names. \
 If the user mentions an exercise not in the list, use the closest match and note the \
 substitution in your message.\n\
+\n\
+EXERCISE ENTRIES: An exercise_entry groups consecutive sets of a SINGLE exercise within a \
+session. It stays open (end_timestamp = NULL) until the user closes it. Multiple concurrently \
+open entries in one session are a SUPERSET. Sessions and entries are not the same thing — \
+the session is the whole workout; entries are the per-exercise blocks inside it.\n\
+\n\
+ENTRY LIFECYCLE RULES:\n\
+- Logging a set automatically opens an entry for that exercise if none is open. The host \
+matches by exercise type, so logging a different exercise creates a separate (parallel) entry.\n\
+- After every set logged in an entry that already has 3 or more sets, the host appends a \
+checkpoint question to your reply. Do NOT keep logging silently — wait for the user's \
+decision (\"one more\" → log_exercise; \"move on\" / \"done\" → close_exercise_entry).\n\
+- If the user asks to close an entry that has fewer than 3 sets, the host pushes back \
+automatically (\"You've only done {{m}} sets...\"). On the user's reaffirmation, emit \
+confirm_close_exercise_entry to bypass the pushback. If they decide to keep going, emit \
+log_exercise as normal.\n\
+- After an entry is closed and the active plan has a `next` exercise, suggest that exercise \
+to the user (mention target sets/reps/weight from the plan if present).\n\
+- end_session automatically closes any still-open entries.\n\
+\n\
+LEAKED ENTRIES: If LEAKED OPEN ENTRIES below is non-empty AND there is an active session, \
+do NOT emit start_session. Ask the user whether to close them (close_all_open_entries) or \
+delete them one by one (delete_exercise_entry). Apply the user's chosen action on their next \
+reply. If LEAKED OPEN ENTRIES is empty, behave normally.\n\
 \n\
 GUIDELINES:\n\
 - When the user reports an exercise, include a log_exercise action\n\
@@ -118,6 +168,9 @@ User: {user_name}\n\
 Time: {current_time} ({timezone})\n\
 Active session: {session_status}\n\
 \n\
+{entries_section}\
+{leaked_section}\
+{plan_section}\
 {health_section}\n\
 {history_section}\n\
 {goals_section}\n\
@@ -127,6 +180,62 @@ AVAILABLE EXERCISES:\n\
         current_time = ctx.current_time,
         timezone = ctx.timezone,
     )
+}
+
+fn format_session_entries(entries: &[EntryView]) -> String {
+    if entries.is_empty() {
+        return "EXERCISE ENTRIES (this session): None\n".to_string();
+    }
+    let mut s = "EXERCISE ENTRIES (this session):\n".to_string();
+    for e in entries {
+        let status = if e.is_open { "open" } else { "closed" };
+        s.push_str(&format!(
+            "- [id={}, {status}] {} ({} {}): {}\n",
+            e.id,
+            e.exercise_name,
+            e.set_count,
+            if e.set_count == 1 { "set" } else { "sets" },
+            e.sets_summary,
+        ));
+    }
+    s
+}
+
+fn format_leaked_entries(entries: &[EntryView]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut s = "LEAKED OPEN ENTRIES (must be resolved before starting a new session):\n".to_string();
+    for e in entries {
+        s.push_str(&format!("- [id={}] {} ({} sets)\n", e.id, e.exercise_name, e.set_count));
+    }
+    s.push('\n');
+    s
+}
+
+fn format_active_plan(plan: &Option<ActivePlanView>) -> String {
+    let Some(plan) = plan else {
+        return String::new();
+    };
+    let mut s = format!("ACTIVE PLAN: {}\n", plan.name);
+    s.push_str(&format!("- completed exercises in this session: {}\n", plan.completed_exercise_ids.len()));
+    if let Some(next) = &plan.next {
+        let mut parts = vec![next.exercise_name.clone()];
+        if let Some(sets) = next.target_sets {
+            parts.push(format!("{sets} sets"));
+        }
+        if let Some(reps) = next.target_reps {
+            parts.push(format!("{reps} reps"));
+        }
+        if let Some(w) = next.target_weight_kg {
+            parts.push(format!("{w}kg"));
+        }
+        s.push_str(&format!("- next: {}\n", parts.join(", ")));
+    } else {
+        s.push_str("- next: (plan complete)\n");
+    }
+    s.push('\n');
+    s
 }
 
 fn format_set_entry(set: &ExerciseSet, exercise_name: &str) -> String {
@@ -252,7 +361,7 @@ pub fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{Difficulty, ExerciseLevel, ExerciseSet, ExerciseType, GoalProgress, HealthEntry, HealthEntryType, MeasurementType, Session};
+    use crate::db::{ExerciseLevel, ExerciseType, GoalProgress, HealthEntry, HealthEntryType, MeasurementType, Session};
     use crate::db::{ExerciseGoal, GoalStatus};
 
     fn make_exercise_type(id: i64, name: &str, aliases: &str, muscle_group: &str, mt: MeasurementType) -> ExerciseTypeWithAncestry {
@@ -282,6 +391,9 @@ mod tests {
             current_time: "2026-03-23 10:30:00".to_string(),
             active_session: None,
             session_sets: vec![],
+            session_entries: vec![],
+            leaked_open_entries: vec![],
+            active_plan: None,
             health_entries: vec![],
             recent_summaries: vec![],
             recent_sets: vec![],
@@ -302,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_includes_active_session_with_sets() {
+    fn prompt_includes_active_session_with_entries() {
         let mut ctx = base_context();
         ctx.active_session = Some(Session {
             id: 1,
@@ -311,26 +423,47 @@ mod tests {
             ended_at: None,
             notes: None,
         });
-        ctx.session_sets = vec![(
-            ExerciseSet {
-                id: 1,
-                exercise_entry_id: 1,
-                exercise_type_id: 1,
-                order_idx: 0,
-                measurement_type: MeasurementType::WeightReps,
-                count: Some(8),
-                value: 80.0,
-                perceived_difficulty: Difficulty::Medium,
-                comment: None,
-                logged_at: "2026-03-23 09:10:00".to_string(),
-            },
-            "Bench Press".to_string(),
-        )];
+        ctx.session_entries = vec![EntryView {
+            id: 7,
+            exercise_name: "Bench Press".to_string(),
+            set_count: 1,
+            sets_summary: "8×80.0kg".to_string(),
+            is_open: true,
+        }];
 
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("Active (started 2026-03-23 09:00:00)"));
+        assert!(prompt.contains("EXERCISE ENTRIES"));
         assert!(prompt.contains("Bench Press"));
         assert!(prompt.contains("80.0kg"));
+    }
+
+    #[test]
+    fn prompt_surfaces_leaked_open_entries() {
+        let mut ctx = base_context();
+        ctx.leaked_open_entries =
+            vec![EntryView { id: 3, exercise_name: "Squat".to_string(), set_count: 2, sets_summary: "".to_string(), is_open: true }];
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("LEAKED OPEN ENTRIES"));
+        assert!(prompt.contains("[id=3] Squat"));
+    }
+
+    #[test]
+    fn prompt_surfaces_active_plan() {
+        let mut ctx = base_context();
+        ctx.active_plan = Some(ActivePlanView {
+            name: "Push Day".to_string(),
+            completed_exercise_ids: vec![1],
+            next: Some(PlanExerciseView {
+                exercise_name: "Overhead Press".to_string(),
+                target_sets: Some(4),
+                target_reps: Some(6),
+                target_weight_kg: Some(50.0),
+            }),
+        });
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("ACTIVE PLAN: Push Day"));
+        assert!(prompt.contains("next: Overhead Press"));
     }
 
     #[test]

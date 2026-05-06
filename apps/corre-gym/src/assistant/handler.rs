@@ -7,15 +7,15 @@ use tokio::sync::Mutex;
 
 use crate::config::GymConfig;
 use crate::db::{
-    ConversationRole, Database, Difficulty, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, User, new_conversation_message,
-    new_exercise_entry, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
+    ConversationRole, Database, Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, User,
+    new_conversation_message, new_exercise_entry_at, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
 };
 use crate::telegram::Message as TgMessage;
 
 use super::actions::AssistantAction;
 use super::matching::find_exercise_type;
 use super::parser::parse_assistant_response;
-use super::prompts::{PromptContext, build_system_prompt};
+use super::prompts::{ActivePlanView, EntryView, PlanExerciseView, PromptContext, build_system_prompt};
 
 pub struct Reply {
     pub text: String,
@@ -93,18 +93,26 @@ impl AssistantHandler {
         }
 
         let mut failures: Vec<String> = Vec::new();
+        let mut suffixes: Vec<String> = Vec::new();
         for action in &parsed.actions {
-            if let Err(e) = self.execute_action(action, user).await {
-                tracing::warn!("Action execution failed: {e:#}");
-                failures.push(format!("{e:#}"));
+            match self.execute_action(action, user).await {
+                Ok(Some(suffix)) => suffixes.push(suffix),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("Action execution failed: {e:#}");
+                    failures.push(format!("{e:#}"));
+                }
             }
         }
 
-        let reply = if failures.is_empty() {
-            parsed.message.clone()
-        } else {
-            format!("{}\n\n(Note: some actions failed: {})", parsed.message, failures.join("; "))
-        };
+        let mut reply = parsed.message.clone();
+        for s in &suffixes {
+            reply.push_str("\n\n");
+            reply.push_str(s);
+        }
+        if !failures.is_empty() {
+            reply.push_str(&format!("\n\n(Note: some actions failed: {})", failures.join("; ")));
+        }
 
         if is_refusal {
             self.store_excluded_conversation_on_platform(user.id, platform, text, &parsed.message).await?;
@@ -204,21 +212,61 @@ impl AssistantHandler {
             Some(session) => {
                 let entries = db.list_entries_for_session(session.id)?;
                 result.push_str(&format!("\n<b>Active session</b> (started {})\n", escape_html(&session.started_at)));
-                if entries.is_empty() {
-                    result.push_str("No exercises logged yet\n");
-                } else {
-                    for entry in &entries {
-                        let sets = db.list_sets_for_entry(entry.id)?;
-                        for set in &sets {
-                            let name = self
-                                .catalogue
-                                .iter()
-                                .find(|e| e.exercise_type.id == set.exercise_type_id)
-                                .map(|e| e.exercise_type.name.as_str())
-                                .unwrap_or("unknown");
-                            result.push_str(&format!("- <b>{}</b>: {}\n", escape_html(name), escape_html(&format_set_compact(set))));
-                        }
+
+                let mut completed: Vec<(String, Vec<ExerciseSet>)> = Vec::new();
+                let mut open: Vec<(String, Vec<ExerciseSet>)> = Vec::new();
+                for entry in &entries {
+                    let sets = db.list_sets_for_entry(entry.id)?;
+                    let name = sets
+                        .first()
+                        .and_then(|s| self.catalogue.iter().find(|e| e.exercise_type.id == s.exercise_type_id))
+                        .map(|e| e.exercise_type.name.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    if entry.end_timestamp.is_some() {
+                        completed.push((name, sets));
+                    } else {
+                        open.push((name, sets));
                     }
+                }
+
+                if completed.is_empty() && open.is_empty() {
+                    result.push_str("No exercises logged yet\n");
+                }
+
+                if !completed.is_empty() {
+                    result.push_str("<b>Completed:</b>\n");
+                    for (name, sets) in &completed {
+                        result.push_str(&format!(
+                            "- <b>{}</b> ({} {}) — {}\n",
+                            escape_html(name),
+                            sets.len(),
+                            if sets.len() == 1 { "set" } else { "sets" },
+                            escape_html(&sets.iter().map(format_set_short).collect::<Vec<_>>().join(", ")),
+                        ));
+                    }
+                }
+
+                if open.len() > 1 {
+                    result.push_str("<b>Superset (in progress):</b>\n");
+                    for (i, (name, sets)) in open.iter().enumerate() {
+                        result.push_str(&format!(
+                            "  {}. <b>{}</b> ({} {}) — {}\n",
+                            i + 1,
+                            escape_html(name),
+                            sets.len(),
+                            if sets.len() == 1 { "set" } else { "sets" },
+                            escape_html(&sets.iter().map(format_set_short).collect::<Vec<_>>().join(", ")),
+                        ));
+                    }
+                } else if let Some((name, sets)) = open.first() {
+                    result.push_str("<b>Current exercise:</b>\n");
+                    result.push_str(&format!(
+                        "- <b>{}</b> ({} {}) — {}\n",
+                        escape_html(name),
+                        sets.len(),
+                        if sets.len() == 1 { "set" } else { "sets" },
+                        escape_html(&sets.iter().map(format_set_short).collect::<Vec<_>>().join(", ")),
+                    ));
                 }
             }
             None => result.push_str("No active session\n"),
@@ -318,26 +366,54 @@ impl AssistantHandler {
     async fn build_context(&self, user: &User) -> anyhow::Result<String> {
         let db = self.db.lock().await;
         let active_session = db.get_active_session(user.id)?;
-        let session_sets = match &active_session {
-            Some(session) => {
-                let entries = db.list_entries_for_session(session.id)?;
-                let mut all_sets: Vec<(ExerciseSet, String)> = Vec::new();
-                for entry in &entries {
-                    let sets = db.list_sets_for_entry(entry.id)?;
-                    for set in sets {
-                        let name = self
-                            .catalogue
-                            .iter()
-                            .find(|e| e.exercise_type.id == set.exercise_type_id)
-                            .map(|e| e.exercise_type.name.clone())
-                            .unwrap_or_else(|| "unknown".to_string());
-                        all_sets.push((set, name));
+        let mut session_sets: Vec<(ExerciseSet, String)> = Vec::new();
+        let mut session_entries: Vec<EntryView> = Vec::new();
+        let mut closed_exercise_ids_in_session: Vec<i64> = Vec::new();
+
+        if let Some(session) = &active_session {
+            let entries = db.list_entries_for_session(session.id)?;
+            for entry in &entries {
+                let sets = db.list_sets_for_entry(entry.id)?;
+                let exercise_type_id = sets.first().map(|s| s.exercise_type_id);
+                let exercise_name = exercise_type_id
+                    .and_then(|id| self.catalogue.iter().find(|e| e.exercise_type.id == id).map(|e| e.exercise_type.name.clone()))
+                    .unwrap_or_else(|| "unknown".to_string());
+                let summary_parts: Vec<String> = sets.iter().map(format_set_short).collect();
+                session_entries.push(EntryView {
+                    id: entry.id,
+                    exercise_name: exercise_name.clone(),
+                    set_count: sets.len(),
+                    sets_summary: summary_parts.join(", "),
+                    is_open: entry.end_timestamp.is_none(),
+                });
+                if entry.end_timestamp.is_some() {
+                    if let Some(id) = exercise_type_id {
+                        closed_exercise_ids_in_session.push(id);
                     }
                 }
-                all_sets
+                for set in sets {
+                    session_sets.push((set, exercise_name.clone()));
+                }
             }
-            None => vec![],
+        }
+
+        // Active plan, recovered from sentinel-prefixed session.notes
+        let active_plan = match active_session.as_ref().and_then(|s| s.notes.as_deref()) {
+            Some(notes) => {
+                let (plan_name, _rest) = parse_plan_from_notes(Some(notes));
+                match plan_name {
+                    Some(name) => self.build_active_plan(&db, user.id, &name, &closed_exercise_ids_in_session)?,
+                    None => None,
+                }
+            }
+            None => None,
         };
+
+        // Leaked open entries: open EEs not belonging to the active session, OR open
+        // entries in the active session (so the LLM can decide to close/delete before
+        // a new session is requested).
+        let leaked_open_entries = build_leaked_view(&db, &self.catalogue, user.id, active_session.as_ref().map(|s| s.id))?;
+
         let health_entries = db.list_active_health_entries(user.id)?;
         let recent_summaries = db.list_session_summaries(user.id, None, None)?;
         let recent_summaries: Vec<_> = recent_summaries.into_iter().take(5).collect();
@@ -353,6 +429,9 @@ impl AssistantHandler {
             current_time: Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             active_session,
             session_sets,
+            session_entries,
+            leaked_open_entries,
+            active_plan,
             health_entries,
             recent_summaries,
             recent_sets,
@@ -362,6 +441,36 @@ impl AssistantHandler {
         };
 
         Ok(build_system_prompt(&ctx))
+    }
+
+    fn build_active_plan(
+        &self,
+        db: &Database,
+        user_id: i64,
+        plan_name: &str,
+        completed_exercise_ids: &[i64],
+    ) -> anyhow::Result<Option<ActivePlanView>> {
+        let schedules = db.list_schedules(user_id)?;
+        let Some(schedule) = schedules.into_iter().find(|s| s.name.eq_ignore_ascii_case(plan_name)) else {
+            return Ok(None);
+        };
+        let mut planned = db.list_schedule_exercises(schedule.id)?;
+        planned.sort_by_key(|p| p.order_idx);
+        let next = planned.iter().find(|p| !completed_exercise_ids.contains(&p.exercise_type_id)).map(|p| {
+            let exercise_name = self
+                .catalogue
+                .iter()
+                .find(|e| e.exercise_type.id == p.exercise_type_id)
+                .map(|e| e.exercise_type.name.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            PlanExerciseView {
+                exercise_name,
+                target_sets: p.target_sets,
+                target_reps: p.target_reps,
+                target_weight_kg: p.target_weight_kg,
+            }
+        });
+        Ok(Some(ActivePlanView { name: schedule.name, completed_exercise_ids: completed_exercise_ids.to_vec(), next }))
     }
 
     async fn call_llm(&self, system_prompt: &str, history: &[crate::db::ConversationMessage], user_text: &str) -> anyhow::Result<String> {
@@ -384,57 +493,83 @@ impl AssistantHandler {
         Ok(response.content)
     }
 
-    async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<()> {
+    /// Returns an optional suffix appended to the assistant's reply (set-count
+    /// checkpoint, premature-close pushback, leaked-entry warning).
+    async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<Option<String>> {
         tracing::debug!(action = ?action, user_id = user.id, "Executing action");
         match action {
             AssistantAction::LogExercise { exercise, sets, reps, weight_kg, perceived_difficulty, comment } => {
                 let et = find_exercise_type(&self.catalogue, exercise)
                     .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
-                let entry_id = self.ensure_entry(user.id, session.id).await?;
+                let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
                 let n_sets = sets.unwrap_or(1).max(1);
                 let weight = weight_kg.unwrap_or(0.0);
                 let pd = perceived_difficulty.unwrap_or(Difficulty::Medium);
-                let db = self.db.lock().await;
-                for i in 0..n_sets {
-                    let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::WeightReps, weight);
-                    s.count = *reps;
-                    s.order_idx = i;
-                    s.perceived_difficulty = pd;
-                    s.comment = comment.clone();
-                    db.insert_set(&s)?;
+                {
+                    let db = self.db.lock().await;
+                    for i in 0..n_sets {
+                        let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::WeightReps, weight);
+                        s.count = *reps;
+                        s.order_idx = i;
+                        s.perceived_difficulty = pd;
+                        s.comment = comment.clone();
+                        db.insert_set(&s)?;
+                    }
                 }
+                Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
             AssistantAction::LogExerciseTimed { exercise, duration_secs, perceived_difficulty, comment } => {
                 let et = find_exercise_type(&self.catalogue, exercise)
                     .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
-                let entry_id = self.ensure_entry(user.id, session.id).await?;
+                let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::TimeBased, *duration_secs as f64);
                 s.perceived_difficulty = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 s.comment = comment.clone();
                 self.db.lock().await.insert_set(&s)?;
+                Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
             AssistantAction::LogExerciseDistance { exercise, distance_m, duration_secs, perceived_difficulty, comment } => {
                 let et = find_exercise_type(&self.catalogue, exercise)
                     .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
-                let entry_id = self.ensure_entry(user.id, session.id).await?;
+                let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
                 let value = distance_m.unwrap_or_else(|| duration_secs.unwrap_or(0) as f64);
                 let mt = if distance_m.is_some() { MeasurementType::DistanceBased } else { MeasurementType::TimeBased };
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, mt, value);
                 s.perceived_difficulty = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 s.comment = comment.clone();
                 self.db.lock().await.insert_set(&s)?;
+                Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
-            AssistantAction::StartSession { notes } => {
+            AssistantAction::StartSession { notes, plan } => {
                 let db = self.db.lock().await;
-                if db.get_active_session(user.id)?.is_none() {
-                    let session = db.start_session(user.id, notes.as_deref())?;
-                    tracing::debug!(id = session.id, notes = ?notes, "Started session");
-                } else {
+                if let Some(active) = db.get_active_session(user.id)? {
+                    let open = db.list_open_entries_for_session(active.id)?;
+                    if !open.is_empty() {
+                        let names = self.entry_exercise_names(&db, &open)?;
+                        let suffix = format!(
+                            "You still have {n} open exercise {entries} in your active session ({list}). \
+                             Want me to close them or delete them before starting a new session?",
+                            n = open.len(),
+                            entries = if open.len() == 1 { "entry" } else { "entries" },
+                            list = names.join(", "),
+                        );
+                        return Ok(Some(suffix));
+                    }
                     tracing::debug!("Session already active, skipping start");
+                    return Ok(None);
                 }
+                // No active session — clean up any leaked open entries from previously
+                // ended sessions before starting fresh.
+                drop(db);
+                self.silent_close_leaked_entries(user.id).await?;
+                let db = self.db.lock().await;
+                let combined_notes = combine_plan_with_notes(plan.as_deref(), notes.as_deref());
+                let session = db.start_session(user.id, combined_notes.as_deref())?;
+                tracing::debug!(id = session.id, plan = ?plan, "Started session");
+                Ok(None)
             }
             AssistantAction::EndSession => {
                 let db = self.db.lock().await;
@@ -444,6 +579,28 @@ impl AssistantHandler {
                 } else {
                     tracing::debug!("No active session to end");
                 }
+                Ok(None)
+            }
+            AssistantAction::CloseExerciseEntry { exercise, entry_id } => {
+                self.close_exercise_entry_action(user, exercise.as_deref(), *entry_id, false).await
+            }
+            AssistantAction::ConfirmCloseExerciseEntry { exercise, entry_id } => {
+                self.close_exercise_entry_action(user, exercise.as_deref(), *entry_id, true).await
+            }
+            AssistantAction::DeleteExerciseEntry { entry_id } => {
+                let db = self.db.lock().await;
+                let entry = db.get_entry(*entry_id)?.ok_or_else(|| anyhow::anyhow!("entry {entry_id} not found"))?;
+                anyhow::ensure!(entry.user_id == user.id, "entry {entry_id} does not belong to user");
+                db.delete_entry(*entry_id)?;
+                Ok(None)
+            }
+            AssistantAction::CloseAllOpenEntries => {
+                let db = self.db.lock().await;
+                if let Some(session) = db.get_active_session(user.id)? {
+                    let n = db.close_open_entries_for_session(session.id, None)?;
+                    tracing::debug!(session_id = session.id, closed = n, "Closed all open entries");
+                }
+                Ok(None)
             }
             AssistantAction::LogHealth { entry_type, body_part, severity, description } => {
                 let mut entry = new_health_entry(user.id, *entry_type, description);
@@ -453,6 +610,7 @@ impl AssistantHandler {
                 }
                 tracing::debug!(entry_type = ?entry_type, body_part = ?body_part, severity = ?severity, "Inserting health entry");
                 self.db.lock().await.insert_health_entry(&entry)?;
+                Ok(None)
             }
             AssistantAction::ResolveHealth { description } => {
                 let db = self.db.lock().await;
@@ -463,6 +621,7 @@ impl AssistantHandler {
                 } else {
                     tracing::debug!(search = %description, "No matching health entry found to resolve");
                 }
+                Ok(None)
             }
             AssistantAction::SetGoal { exercise, target_value, end_date } => {
                 let et = find_exercise_type(&self.catalogue, exercise)
@@ -471,32 +630,131 @@ impl AssistantHandler {
                 goal.end_date = end_date.clone();
                 tracing::debug!(exercise = %et.exercise_type.name, target = %target_value, end_date = ?end_date, "Inserting goal");
                 self.db.lock().await.insert_goal(&goal)?;
+                Ok(None)
             }
             AssistantAction::Unknown => {
                 tracing::debug!("Ignoring unknown action type from LLM");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn ensure_session(&self, user: &User) -> anyhow::Result<crate::db::Session> {
+        if let Some(session) = self.db.lock().await.get_active_session(user.id)? {
+            return Ok(session);
+        }
+        // Auto-start path: no active session exists, so any open exercise_entries
+        // for this user are leaks from a previously-ended session. Close them
+        // silently before starting fresh.
+        self.silent_close_leaked_entries(user.id).await?;
+        self.db.lock().await.start_session(user.id, None)
+    }
+
+    /// Open exercise_entry whose sets match `exercise_type_id`, or insert a new
+    /// entry. The new entry's `start_timestamp` is computed once and reused as the
+    /// caller's reference, so the first set inserted into it can be given the same
+    /// `logged_at` value (matching the brief's "same start timestamp as the first
+    /// set" requirement).
+    async fn ensure_entry_for_exercise(&self, user_id: i64, session_id: i64, exercise_type_id: i64) -> anyhow::Result<i64> {
+        let db = self.db.lock().await;
+        if let Some(open) = db.find_open_entry_for_exercise(user_id, session_id, exercise_type_id)? {
+            return Ok(open.id);
+        }
+        let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let entry = new_exercise_entry_at(user_id, Some(session_id), None, &now);
+        db.insert_entry(&entry)
+    }
+
+    /// Resolve an entry to close (explicit id > exercise-name match > most recent
+    /// open in the active session). When `confirm` is false and the resolved entry
+    /// has fewer than 3 sets, returns the pushback suffix and leaves the entry
+    /// open.
+    async fn close_exercise_entry_action(
+        &self,
+        user: &User,
+        exercise: Option<&str>,
+        entry_id: Option<i64>,
+        confirm: bool,
+    ) -> anyhow::Result<Option<String>> {
+        let db = self.db.lock().await;
+        let active = db.get_active_session(user.id)?;
+        let resolved = if let Some(id) = entry_id {
+            let entry = db.get_entry(id)?.ok_or_else(|| anyhow::anyhow!("entry {id} not found"))?;
+            anyhow::ensure!(entry.user_id == user.id, "entry {id} does not belong to user");
+            anyhow::ensure!(entry.end_timestamp.is_none(), "entry {id} is already closed");
+            entry
+        } else {
+            let session = active.as_ref().ok_or_else(|| anyhow::anyhow!("no active session"))?;
+            let open = db.list_open_entries_for_session(session.id)?;
+            let entry = if let Some(name) = exercise {
+                let et = find_exercise_type(&self.catalogue, name)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown exercise: {name}"))?;
+                open.into_iter().find(|e| {
+                    db.list_sets_for_entry(e.id)
+                        .map(|sets| sets.iter().any(|s| s.exercise_type_id == et.exercise_type.id))
+                        .unwrap_or(false)
+                })
+            } else {
+                open.into_iter().last()
+            };
+            entry.ok_or_else(|| anyhow::anyhow!("no matching open exercise_entry to close"))?
+        };
+
+        let count = db.count_sets_for_entry(resolved.id)?;
+        if !confirm && count < 3 {
+            let name = entry_exercise_name(&db, &self.catalogue, resolved.id)?;
+            let suffix = format!(
+                "You've only done {count} {sets} of {name}. You should really push for one more! Should we keep going?",
+                sets = if count == 1 { "set" } else { "sets" },
+            );
+            return Ok(Some(suffix));
+        }
+        db.end_entry(resolved.id)?;
+        Ok(None)
+    }
+
+    /// Set-count checkpoint: every time the user logs a set in an open entry that
+    /// already has ≥3 sets total, ask whether they want to keep going or move on.
+    async fn set_count_checkpoint_suffix(&self, entry_id: i64, exercise_name: &str) -> anyhow::Result<Option<String>> {
+        let count = self.db.lock().await.count_sets_for_entry(entry_id)?;
+        if count >= 3 {
+            Ok(Some(format!(
+                "You've logged {count} sets of {exercise_name}. Want another set, or move to the next exercise?"
+            )))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Close any open exercise_entries that belong to already-ended sessions for
+    /// this user. Best-effort: uses the parent session's `ended_at` when present,
+    /// otherwise `datetime('now')`.
+    async fn silent_close_leaked_entries(&self, user_id: i64) -> anyhow::Result<()> {
+        let db = self.db.lock().await;
+        let leaks = db.list_open_entries_for_user(user_id)?;
+        for entry in leaks {
+            let Some(session_id) = entry.session_id else {
+                db.end_entry(entry.id)?;
+                continue;
+            };
+            let session = db.get_session(session_id)?;
+            match session.and_then(|s| s.ended_at) {
+                Some(ended_at) => {
+                    db.conn().execute(
+                        "UPDATE exercise_entry SET end_timestamp = ?1 WHERE id = ?2 AND end_timestamp IS NULL",
+                        rusqlite::params![ended_at, entry.id],
+                    )?;
+                }
+                None => {
+                    // session is still active — not a leak; leave it alone.
+                }
             }
         }
         Ok(())
     }
 
-    async fn ensure_session(&self, user: &User) -> anyhow::Result<crate::db::Session> {
-        let db = self.db.lock().await;
-        if let Some(session) = db.get_active_session(user.id)? {
-            return Ok(session);
-        }
-        db.start_session(user.id, None)
-    }
-
-    /// Reuse an open exercise_entry within the last 30 minutes, or create a new one.
-    async fn ensure_entry(&self, user_id: i64, session_id: i64) -> anyhow::Result<i64> {
-        let db = self.db.lock().await;
-        if let Some(open) = db.latest_open_entry(user_id, 30)?
-            && open.session_id == Some(session_id)
-        {
-            return Ok(open.id);
-        }
-        let entry = new_exercise_entry(user_id, Some(session_id), None);
-        db.insert_entry(&entry)
+    fn entry_exercise_names(&self, db: &Database, entries: &[ExerciseEntry]) -> anyhow::Result<Vec<String>> {
+        entries.iter().map(|e| entry_exercise_name(db, &self.catalogue, e.id)).collect()
     }
 
     async fn cmd_clear(&self, user: &User, platform: &str) -> anyhow::Result<String> {
@@ -563,22 +821,105 @@ fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn format_set_compact(set: &ExerciseSet) -> String {
-    let mut parts = Vec::new();
-    match set.measurement_type {
-        MeasurementType::WeightReps => {
-            if let Some(c) = set.count {
-                parts.push(format!("{c} reps"));
-            }
-            parts.push(format!("{:.1}kg", set.value));
-        }
-        MeasurementType::TimeBased => parts.push(format!("{:.0}s", set.value)),
-        MeasurementType::DistanceBased => parts.push(format!("{:.0}m", set.value)),
-        MeasurementType::LevelBased => parts.push(format!("level {:.0}", set.value)),
-        MeasurementType::ScoreBased => parts.push(format!("score {:.1}", set.value)),
-    }
-    if parts.is_empty() { "no details".to_string() } else { parts.join(", ") }
+/// Resolve the exercise an entry "belongs to" via its first set. Returns
+/// `"unknown"` if the entry has no sets yet (which only happens transiently
+/// before the first insert).
+pub(crate) fn entry_exercise_name(
+    db: &Database,
+    catalogue: &[ExerciseTypeWithAncestry],
+    entry_id: i64,
+) -> anyhow::Result<String> {
+    let sets = db.list_sets_for_entry(entry_id)?;
+    let Some(first) = sets.first() else {
+        return Ok("unknown".to_string());
+    };
+    let name = catalogue
+        .iter()
+        .find(|e| e.exercise_type.id == first.exercise_type_id)
+        .map(|e| e.exercise_type.name.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    Ok(name)
 }
+
+/// Encode an optional plan name into the session's `notes` field using the
+/// `plan:<name>` sentinel prefix so the active plan can be recovered later
+/// without a schema change.
+pub(crate) fn combine_plan_with_notes(plan: Option<&str>, notes: Option<&str>) -> Option<String> {
+    match (plan, notes) {
+        (Some(p), Some(n)) => Some(format!("plan:{p}\n{n}")),
+        (Some(p), None) => Some(format!("plan:{p}")),
+        (None, Some(n)) => Some(n.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// Inverse of `combine_plan_with_notes`. Returns `(plan_name, remaining_notes)`.
+pub(crate) fn parse_plan_from_notes(notes: Option<&str>) -> (Option<String>, Option<String>) {
+    let Some(text) = notes else {
+        return (None, None);
+    };
+    if let Some(rest) = text.strip_prefix("plan:") {
+        match rest.split_once('\n') {
+            Some((plan, body)) => (Some(plan.trim().to_string()), Some(body.to_string())),
+            None => (Some(rest.trim().to_string()), None),
+        }
+    } else {
+        (None, Some(text.to_string()))
+    }
+}
+
+/// Compact rendering of a single set used inside an entry summary, e.g. "8×80kg",
+/// "30s", "5000m".
+pub(crate) fn format_set_short(set: &ExerciseSet) -> String {
+    match set.measurement_type {
+        MeasurementType::WeightReps => match set.count {
+            Some(c) => format!("{c}×{:.1}kg", set.value),
+            None => format!("{:.1}kg", set.value),
+        },
+        MeasurementType::TimeBased => format!("{:.0}s", set.value),
+        MeasurementType::DistanceBased => format!("{:.0}m", set.value),
+        MeasurementType::LevelBased => format!("L{:.0}", set.value),
+        MeasurementType::ScoreBased => format!("{:.1}pt", set.value),
+    }
+}
+
+/// Build EntryView rows for any open exercise_entries the user has, so the prompt
+/// (and LLM-driven cleanup logic) can see them. When `active_session_id` is given,
+/// only entries inside that session are reported (the caller's contract: leaks are
+/// what blocks a *new* session, not what's normal in the current one).
+fn build_leaked_view(
+    db: &Database,
+    catalogue: &[ExerciseTypeWithAncestry],
+    user_id: i64,
+    active_session_id: Option<i64>,
+) -> anyhow::Result<Vec<EntryView>> {
+    let all_open = db.list_open_entries_for_user(user_id)?;
+    let filtered: Vec<_> = all_open
+        .into_iter()
+        .filter(|e| match active_session_id {
+            Some(sid) => e.session_id == Some(sid),
+            None => true,
+        })
+        .collect();
+    let mut views = Vec::with_capacity(filtered.len());
+    for entry in filtered {
+        let sets = db.list_sets_for_entry(entry.id)?;
+        let exercise_name = sets
+            .first()
+            .and_then(|s| catalogue.iter().find(|e| e.exercise_type.id == s.exercise_type_id))
+            .map(|e| e.exercise_type.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        views.push(EntryView {
+            id: entry.id,
+            exercise_name,
+            set_count: sets.len(),
+            sets_summary: sets.iter().map(format_set_short).collect::<Vec<_>>().join(", "),
+            is_open: true,
+        });
+    }
+    Ok(views)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -682,7 +1023,8 @@ mod tests {
         let msg = make_message(12345, "hello");
         let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
         let reply = handler.handle_text_message(&msg, "3 sets bench 80kg 8 reps").await.unwrap();
-        assert_eq!(reply.text, "Logged your bench press!");
+        assert!(reply.text.starts_with("Logged your bench press!"));
+        assert!(reply.text.contains("You've logged 3 sets of Bench Press. Want another set, or move to the next exercise?"));
 
         let db = handler.db.lock().await;
         let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
@@ -692,6 +1034,7 @@ mod tests {
         let sets = db.list_sets_for_entry(entries[0].id).unwrap();
         assert_eq!(sets.len(), 3);
         assert!(sets.iter().all(|s| s.count == Some(8) && (s.value - 80.0).abs() < 1e-6));
+        assert!(entries[0].end_timestamp.is_none(), "entry should still be open");
     }
 
     #[tokio::test]
@@ -878,5 +1221,309 @@ mod tests {
         assert!(!is_refusal_response("Great job! I logged your bench press."));
         assert!(!is_refusal_response("Your session has been started."));
         assert!(!is_refusal_response("Here's your workout history."));
+    }
+
+    // ─── New behaviour tests for the set-centric workflow ──────────────────
+
+    #[tokio::test]
+    async fn supersets_keep_separate_entries() {
+        let response_a = r#"{"message": "Logged bench.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(response_a).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench 80kg 8 reps").await.unwrap();
+
+        // Without closing, log a different exercise.
+        llm.set_response(
+            r#"{"message": "Logged pull-ups.", "actions": [
+                {"type": "log_exercise", "exercise": "Pull-Up", "sets": 1, "reps": 10}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "now pull-ups, 10 reps").await.unwrap();
+
+        // Then back to bench — should reuse the existing open Bench Press entry.
+        llm.set_response(
+            r#"{"message": "Logged another bench set.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "another bench set").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let entries = db.list_entries_for_session(session.id).unwrap();
+        assert_eq!(entries.len(), 2, "two distinct entries for two exercises (superset)");
+        let mut counts: Vec<usize> = entries
+            .iter()
+            .map(|e| db.list_sets_for_entry(e.id).unwrap().len())
+            .collect();
+        counts.sort();
+        assert_eq!(counts, vec![1, 2], "Pull-Up=1, Bench Press=2");
+        for e in &entries {
+            assert!(e.end_timestamp.is_none(), "both entries remain open");
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_suffix_appears_at_3_sets_and_repeats_at_4() {
+        let log_three = r#"{"message": "Done!", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(log_three).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        let reply = handler.handle_text_message(&msg, "3 sets bench 80kg 8").await.unwrap();
+        assert!(reply.text.contains("You've logged 3 sets of Bench Press. Want another set, or move to the next exercise?"));
+
+        // 4th set — checkpoint should fire again with n=4.
+        llm.set_response(
+            r#"{"message": "Logged.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "one more").await.unwrap();
+        assert!(reply.text.contains("You've logged 4 sets of Bench Press"));
+    }
+
+    #[tokio::test]
+    async fn premature_close_pushback_at_2_sets() {
+        let response_log = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 2, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(response_log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "2 sets bench").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "Closing bench.", "actions": [
+                {"type": "close_exercise_entry", "exercise": "Bench Press"}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "close bench").await.unwrap();
+        assert!(reply.text.contains("You've only done 2 sets of Bench Press. You should really push for one more! Should we keep going?"));
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let entries = db.list_entries_for_session(session.id).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].end_timestamp.is_none(), "entry must stay open after pushback");
+    }
+
+    #[tokio::test]
+    async fn confirm_close_after_pushback_actually_closes() {
+        let response_log = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 2, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(response_log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "2 sets bench").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "Closing for real.", "actions": [
+                {"type": "confirm_close_exercise_entry", "exercise": "Bench Press"}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "yes really close it").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let entries = db.list_entries_for_session(session.id).unwrap();
+        assert!(entries[0].end_timestamp.is_some(), "confirm_close_exercise_entry bypasses pushback");
+    }
+
+    #[tokio::test]
+    async fn close_exercise_entry_with_three_sets_succeeds() {
+        let response_log = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(response_log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "3 sets bench").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "Closing bench.", "actions": [
+                {"type": "close_exercise_entry", "exercise": "Bench Press"}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "move on").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let entries = db.list_entries_for_session(session.id).unwrap();
+        assert!(entries[0].end_timestamp.is_some(), "≥3-set close should succeed without pushback");
+    }
+
+    #[tokio::test]
+    async fn end_session_closes_all_open_entries() {
+        let log = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench 80kg 8 reps").await.unwrap();
+
+        llm.set_response(r#"{"message": "Ending.", "actions": [{"type": "end_session"}]}"#);
+        let _ = handler.handle_text_message(&msg, "end session").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        // No active session anymore.
+        assert!(db.get_active_session(user.id).unwrap().is_none());
+        // No open entries either.
+        let leftover = db.list_open_entries_for_user(user.id).unwrap();
+        assert!(leftover.is_empty(), "end_session must cascade-close every open entry");
+    }
+
+    #[tokio::test]
+    async fn start_session_with_open_entries_in_active_session_blocks() {
+        // Step 1: log a set so an open entry exists in the active session.
+        let log = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench").await.unwrap();
+
+        // Step 2: try to start a new session — should be blocked.
+        llm.set_response(r#"{"message": "Starting.", "actions": [{"type": "start_session"}]}"#);
+        let reply = handler.handle_text_message(&msg, "start a new session").await.unwrap();
+        assert!(reply.text.contains("open exercise"));
+        assert!(reply.text.contains("close them or delete them"));
+
+        // The original session is still the active one — no new session was created.
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session_count: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM sessions WHERE user_id = ?1", rusqlite::params![user.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(session_count, 1);
+    }
+
+    #[tokio::test]
+    async fn close_all_open_entries_clears_block_for_new_session() {
+        let log = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench").await.unwrap();
+
+        llm.set_response(r#"{"message": "Closing.", "actions": [{"type": "close_all_open_entries"}]}"#);
+        let _ = handler.handle_text_message(&msg, "close them").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let leftover = db.list_open_entries_for_user(user.id).unwrap();
+        assert!(leftover.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cmd_status_renders_superset_label_when_two_open() {
+        let log_a = r#"{"message": "ok", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 1, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(log_a).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench").await.unwrap();
+        llm.set_response(
+            r#"{"message": "ok", "actions": [
+                {"type": "log_exercise", "exercise": "Pull-Up", "sets": 1, "reps": 10}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "pull-ups").await.unwrap();
+
+        let reply = handler.handle_text_message(&msg, "/status").await.unwrap();
+        assert!(reply.text.contains("Superset (in progress)"));
+        assert!(reply.text.contains("Bench Press"));
+        assert!(reply.text.contains("Pull-Up"));
+    }
+
+    #[tokio::test]
+    async fn cmd_status_renders_completed_section() {
+        let log = r#"{"message": "ok", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "sets": 3, "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, llm) = setup_handler(log).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "3 sets bench").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "ok", "actions": [{"type": "close_exercise_entry", "exercise": "Bench Press"}]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "done").await.unwrap();
+
+        let reply = handler.handle_text_message(&msg, "/status").await.unwrap();
+        assert!(reply.text.contains("Completed:"));
+        assert!(reply.text.contains("Bench Press"));
+    }
+
+    #[tokio::test]
+    async fn start_session_with_plan_stores_sentinel_in_notes() {
+        // Seed a schedule named "Push Day" for the user.
+        let (handler, llm) = setup_handler(r#"{"message": "hi", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let user_id = {
+            let db = handler.db.lock().await;
+            let u = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+            let bp = db.get_exercise_type_by_name("Bench Press").unwrap().unwrap();
+            let pull = db.get_exercise_type_by_name("Pull-Up").unwrap().unwrap();
+            let sched_id = db
+                .insert_schedule(&crate::db::Schedule {
+                    id: 0,
+                    user_id: u.id,
+                    name: "Push Day".to_string(),
+                    cron_expr: "0 0 6 * * 1".to_string(),
+                    reminder_type: crate::db::ReminderType::Text,
+                    reminder_notice_mins: 30,
+                    enabled: true,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                })
+                .unwrap();
+            db.add_schedule_exercise(&crate::db::ScheduleExercise {
+                schedule_id: sched_id,
+                exercise_type_id: bp.id,
+                order_idx: 0,
+                target_sets: Some(3),
+                target_reps: Some(8),
+                target_weight_kg: Some(80.0),
+            })
+            .unwrap();
+            db.add_schedule_exercise(&crate::db::ScheduleExercise {
+                schedule_id: sched_id,
+                exercise_type_id: pull.id,
+                order_idx: 1,
+                target_sets: Some(3),
+                target_reps: Some(10),
+                target_weight_kg: None,
+            })
+            .unwrap();
+            u.id
+        };
+
+        llm.set_response(r#"{"message": "Starting.", "actions": [{"type": "start_session", "plan": "Push Day"}]}"#);
+        let _ = handler.handle_text_message(&msg, "start push day").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let session = db.get_active_session(user_id).unwrap().unwrap();
+        let notes = session.notes.unwrap();
+        assert!(notes.starts_with("plan:Push Day"));
     }
 }

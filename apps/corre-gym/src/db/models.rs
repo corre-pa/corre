@@ -526,7 +526,18 @@ pub fn new_session(user_id: i64, notes: Option<&str>) -> Session {
 }
 
 pub fn new_exercise_entry(user_id: i64, session_id: Option<i64>, comment: Option<&str>) -> ExerciseEntry {
-    ExerciseEntry { id: 0, user_id, session_id, start_timestamp: now_str(), end_timestamp: None, comment: comment.map(String::from) }
+    new_exercise_entry_at(user_id, session_id, comment, &now_str())
+}
+
+pub fn new_exercise_entry_at(user_id: i64, session_id: Option<i64>, comment: Option<&str>, start_timestamp: &str) -> ExerciseEntry {
+    ExerciseEntry {
+        id: 0,
+        user_id,
+        session_id,
+        start_timestamp: start_timestamp.to_string(),
+        end_timestamp: None,
+        comment: comment.map(String::from),
+    }
 }
 
 pub fn new_exercise_set(exercise_entry_id: i64, exercise_type_id: i64, measurement_type: MeasurementType, value: f64) -> ExerciseSet {

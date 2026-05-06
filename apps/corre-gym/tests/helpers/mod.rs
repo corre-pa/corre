@@ -67,6 +67,7 @@ fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, pl
 
         let mut bench_entry = new_exercise_entry(user_id, Some(session_id), None);
         bench_entry.start_timestamp = format!("{date} 09:05:00");
+        bench_entry.end_timestamp = Some(ended.clone());
         let bench_entry_id = db.insert_entry(&bench_entry).unwrap();
 
         let progressing_weight = 70.0 + (week as f64) * 1.0;
@@ -81,6 +82,7 @@ fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, pl
         if week % 2 == 0 {
             let mut dl_entry = new_exercise_entry(user_id, Some(session_id), None);
             dl_entry.start_timestamp = format!("{date} 09:30:00");
+            dl_entry.end_timestamp = Some(ended.clone());
             let dl_entry_id = db.insert_entry(&dl_entry).unwrap();
             let dl_weight = 100.0 + (week as f64) * 1.5;
             for set_idx in 0..3 {
@@ -95,6 +97,7 @@ fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, pl
         // Plank (time-based)
         let mut plank_entry = new_exercise_entry(user_id, Some(session_id), None);
         plank_entry.start_timestamp = format!("{date} 09:55:00");
+        plank_entry.end_timestamp = Some(ended.clone());
         let plank_entry_id = db.insert_entry(&plank_entry).unwrap();
         let mut plank_set = new_exercise_set(plank_entry_id, plank, MeasurementType::TimeBased, 60.0 + week as f64);
         plank_set.logged_at = format!("{date} 09:55:00");
@@ -103,6 +106,7 @@ fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, pl
         // Running (distance-based)
         let mut run_entry = new_exercise_entry(user_id, Some(session_id), None);
         run_entry.start_timestamp = format!("{date} 10:05:00");
+        run_entry.end_timestamp = Some(ended.clone());
         let run_entry_id = db.insert_entry(&run_entry).unwrap();
         let mut run_set = new_exercise_set(run_entry_id, running, MeasurementType::DistanceBased, 3000.0 + (week as f64) * 100.0);
         run_set.logged_at = format!("{date} 10:05:00");
@@ -119,14 +123,17 @@ fn seed_alice_history(db: &Database, user_id: i64, bench: i64, deadlift: i64, pl
 fn seed_bob_history(db: &Database, user_id: i64, bench: i64) {
     for day in 0..10 {
         let date = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap() + Duration::days(day * 3);
+        let ended = format!("{date} 19:00:00");
         db.conn()
             .execute(
                 "INSERT INTO sessions (user_id, started_at, ended_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![user_id, format!("{date} 18:00:00"), format!("{date} 19:00:00")],
+                rusqlite::params![user_id, format!("{date} 18:00:00"), ended],
             )
             .unwrap();
         let session_id = db.conn().last_insert_rowid();
-        let entry_id = db.insert_entry(&new_exercise_entry(user_id, Some(session_id), None)).unwrap();
+        let mut entry = new_exercise_entry(user_id, Some(session_id), None);
+        entry.end_timestamp = Some(ended.clone());
+        let entry_id = db.insert_entry(&entry).unwrap();
         for _ in 0..3 {
             let mut s = new_exercise_set(entry_id, bench, MeasurementType::WeightReps, 60.0);
             s.count = Some(10);

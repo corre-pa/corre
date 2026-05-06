@@ -22,6 +22,23 @@ fn fixture_loads_completely() {
 }
 
 #[test]
+fn invariant_closed_sessions_have_no_open_entries() {
+    let f = build_fixture();
+    let leaks: i64 = f
+        .db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM exercise_entry ee \
+             JOIN sessions s ON ee.session_id = s.id \
+             WHERE s.ended_at IS NOT NULL AND ee.end_timestamp IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(leaks, 0, "ended sessions must have no open exercise_entries");
+}
+
+#[test]
 fn exercise_time_series_shows_progression() {
     let f = build_fixture();
     let points = f.db.exercise_time_series(f.alice_id, f.bench_press_id, Some("2025-01-01"), Some("2026-06-30"), false).unwrap();

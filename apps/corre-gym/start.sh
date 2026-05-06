@@ -4,15 +4,33 @@
 # then run the corre-gym bot locally via cargo.
 #
 # Usage:
-#   ./start.sh                        # uses default config path
-#   ./start.sh -c /path/to/corre.toml
+#   ./start.sh                              # production-style run, uses corre.toml voice URLs as-is
+#   ./start.sh --dev                        # dev mode: override voice URLs to point at localhost
+#   ./start.sh -c /path/to/corre.toml       # any extra args are forwarded to corre-gym
+#   ./start.sh --dev -c /path/to/corre.toml
 #
-# Ensure your corre.toml [gym.voice] section points at localhost:
-#   stt_url = "http://localhost:5005"
-#   tts_url = "http://localhost:5000"
+# In --dev mode the script exports CORRE_GYM_STT_URL/CORRE_GYM_TTS_URL so voice
+# requests hit the host-published container ports rather than Docker network
+# hostnames. Use this when running corre-gym from your local cargo build while
+# the voice services run in Docker.
 #
-# On exit (Ctrl-C), both containers are stopped automatically.
+# On exit (Ctrl-C or process end), both containers are stopped automatically.
 set -euo pipefail
+
+DEV_MODE=0
+PASSTHROUGH_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dev)
+            DEV_MODE=1
+            shift
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -87,4 +105,10 @@ echo "  STT: http://localhost:${WHISPER_PORT}"
 echo "  TTS: http://localhost:${PIPER_PORT}"
 echo ""
 
-exec cargo run -p corre-gym --release -- "$@"
+if [[ "$DEV_MODE" -eq 1 ]]; then
+    echo "Dev mode: overriding voice URLs to localhost"
+    export CORRE_GYM_STT_URL="http://localhost:${WHISPER_PORT}"
+    export CORRE_GYM_TTS_URL="http://localhost:${PIPER_PORT}"
+fi
+
+cargo run -p corre-gym --release -- "${PASSTHROUGH_ARGS[@]}"

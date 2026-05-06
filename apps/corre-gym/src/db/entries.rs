@@ -21,11 +21,24 @@ impl Database {
         Ok(session)
     }
 
+    /// End a session and cascade-close every still-open exercise_entry that
+    /// belongs to it. Both writes use the same `datetime('now')` value so the
+    /// session and its entries share a precise end timestamp.
     pub fn end_session(&self, session_id: i64) -> anyhow::Result<()> {
-        let rows = self
-            .conn()
-            .execute("UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1 AND ended_at IS NULL", params![session_id])?;
+        let conn = self.conn();
+        let tx = conn.unchecked_transaction()?;
+        let rows = tx.execute(
+            "UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1 AND ended_at IS NULL",
+            params![session_id],
+        )?;
         anyhow::ensure!(rows > 0, "session id {session_id} not found or already ended");
+        tx.execute(
+            "UPDATE exercise_entry \
+             SET end_timestamp = (SELECT ended_at FROM sessions WHERE id = ?1) \
+             WHERE session_id = ?1 AND end_timestamp IS NULL",
+            params![session_id],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -166,20 +179,70 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list entries for user")
     }
 
-    /// Most recent open entry for the user (no `end_timestamp`), within the last
-    /// `recent_minutes` minutes. Returns `None` if no recent open entry exists.
-    pub fn latest_open_entry(&self, user_id: i64, recent_minutes: i64) -> anyhow::Result<Option<ExerciseEntry>> {
+    /// Open exercise_entry (no `end_timestamp`) in `session_id` whose sets include
+    /// `exercise_type_id`. Used to decide whether to reuse or create a new entry
+    /// when the user logs another set of an exercise.
+    pub fn find_open_entry_for_exercise(
+        &self,
+        user_id: i64,
+        session_id: i64,
+        exercise_type_id: i64,
+    ) -> anyhow::Result<Option<ExerciseEntry>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, user_id, session_id, start_timestamp, end_timestamp, comment \
-             FROM exercise_entry \
-             WHERE user_id = ?1 \
-               AND end_timestamp IS NULL \
-               AND start_timestamp >= datetime('now', ?2) \
-             ORDER BY start_timestamp DESC LIMIT 1",
+            "SELECT ee.id, ee.user_id, ee.session_id, ee.start_timestamp, ee.end_timestamp, ee.comment \
+             FROM exercise_entry ee \
+             WHERE ee.user_id = ?1 AND ee.session_id = ?2 AND ee.end_timestamp IS NULL \
+               AND EXISTS (SELECT 1 FROM sets s \
+                           WHERE s.exercise_entry_id = ee.id AND s.exercise_type_id = ?3) \
+             ORDER BY ee.start_timestamp DESC LIMIT 1",
         )?;
-        let cutoff = format!("-{recent_minutes} minutes");
-        let mut rows = stmt.query_map(params![user_id, cutoff], row_to_entry)?;
-        rows.next().transpose().context("Failed to read latest open entry")
+        let mut rows = stmt.query_map(params![user_id, session_id, exercise_type_id], row_to_entry)?;
+        rows.next().transpose().context("Failed to read open entry for exercise")
+    }
+
+    /// All open exercise_entries in a session, oldest first. >1 row = a superset.
+    pub fn list_open_entries_for_session(&self, session_id: i64) -> anyhow::Result<Vec<ExerciseEntry>> {
+        let sql = format!("{SELECT_ENTRY} WHERE session_id = ?1 AND end_timestamp IS NULL ORDER BY start_timestamp");
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(params![session_id], row_to_entry)?;
+        rows.collect::<Result<Vec<_>, _>>().context("Failed to list open entries for session")
+    }
+
+    /// All open exercise_entries for a user, across sessions. Used to detect leaks
+    /// from previously-ended sessions and from older code paths that did not close
+    /// entries.
+    pub fn list_open_entries_for_user(&self, user_id: i64) -> anyhow::Result<Vec<ExerciseEntry>> {
+        let sql = format!("{SELECT_ENTRY} WHERE user_id = ?1 AND end_timestamp IS NULL ORDER BY start_timestamp");
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(params![user_id], row_to_entry)?;
+        rows.collect::<Result<Vec<_>, _>>().context("Failed to list open entries for user")
+    }
+
+    /// Number of sets in an exercise_entry. Used by the set-count checkpoint and
+    /// the premature-close pushback in the assistant handler.
+    pub fn count_sets_for_entry(&self, entry_id: i64) -> anyhow::Result<i64> {
+        let count: i64 = self
+            .conn()
+            .query_row("SELECT COUNT(*) FROM sets WHERE exercise_entry_id = ?1", params![entry_id], |row| row.get(0))?;
+        Ok(count)
+    }
+
+    /// Bulk-close every open exercise_entry in `session_id`. When `end_timestamp`
+    /// is None, uses `datetime('now')`. Returns the number of rows updated.
+    pub fn close_open_entries_for_session(&self, session_id: i64, end_timestamp: Option<&str>) -> anyhow::Result<usize> {
+        let rows = match end_timestamp {
+            Some(ts) => self.conn().execute(
+                "UPDATE exercise_entry SET end_timestamp = ?2 \
+                 WHERE session_id = ?1 AND end_timestamp IS NULL",
+                params![session_id, ts],
+            )?,
+            None => self.conn().execute(
+                "UPDATE exercise_entry SET end_timestamp = datetime('now') \
+                 WHERE session_id = ?1 AND end_timestamp IS NULL",
+                params![session_id],
+            )?,
+        };
+        Ok(rows)
     }
 
     pub fn delete_entry(&self, entry_id: i64) -> anyhow::Result<()> {
@@ -435,11 +498,107 @@ mod tests {
     }
 
     #[test]
-    fn latest_open_entry_returns_recent_only() {
+    fn find_open_entry_for_exercise_matches_only_same_type() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let session = db.start_session(user_id, None).unwrap();
+
+        let bench_entry = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let mut s = new_exercise_set(bench_entry, bp_id, MeasurementType::WeightReps, 80.0);
+        s.count = Some(8);
+        db.insert_set(&s).unwrap();
+
+        let squat_entry = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let mut s = new_exercise_set(squat_entry, squat_id, MeasurementType::WeightReps, 100.0);
+        s.count = Some(5);
+        db.insert_set(&s).unwrap();
+
+        let found = db.find_open_entry_for_exercise(user_id, session.id, bp_id).unwrap().unwrap();
+        assert_eq!(found.id, bench_entry);
+        let found = db.find_open_entry_for_exercise(user_id, session.id, squat_id).unwrap().unwrap();
+        assert_eq!(found.id, squat_entry);
+    }
+
+    #[test]
+    fn find_open_entry_for_exercise_ignores_closed_entries() {
+        let (db, user_id, bp_id) = fixture();
+        let session = db.start_session(user_id, None).unwrap();
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let mut s = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, 80.0);
+        s.count = Some(8);
+        db.insert_set(&s).unwrap();
+        db.end_entry(entry_id).unwrap();
+
+        assert!(db.find_open_entry_for_exercise(user_id, session.id, bp_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn count_sets_for_entry_basic() {
+        let (db, user_id, bp_id) = fixture();
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        assert_eq!(db.count_sets_for_entry(entry_id).unwrap(), 0);
+        for _ in 0..3 {
+            let mut s = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, 80.0);
+            s.count = Some(8);
+            db.insert_set(&s).unwrap();
+        }
+        assert_eq!(db.count_sets_for_entry(entry_id).unwrap(), 3);
+    }
+
+    #[test]
+    fn list_open_entries_for_session_returns_concurrent_supersets() {
+        let (db, user_id, bp_id) = fixture();
+        let session = db.start_session(user_id, None).unwrap();
+        let id1 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let id2 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let id3 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        // close the middle one
+        let mut s = new_exercise_set(id2, bp_id, MeasurementType::WeightReps, 80.0);
+        s.count = Some(8);
+        db.insert_set(&s).unwrap();
+        db.end_entry(id2).unwrap();
+
+        let open = db.list_open_entries_for_session(session.id).unwrap();
+        let ids: Vec<i64> = open.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![id1, id3]);
+    }
+
+    #[test]
+    fn end_session_cascades_close_open_entries() {
         let (db, user_id, _) = fixture();
-        let _id1 = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
-        let id2 = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
-        let recent = db.latest_open_entry(user_id, 60).unwrap().unwrap();
-        assert_eq!(recent.id, id2);
+        let session = db.start_session(user_id, None).unwrap();
+        let id1 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let id2 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        db.end_session(session.id).unwrap();
+        assert!(db.get_entry(id1).unwrap().unwrap().end_timestamp.is_some());
+        assert!(db.get_entry(id2).unwrap().unwrap().end_timestamp.is_some());
+        let session = db.get_session(session.id).unwrap().unwrap();
+        assert!(session.ended_at.is_some());
+    }
+
+    #[test]
+    fn close_open_entries_for_session_bulk_closes() {
+        let (db, user_id, _) = fixture();
+        let session = db.start_session(user_id, None).unwrap();
+        let id1 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let _id2 = db.insert_entry(&new_exercise_entry(user_id, Some(session.id), None)).unwrap();
+        let n = db.close_open_entries_for_session(session.id, Some("2025-01-01 00:00:00")).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(db.get_entry(id1).unwrap().unwrap().end_timestamp.as_deref(), Some("2025-01-01 00:00:00"));
+    }
+
+    #[test]
+    fn list_open_entries_for_user_spans_sessions() {
+        let (db, user_id, _) = fixture();
+        let s1 = db.start_session(user_id, None).unwrap();
+        let id_a = db.insert_entry(&new_exercise_entry(user_id, Some(s1.id), None)).unwrap();
+        // simulate a session that was ended without cascading entry-close (legacy path)
+        db.conn().execute("UPDATE sessions SET ended_at = datetime('now') WHERE id = ?1", params![s1.id]).unwrap();
+        let s2 = db.start_session(user_id, None).unwrap();
+        let id_b = db.insert_entry(&new_exercise_entry(user_id, Some(s2.id), None)).unwrap();
+
+        let open = db.list_open_entries_for_user(user_id).unwrap();
+        let ids: Vec<i64> = open.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![id_a, id_b]);
     }
 }
