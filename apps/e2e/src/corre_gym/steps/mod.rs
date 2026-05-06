@@ -4,6 +4,7 @@
 
 pub mod background;
 pub mod chat;
+pub mod entries;
 pub mod goals;
 pub mod health;
 pub mod session;

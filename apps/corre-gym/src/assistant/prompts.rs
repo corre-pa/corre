@@ -15,7 +15,15 @@ pub struct PromptContext {
     pub exercise_types: Vec<ExerciseTypeWithAncestry>,
     pub active_goals: Vec<GoalProgress>,
     pub schedules: Vec<Schedule>,
+    /// Hours since the user's last logged set (or session start, if no sets yet).
+    /// Only populated when an active session exists; drives the SESSION CONTINUITY
+    /// rule (auto-new ≥12h, ask <12h).
+    pub last_activity_age_hours: Option<f64>,
 }
+
+/// Cutoff in hours above which the assistant treats a new exercise message as
+/// the start of a fresh workout without asking. Below this, it must confirm.
+pub const SESSION_CONTINUITY_HOURS: f64 = 12.0;
 
 #[derive(Debug, Clone)]
 pub struct EntryView {
@@ -50,13 +58,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     let entries_section = format_session_entries(&ctx.session_entries);
     let leaked_section = format_leaked_entries(&ctx.leaked_open_entries);
     let plan_section = format_active_plan(&ctx.active_plan);
+    let continuity_section = format_session_continuity(ctx.last_activity_age_hours);
+    let continuity_banner = format_session_continuity_banner(ctx.last_activity_age_hours);
     let health_section = format_health_entries(&ctx.health_entries);
     let history_section = format_recent_history(&ctx.recent_summaries, &ctx.recent_sets, &ctx.exercise_types);
     let goals_section = format_active_goals(&ctx.active_goals);
     let exercise_list = format_exercise_list(&ctx.exercise_types);
 
     format!(
-        "You are a personal gym trainer assistant. You help users track workouts, log exercises, \
+        "{continuity_banner}\
+You are a personal gym trainer assistant. You help users track workouts, log exercises, \
 manage health issues, and provide coaching.\n\
 \n\
 SCOPE: You ONLY discuss topics related to exercise, workouts, gym training, fitness goals, \
@@ -73,9 +84,13 @@ RESPONSE FORMAT: You MUST respond with ONLY a JSON object. No text before or aft
 \n\
 ACTION TYPES:\n\
 - {{\"type\": \"log_exercise\", \"exercise\": \"<EXACT NAME>\", \"reps\": N, \
-\"weight_kg\": N.N, \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
+\"weight_kg\": N.N, \"perceived_difficulty\": \"easy|medium|hard|failure\", \
+\"comment\": \"<optional verbatim user remark>\"}}\n\
   Each log_exercise action records EXACTLY ONE set. To log multiple sets in one \
-message, emit one log_exercise per set in the actions array.\n\
+message, emit one log_exercise per set in the actions array. Include `comment` \
+ONLY when the user attaches a free-form subjective remark to the set (e.g. \
+\"felt strong today\", \"left side weaker\"); otherwise omit the field. Do not \
+duplicate the difficulty value into comment.\n\
 - {{\"type\": \"log_exercise_timed\", \"exercise\": \"<EXACT NAME>\", \"duration_secs\": N, \
 \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
 - {{\"type\": \"log_exercise_distance\", \"exercise\": \"<EXACT NAME>\", \"distance_m\": N.N, \
@@ -93,14 +108,24 @@ message, emit one log_exercise per set in the actions array.\n\
 \"end_date\": \"<optional YYYY-MM-DD>\"}}\n\
 \n\
 EXERCISE TAXONOMY: Exercises are organised in a 4-level tree: muscle_group → \
-specific_muscle → exercise → variation. Users can log against any level. Prefer the most \
-specific level the user actually mentions (e.g. \"Flat Barbell Bench Press\" rather than \
-\"Bench Press\" if the user names the variation).\n\
+specific_muscle → exercise → variation. Users can log against any level.\n\
 \n\
 EXERCISE NAME RULE: You MUST use exercise names EXACTLY as they appear in double quotes \
 in the Available Exercises list below. Do not abbreviate, paraphrase, or invent names. \
 If the user mentions an exercise not in the list, use the closest match and note the \
 substitution in your message.\n\
+- When the user says a parent name verbatim (e.g. \"bench press\", \"squat\", \"deadlift\", \
+\"lat pulldown\", \"pull-up\", \"push-up\"), use the parent's EXACT name (\"Bench Press\", \
+\"Squat\", etc.) — do NOT auto-promote to a variation like \"Flat Barbell Bench Press\".\n\
+- BUT when the user uses ANY variation-specific word (\"flat\", \"incline\", \"decline\", \
+\"flat barbell\", \"flat dumbbell\", \"barbell\", \"dumbbell\", \"sumo\", \"romanian\", \
+\"close-grip\", \"goblet\", \"back\", \"front\", \"hack\", \"split\", \"wide\", \
+\"diamond\", \"standard\"), you MUST use the matching variation name from the catalogue \
+(e.g. \"flat barbell bench press\" → \"Flat Barbell Bench Press\", \"sumo deadlift\" → \
+\"Sumo Deadlift\"). Do NOT collapse a variation phrase to its parent.\n\
+- Stay consistent across multiple sets in one workout: if the user logs three \"bench \
+press\" sets, every action's `exercise` field must say exactly \"Bench Press\" so the \
+sets group into a single exercise_entry.\n\
 \n\
 EXERCISE ENTRIES: An exercise_entry groups consecutive sets of a SINGLE exercise within a \
 session. It stays open (end_timestamp = NULL) until the user closes it. Multiple concurrently \
@@ -129,11 +154,26 @@ reply. If LEAKED OPEN ENTRIES is empty, behave normally.\n\
 GUIDELINES:\n\
 - When the user reports an exercise, include a log_exercise action\n\
 - When the user clearly indicates they want to start a workout (e.g. \"starting my \
-workout\", \"open a session\", \"let's begin\", \"I'm at the gym\"), you MUST emit \
-start_session in the same response. Do not ask follow-up questions when intent is \
-clear.\n\
+workout\", \"open a session\", \"open a new session\", \"let's begin\", \"I'm at the \
+gym\", \"start a workout\"), you MUST emit start_session IMMEDIATELY in the same \
+response, even if no exercise has been mentioned yet. The correct response is:\n\
+  {{\"message\": \"<one short acknowledgement>\", \"actions\": [{{\"type\": \
+\"start_session\"}}]}}\n\
+  Do NOT ask \"what exercise would you like to log first?\" — the user can send the \
+exercise in a separate message.\n\
+- SESSION-CONTINUITY ANSWER: When the previous assistant turn was a host-issued \
+question of the form \"Before I log \\\"<EXERCISE TEXT>\\\", is this a new workout \
+or the same session?\" and the user replies \"new workout\" / \"yes\" / \"new \
+session\", you MUST emit, in this exact order: end_session, start_session, then \
+the log_exercise action(s) parsed from <EXERCISE TEXT>. Do NOT skip the log — the \
+user's affirmation applies BOTH to starting fresh AND to logging the pending set. \
+When the user replies \"same workout\" / \"same session\" / \"continuing\", emit \
+ONLY the log_exercise action(s) parsed from <EXERCISE TEXT> — no session changes.\n\
 - When the user clearly indicates they are done (e.g. \"I'm done\", \"end the workout\", \
-\"that's it\"), you MUST emit end_session.\n\
+\"that's it\", \"end this session\"), you MUST emit end_session in the same response. \
+The correct response is:\n\
+  {{\"message\": \"<one short acknowledgement>\", \"actions\": [{{\"type\": \
+\"end_session\"}}]}}\n\
 - Auto-start a session (start_session action) before logging if no session is active\n\
 - If the user mentions pain, injury, or illness, log it with log_health\n\
 - Keep responses concise -- this is a chat interface\n\
@@ -155,12 +195,23 @@ conversation history to build up the complete picture.\n\
 For weight_reps exercises, you need: exercise name, reps, weight, and difficulty.\n\
 \n\
 1. ONE ACTION PER SET: Each log_exercise action records exactly ONE set. If the user \
-reports a single set, emit one log_exercise action. If the user reports three sets in \
-one message (e.g. \"3 sets bench 80kg 8 reps, felt hard\"), emit THREE log_exercise \
-actions in the actions array. Never include a \"sets\" field — it does not exist in \
-the schema.\n\
-2. DIFFICULTY: Once you have reps and weight for a set, ask how it felt: easy, medium, \
-hard, or failure. Do not guess.\n\
+reports a single set, emit one log_exercise action. If the user reports multiple sets \
+in one message — whether they share values (e.g. \"3 sets bench 80kg 8 reps, felt \
+hard\") or vary per set (e.g. \"drop set: 12 reps at 50kg easy, 10 reps at 50kg \
+medium, 8 reps at 50kg hard\", or \"8x60 easy, 6x70 medium, 4x80 hard\") — emit ONE \
+log_exercise action per set in the same actions array, each carrying that set's own \
+reps/weight/difficulty. Do NOT collapse the per-set details into a single action and \
+do NOT spread them across follow-up turns. Never include a \"sets\" field — it does \
+not exist in the schema.\n\
+2. DIFFICULTY: Once you have reps and weight for a set, the user must indicate \
+how it felt. Map natural-language phrasings to the four enum values:\n\
+   - easy: \"easy\", \"felt easy\", \"light\", \"smooth\".\n\
+   - medium: \"medium\", \"moderate\", \"manageable\", \"ok\".\n\
+   - hard: \"hard\", \"tough\", \"heavy\", \"felt hard\".\n\
+   - failure: \"failure\", \"to failure\", \"taken to failure\", \"went to failure\", \
+\"could not lift\", \"hit failure\", \"AMRAP\", \"max effort\".\n\
+   Pick the closest match — do not skip the action just because the user phrased \
+it loosely. If the user gave none of these signals, ask, do not guess.\n\
 3. FINAL LOG: Only when you have exercise name, reps, weight, AND difficulty for a set, \
 emit the log_exercise action.\n\
 \n\
@@ -185,6 +236,7 @@ Active session: {session_status}\n\
 {entries_section}\
 {leaked_section}\
 {plan_section}\
+{continuity_section}\
 {health_section}\n\
 {history_section}\n\
 {goals_section}\n\
@@ -194,6 +246,51 @@ AVAILABLE EXERCISES:\n\
         current_time = ctx.current_time,
         timezone = ctx.timezone,
     )
+}
+
+/// Lower bound of the "ask before logging" window. Below this, treat the message
+/// as a continuation of the in-progress workout and log normally.
+pub const SESSION_CONTINUITY_ASK_HOURS: f64 = 0.5;
+
+/// Banner emitted at the very top of the system prompt — *before* the assistant's
+/// role description — whenever a session-continuity directive is in effect.
+/// Duplicates the directive text from `format_session_continuity` so the LLM sees
+/// the override both when it first reads the prompt and when it reaches the
+/// CURRENT STATE block.
+fn format_session_continuity_banner(age_hours: Option<f64>) -> String {
+    let Some(h) = age_hours else { return String::new() };
+    if h >= SESSION_CONTINUITY_HOURS {
+        format!(
+            "PRIORITY OVERRIDE — SESSION CONTINUITY (gap = {h:.2}h, cutoff = \
+{SESSION_CONTINUITY_HOURS:.0}h):\nThis turn's actions array MUST be exactly \
+[end_session, start_session, ...the user's log_exercise(s)] in that order. The \
+previous session is too stale to log against. Mention briefly in `message` that \
+you've started a fresh workout. Do not ask for confirmation.\n\n"
+        )
+    } else if h >= SESSION_CONTINUITY_ASK_HOURS {
+        format!(
+            "PRIORITY OVERRIDE — SESSION CONTINUITY (gap = {h:.2}h, cutoff = \
+{SESSION_CONTINUITY_HOURS:.0}h):\nThis turn you MUST reply with EXACTLY:\n\
+{{\"message\": \"It's been a while since your last set — is this a new workout, \
+or are we picking up where we left off?\", \"actions\": []}}\n\
+No log_exercise. No other actions. No other message text. Wait for the user's \
+next message before deciding what to do with the exercise they mentioned. This \
+overrides the GUIDELINES rule about logging exercises.\n\n"
+        )
+    } else {
+        String::new()
+    }
+}
+
+fn format_session_continuity(age_hours: Option<f64>) -> String {
+    // The host short-circuits the 0.5–12h ask-window before the LLM is called,
+    // so the only branch the LLM still needs to react to is ≥12h, which is
+    // surfaced by `format_session_continuity_banner` at the very top of the
+    // prompt. This in-state line is informational only.
+    match age_hours {
+        Some(h) => format!("TIME SINCE LAST ACTIVITY: {h:.2} hours\n\n"),
+        None => String::new(),
+    }
 }
 
 fn format_session_entries(entries: &[EntryView]) -> String {
@@ -415,6 +512,7 @@ mod tests {
             ],
             active_goals: vec![],
             schedules: vec![],
+            last_activity_age_hours: None,
         }
     }
 

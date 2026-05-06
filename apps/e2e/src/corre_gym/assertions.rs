@@ -240,6 +240,106 @@ pub async fn assert_active_session_sets_match(db: &Arc<Mutex<Database>>, user_id
     Ok(())
 }
 
+// ── Entry-state matchers (open / closed entries in the active session) ───────
+
+/// Three-valued result for "what's the state of this user's entry for X?".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryState {
+    /// User has no entry at all for this exercise type or any descendant.
+    None,
+    /// Most-recent matching entry is still open (`end_timestamp IS NULL`).
+    Open,
+    /// Most-recent matching entry has been closed.
+    Closed,
+}
+
+/// Number of open (unended) entries in the user's active session. Returns 0 when
+/// there is no active session, which lets callers write `there are 0 open entries`
+/// as a post-condition for end_session without special-casing the no-session case.
+pub async fn open_entry_count(db: &Arc<Mutex<Database>>, user_id: i64) -> anyhow::Result<usize> {
+    let db = db.lock().await;
+    let Some(session) = db.get_active_session(user_id)? else {
+        return Ok(0);
+    };
+    Ok(db.list_open_entries_for_session(session.id)?.len())
+}
+
+/// State of the most-recent entry in the user's active session whose sets reference
+/// `exercise` (resolving the name with the same hierarchy rules `match_set_field`
+/// uses — direct match, plus descendants when the resolved type is not a Variation).
+pub async fn entry_state_for_exercise(db: &Arc<Mutex<Database>>, user_id: i64, exercise: &str) -> anyhow::Result<EntryState> {
+    let target = resolve_exercise_type(db, exercise).await?;
+    let db = db.lock().await;
+    let Some(session) = db.get_active_session(user_id)? else {
+        return Ok(EntryState::None);
+    };
+    let mut allowed = vec![target.id];
+    if target.level != ExerciseLevel::Variation {
+        allowed.extend(db.list_descendants(target.id)?.into_iter().map(|d| d.id));
+    }
+    let mut entries = db.list_entries_for_session(session.id)?;
+    entries.sort_by(|a, b| b.start_timestamp.cmp(&a.start_timestamp).then(b.id.cmp(&a.id)));
+    for entry in &entries {
+        let sets = db.list_sets_for_entry(entry.id)?;
+        if sets.iter().any(|s| allowed.contains(&s.exercise_type_id)) {
+            return Ok(if entry.end_timestamp.is_none() { EntryState::Open } else { EntryState::Closed });
+        }
+    }
+    Ok(EntryState::None)
+}
+
+/// Back-date every session, exercise_entry, and set belonging to `user_id` by
+/// `hours`. Used by the session-continuity scenarios to simulate a long break
+/// without actually sleeping.
+pub async fn rewind_user_activity(db: &Arc<Mutex<Database>>, user_id: i64, hours: i64) -> anyhow::Result<()> {
+    anyhow::ensure!(hours >= 0, "rewind hours must be non-negative, got {hours}");
+    let db = db.lock().await;
+    // String-formatting `hours` and `user_id` is safe here: both are i64 from the test
+    // step regex and never come from user input. Avoids dragging rusqlite::params into
+    // the e2e crate's surface area.
+    let modifier = format!("'-{hours} hours'");
+    let sessions_sql = format!(
+        "UPDATE sessions \
+         SET started_at = datetime(started_at, {modifier}), \
+             ended_at   = CASE WHEN ended_at IS NULL THEN NULL ELSE datetime(ended_at, {modifier}) END \
+         WHERE user_id = {user_id}"
+    );
+    let entries_sql = format!(
+        "UPDATE exercise_entry \
+         SET start_timestamp = datetime(start_timestamp, {modifier}), \
+             end_timestamp   = CASE WHEN end_timestamp IS NULL THEN NULL ELSE datetime(end_timestamp, {modifier}) END \
+         WHERE user_id = {user_id}"
+    );
+    let sets_sql = format!(
+        "UPDATE sets SET logged_at = datetime(logged_at, {modifier}) \
+         WHERE exercise_entry_id IN (SELECT id FROM exercise_entry WHERE user_id = {user_id})"
+    );
+    db.conn().execute(&sessions_sql, []).context("rewinding sessions")?;
+    db.conn().execute(&entries_sql, []).context("rewinding exercise_entry rows")?;
+    db.conn().execute(&sets_sql, []).context("rewinding sets")?;
+    Ok(())
+}
+
+/// Loose match against the assistant's last reply for a "is this a new workout?"
+/// style question. Intentionally permissive so prompt wording can drift; if a
+/// genuinely-asking reply doesn't match, broaden the regex rather than tightening
+/// the assistant prompt.
+pub fn reply_asks_about_new_session(reply: &str) -> bool {
+    let lower = reply.to_lowercase();
+    let needles = [
+        "new session",
+        "new workout",
+        "same session",
+        "same workout",
+        "picking up",
+        "pick up where",
+        "start a new",
+        "is this a new",
+        "are we continuing",
+    ];
+    needles.iter().any(|n| lower.contains(n))
+}
+
 // ── Health & goal matchers (used by health_logging.feature, goals.feature) ────
 
 /// Most-recent active (unresolved) health entry for a user.

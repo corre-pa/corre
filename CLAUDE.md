@@ -30,3 +30,14 @@ When you run the integration tests:
   
   ..repeat for other cases
 ``` 
+
+## Todos
+
+Todos are internally generated bug reports. They are stored in `plans/todos/`.
+
+### Fixing Todos
+
+* If instructed by the user, or if you are an agnet specifically designed to fix bug reports, then select the next item to do, or the 
+  one instructed to complete by the user and change the status to: "In progress".
+* Complete the fix, including writing new tests if necessary. Ensure that there are no regressions and that all old tests pass.
+* Once a fix has been implemented, and ALL the tests for the fix pass. Then, and only then, change the status of the todo to "Done".
