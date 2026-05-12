@@ -11,6 +11,29 @@ use corre_sdk::types::ContentType;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Return `Ok(())` iff `s` parses as exactly one `Component::Normal` —
+/// non-empty, no `.`, no `..`, no path separator, no absolute root, no
+/// Windows prefix.
+///
+/// `field` is a static label used in the error message so the caller can
+/// tell the user which input was rejected.
+fn validate_path_component(field: &'static str, s: &str) -> Result<(), InstallError> {
+    use std::path::Component;
+    if s.contains('\0') {
+        return Err(InstallError::InvalidPathComponent { field, value: s.to_string() });
+    }
+    let mut it = Path::new(s).components();
+    let ok = matches!(
+        (it.next(), it.next()),
+        (Some(Component::Normal(part)), None) if !part.is_empty()
+    );
+    if ok {
+        Ok(())
+    } else {
+        Err(InstallError::InvalidPathComponent { field, value: s.to_string() })
+    }
+}
+
 /// Handles installing and uninstalling MCP servers and apps from registry entries.
 pub struct McpInstaller {
     data_dir: PathBuf,
@@ -34,6 +57,7 @@ impl McpInstaller {
     /// add to `corre.toml`. The `env_values` map provides the *env var names* (not secrets)
     /// for each required env var.
     pub async fn install(&self, entry: &McpRegistryEntry, env_values: &HashMap<String, String>) -> Result<McpServerConfig, InstallError> {
+        validate_path_component("registry_id", &entry.id)?;
         let env: HashMap<String, String> =
             entry.config.iter().filter_map(|spec| env_values.get(&spec.name).map(|v| (spec.name.clone(), v.clone()))).collect();
         match &entry.install {
@@ -52,6 +76,10 @@ impl McpInstaller {
                 installed: true,
             }),
             InstallMethod::Binary { download_url_template, binary_name, sha256, command, args } => {
+                validate_path_component("binary_name", binary_name)?;
+                if !command.contains("{bin_dir}") {
+                    validate_path_component("install.command", command)?;
+                }
                 let bin_dir = self.data_dir.join("bin");
                 tokio::fs::create_dir_all(&bin_dir).await?;
                 self.download_and_verify(download_url_template, sha256, &entry.version, &bin_dir, binary_name).await?;
@@ -78,12 +106,21 @@ impl McpInstaller {
     /// Uninstall an MCP server: remove binary/package artifacts.
     /// The per-MCP config file is handled by the caller (set `installed = false`).
     pub async fn uninstall(&self, server_name: &str, server_config: &McpServerConfig) -> Result<(), InstallError> {
+        validate_path_component("server_name", server_name)?;
         let bin_dir = self.data_dir.join("bin");
-        let binary_path = bin_dir.join(&server_config.command);
 
-        if binary_path.exists() {
-            tokio::fs::remove_file(&binary_path).await?;
-        } else if server_config.command == "npx" {
+        if validate_path_component("server.command", &server_config.command).is_ok() {
+            let binary_path = bin_dir.join(&server_config.command);
+            if binary_path.exists() {
+                tokio::fs::remove_file(&binary_path).await?;
+                tracing::info!("Uninstalled MCP server `{server_name}`");
+                return Ok(());
+            }
+        } else {
+            tracing::warn!("Skipping binary removal for MCP `{server_name}`: command is not a single path component");
+        }
+
+        if server_config.command == "npx" {
             if let Some(pkg) = server_config.args.iter().find(|a| !a.starts_with('-')) {
                 let output = tokio::process::Command::new("npm").args(["uninstall", "-g", pkg]).output().await?;
                 if !output.status.success() {
@@ -117,6 +154,10 @@ impl McpInstaller {
     /// Returns `(plugin_dir, mcp_deps)` where `mcp_deps` is the list of MCP server IDs
     /// that this app depends on. The caller should install any that are missing.
     pub async fn install_app(&self, entry: &AppEntry) -> Result<(PathBuf, Vec<String>), InstallError> {
+        validate_path_component("app_id", &entry.id)?;
+        if let InstallMethod::Binary { binary_name, .. } = &entry.install {
+            validate_path_component("binary_name", binary_name)?;
+        }
         let plugin_dir = self.data_dir.join("plugins").join(&entry.id);
         let bin_dir = plugin_dir.join("bin");
         tokio::fs::create_dir_all(&bin_dir).await?;
@@ -152,6 +193,7 @@ impl McpInstaller {
     ///
     /// Returns a list of MCP server IDs that were dependencies and may now be unused.
     pub async fn uninstall_app(&self, id: &str) -> Result<Vec<String>, InstallError> {
+        validate_path_component("app_id", id)?;
         let plugin_dir = self.data_dir.join("plugins").join(id);
 
         // Read the manifest before deleting so we can report MCP dependencies
@@ -183,6 +225,7 @@ impl McpInstaller {
         dest_dir: &Path,
         dest_name: &str,
     ) -> Result<(), InstallError> {
+        validate_path_component("dest_name", dest_name)?;
         let (platform, arch) = platform_arch();
         let platform_key = format!("{platform}-{arch}");
         let expected_sha256 = sha256_map.get(&platform_key).ok_or_else(|| InstallError::UnsupportedPlatform(platform_key.clone()))?;
@@ -309,6 +352,8 @@ pub enum InstallError {
     UnsupportedPlatform(String),
     #[error("IO error: {0}")]
     Io(String),
+    #[error("invalid path component {field}: {value:?}")]
+    InvalidPathComponent { field: &'static str, value: String },
 }
 
 impl From<std::io::Error> for InstallError {
@@ -497,5 +542,275 @@ mod tests {
         assert_eq!(parsed.plugin.services.len(), 1);
         assert_eq!(parsed.plugin.services[0].description, "A service with \"quotes\" in its description");
         assert!(parsed.plugin.services[0].optional);
+    }
+
+    // =========================================================================
+    // Path-component validator
+    // =========================================================================
+
+    fn assert_invalid(result: Result<(), InstallError>, expected_field: &str) {
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => {
+                assert_eq!(field, expected_field, "expected field {expected_field}, got {field}");
+            }
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_simple_id() {
+        assert!(validate_path_component("test", "daily-brief").is_ok());
+    }
+
+    #[test]
+    fn accepts_dotted_id() {
+        assert!(validate_path_component("test", "some.app").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert_invalid(validate_path_component("test", ""), "test");
+    }
+
+    #[test]
+    fn rejects_parent_ref() {
+        assert_invalid(validate_path_component("test", ".."), "test");
+    }
+
+    #[test]
+    fn rejects_current_ref() {
+        assert_invalid(validate_path_component("test", "."), "test");
+    }
+
+    #[test]
+    fn rejects_nested_parent() {
+        assert_invalid(validate_path_component("test", "foo/../bar"), "test");
+    }
+
+    #[test]
+    fn rejects_forward_slash() {
+        assert_invalid(validate_path_component("test", "foo/bar"), "test");
+    }
+
+    #[test]
+    fn rejects_absolute_unix() {
+        assert_invalid(validate_path_component("test", "/etc/passwd"), "test");
+    }
+
+    #[test]
+    fn rejects_leading_double_slash() {
+        assert_invalid(validate_path_component("test", "//foo"), "test");
+    }
+
+    #[test]
+    fn rejects_nul_byte() {
+        assert_invalid(validate_path_component("test", "foo\0bar"), "test");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn rejects_backslash() {
+        assert_invalid(validate_path_component("test", "foo\\bar"), "test");
+    }
+
+    // =========================================================================
+    // Entry-point traversal rejections
+    //
+    // No `wiremock`/`mockito` dependency in the workspace, so download-path
+    // coverage stays on the e2e suite. These tests only exercise the
+    // pre-network validation guards.
+    // =========================================================================
+
+    fn benign_server_config(command: &str) -> McpServerConfig {
+        McpServerConfig {
+            registry_id: Some("test".into()),
+            command: command.into(),
+            args: vec![],
+            env: HashMap::new(),
+            installed: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn uninstall_rejects_traversal_in_server_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let cfg = benign_server_config("my-mcp");
+        let result = installer.uninstall("../../etc", &cfg).await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "server_name"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn uninstall_skips_binary_removal_for_traversal_command() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        // Sentinel sitting *outside* data_dir/bin — would be the target of a
+        // successful `../../...` escape if validation were missing.
+        let sentinel = tmp.path().join("sentinel");
+        std::fs::write(&sentinel, b"keep").unwrap();
+        assert!(sentinel.exists());
+
+        let installer = McpInstaller::new(data_dir.clone(), "https://example.com".into());
+        let cfg = benign_server_config("../sentinel");
+        let result = installer.uninstall("server", &cfg).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+        assert!(sentinel.exists(), "sentinel must not be removed via path traversal");
+    }
+
+    #[tokio::test]
+    async fn uninstall_removes_binary_for_safe_command() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let binary = bin_dir.join("my-mcp");
+        std::fs::write(&binary, b"stub").unwrap();
+        assert!(binary.exists());
+
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let cfg = benign_server_config("my-mcp");
+        installer.uninstall("my-mcp", &cfg).await.expect("uninstall should succeed");
+        assert!(!binary.exists(), "binary should have been removed");
+    }
+
+    #[tokio::test]
+    async fn uninstall_keeps_npx_branch_reachable() {
+        // No `npm` is needed: when args is empty, the npx branch finds no
+        // package to uninstall and returns Ok without spawning a subprocess.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let cfg = McpServerConfig {
+            registry_id: Some("test".into()),
+            command: "npx".into(),
+            args: vec!["-y".into()],
+            env: HashMap::new(),
+            installed: true,
+        };
+        installer.uninstall("test", &cfg).await.expect("uninstall should succeed");
+        let stray = tmp.path().join("bin").join("npx");
+        assert!(!stray.exists(), "no bin/npx file should be created");
+    }
+
+    #[tokio::test]
+    async fn install_rejects_traversal_in_registry_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let entry = McpRegistryEntry {
+            id: "../../etc".into(),
+            name: "bad".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            install: InstallMethod::Npx { package: "p".into(), command: "npx".into(), args: vec![] },
+            config: vec![],
+            homepage: None,
+            tags: vec![],
+            verified: false,
+        };
+        let result = installer.install(&entry, &HashMap::new()).await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "registry_id"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+        assert!(!tmp.path().join("bin").exists(), "no bin/ should be created on rejection");
+    }
+
+    #[tokio::test]
+    async fn install_rejects_traversal_in_binary_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let entry = McpRegistryEntry {
+            id: "ok-id".into(),
+            name: "bad".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            install: InstallMethod::Binary {
+                download_url_template: String::new(),
+                binary_name: "../../bin/sh".into(),
+                sha256: HashMap::new(),
+                command: "ok-id".into(),
+                args: vec![],
+            },
+            config: vec![],
+            homepage: None,
+            tags: vec![],
+            verified: false,
+        };
+        let result = installer.install(&entry, &HashMap::new()).await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "binary_name"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn install_rejects_traversal_in_command() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let entry = McpRegistryEntry {
+            id: "ok-id".into(),
+            name: "bad".into(),
+            description: String::new(),
+            version: "1.0.0".into(),
+            install: InstallMethod::Binary {
+                download_url_template: String::new(),
+                binary_name: "ok-bin".into(),
+                sha256: HashMap::new(),
+                command: "../sh".into(),
+                args: vec![],
+            },
+            config: vec![],
+            homepage: None,
+            tags: vec![],
+            verified: false,
+        };
+        let result = installer.install(&entry, &HashMap::new()).await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "install.command"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn install_app_rejects_traversal_in_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let mut entry = entry_with_schema(None);
+        entry.id = "../../etc".into();
+        let result = installer.install_app(&entry).await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "app_id"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+        assert!(!tmp.path().join("plugins").exists(), "no plugins/ should be created on rejection");
+    }
+
+    #[tokio::test]
+    async fn install_app_rejects_traversal_in_binary_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let mut entry = entry_with_schema(None);
+        if let InstallMethod::Binary { binary_name, .. } = &mut entry.install {
+            *binary_name = "../../bin/sh".into();
+        }
+        let result = installer.install_app(&entry).await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "binary_name"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn uninstall_app_rejects_traversal_in_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let installer = McpInstaller::new(tmp.path().to_path_buf(), "https://example.com".into());
+        let result = installer.uninstall_app("../../etc").await;
+        match result {
+            Err(InstallError::InvalidPathComponent { field, .. }) => assert_eq!(field, "app_id"),
+            other => panic!("expected InvalidPathComponent, got {other:?}"),
+        }
     }
 }
