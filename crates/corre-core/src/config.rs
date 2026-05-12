@@ -255,8 +255,9 @@ impl CorreConfig {
 
     /// Serialize this config to TOML and write it to the given path.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        let safe_path = validate_config_path(path)?;
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, &content).with_context(|| format!("failed to write config to {}", path.display()))?;
+        std::fs::write(&safe_path, &content).with_context(|| format!("failed to write config to {}", safe_path.display()))?;
         Ok(())
     }
 
@@ -285,6 +286,30 @@ impl CorreConfig {
             })
             .collect())
     }
+}
+
+/// Validate a config-file path and return a freshly constructed `PathBuf`
+/// derived from its parent + filename components. Re-emitting the path from
+/// individually checked components breaks the CodeQL `rust/path-injection`
+/// taint chain at the `std::fs::write` sink in `CorreConfig::save`.
+fn validate_config_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let file_name = path.file_name().and_then(|n| n.to_str()).context("config path must have a valid UTF-8 file name")?;
+
+    if file_name.is_empty() || file_name == ".." || file_name.contains('/') || file_name.contains('\\') {
+        anyhow::bail!("config file name must not contain path separators or '..'");
+    }
+    if !file_name.ends_with(".toml") {
+        anyhow::bail!("config file must have a .toml extension");
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    for component in parent.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            anyhow::bail!("config path must not contain '..' components");
+        }
+    }
+
+    Ok(parent.join(file_name))
 }
 
 pub(crate) fn expand_tilde(path: &str) -> PathBuf {
@@ -489,5 +514,88 @@ mod tests {
         assert_eq!(effective.temperature, 0.9);
         assert_eq!(effective.extra_body.get("stream"), Some(&serde_json::Value::Bool(false)));
         assert_eq!(effective.extra_body.get("reasoning_effort"), Some(&serde_json::json!("high")));
+    }
+
+    fn sample_config() -> CorreConfig {
+        let toml_str = r#"
+            [general]
+            data_dir = "/tmp/corre"
+            [llm]
+            provider = "openai-compatible"
+            base_url = "https://api.example.com/v1"
+            model = "base-model"
+            api_key = "BASE_KEY"
+            [news]
+            bind = "127.0.0.1:5510"
+        "#;
+        toml::from_str(toml_str).expect("parse sample config")
+    }
+
+    #[test]
+    fn validate_accepts_absolute_toml() {
+        let p = Path::new("/home/user/.local/share/corre/corre.toml");
+        let ok = validate_config_path(p).expect("absolute .toml path is valid");
+        assert_eq!(ok, PathBuf::from("/home/user/.local/share/corre/corre.toml"));
+    }
+
+    #[test]
+    fn validate_accepts_bare_toml() {
+        let ok = validate_config_path(Path::new("corre.toml")).expect("bare filename is valid");
+        assert_eq!(ok, PathBuf::from("corre.toml"));
+    }
+
+    #[test]
+    fn validate_accepts_relative_toml() {
+        let ok = validate_config_path(Path::new("./data/corre.toml")).expect("relative path is valid");
+        assert_eq!(ok, PathBuf::from("./data").join("corre.toml"));
+    }
+
+    #[test]
+    fn validate_rejects_non_toml_extension() {
+        assert!(validate_config_path(Path::new("/tmp/corre.txt")).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_no_extension() {
+        assert!(validate_config_path(Path::new("/tmp/corre")).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_path_traversal_parent() {
+        assert!(validate_config_path(Path::new("/tmp/../etc/corre.toml")).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_dotdot_filename() {
+        assert!(validate_config_path(Path::new("/tmp/..")).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_empty_path() {
+        assert!(validate_config_path(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_dir_only_path() {
+        assert!(validate_config_path(Path::new("/tmp/")).is_err());
+    }
+
+    #[test]
+    fn save_writes_valid_path() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let path = dir.path().join("corre.toml");
+        let config = sample_config();
+        config.save(&path).expect("save should succeed");
+        let reloaded = CorreConfig::load(&path).expect("reload should succeed");
+        assert_eq!(reloaded.llm.model, "base-model");
+        assert_eq!(reloaded.general.data_dir, "/tmp/corre");
+    }
+
+    #[test]
+    fn save_rejects_path_traversal() {
+        let config = sample_config();
+        let err = config.save(Path::new("/tmp/../etc/corre.toml")).expect_err("traversal path should fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains(".."), "error should mention the offending component, got: {msg}");
     }
 }
