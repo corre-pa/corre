@@ -217,7 +217,10 @@
         daysContainer.addEventListener('click', function(e) {
             var cell = e.target.closest('.calendar-day.has-edition');
             if (cell) {
-                window.location.href = '/edition/' + cell.getAttribute('data-date');
+                var date = cell.getAttribute('data-date');
+                if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                    window.location.href = '/edition/' + date;
+                }
             }
         });
 
