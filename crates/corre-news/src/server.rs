@@ -80,18 +80,50 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
     }
 }
 
+/// True iff `s` parses as exactly one `Component::Normal` — no separators,
+/// no `.`, no `..`, no root, no Windows prefix, and not empty.
+fn is_safe_segment(s: &str) -> bool {
+    use std::path::{Component, Path};
+    let mut it = Path::new(s).components();
+    matches!((it.next(), it.next()), (Some(Component::Normal(_)), None))
+}
+
+/// True iff `s` is a non-empty relative path whose every component is
+/// `Component::Normal` (i.e. no `.`, `..`, root, or Windows prefix).
+fn is_safe_relative_path(s: &str) -> bool {
+    use std::path::{Component, Path};
+    let mut it = Path::new(s).components().peekable();
+    it.peek().is_some() && it.all(|c| matches!(c, Component::Normal(_)))
+}
+
 /// Serve a static asset from a plugin's `static/` directory.
-async fn plugin_static_handler(State(state): State<Arc<AppState>>, Path((name, path)): Path<(String, String)>) -> impl IntoResponse {
-    // Prevent path traversal
-    if name.contains("..") || path.contains("..") {
+async fn plugin_static_handler(
+    State(state): State<Arc<AppState>>,
+    Path((name, path)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if !is_safe_segment(&name) || !is_safe_relative_path(&path) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let file_path = state.data_dir.join("plugins").join(&name).join("static").join(&path);
-    if !file_path.exists() || !file_path.is_file() {
+    let base = state.data_dir.join("plugins").join(&name).join("static");
+    let candidate = base.join(&path);
+
+    let canon_base = match std::fs::canonicalize(&base) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let canon_file = match std::fs::canonicalize(&candidate) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if !canon_file.starts_with(&canon_base) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if !canon_file.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let mime = file_path.extension().and_then(|e| e.to_str()).map_or("application/octet-stream", mime_for_extension);
-    match std::fs::read(&file_path) {
+
+    let mime = canon_file.extension().and_then(|e| e.to_str()).map_or("application/octet-stream", mime_for_extension);
+    match std::fs::read(&canon_file) {
         Ok(data) => ([(header::CONTENT_TYPE, mime)], data).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -459,4 +491,180 @@ fn no_editions_page(title: &str) -> String {
 </body>
 </html>"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------- Group A: pure helper tests --------
+
+    #[test]
+    fn accepts_simple_name() {
+        assert!(is_safe_segment("daily-brief"));
+        assert!(is_safe_relative_path("daily-brief"));
+    }
+
+    #[test]
+    fn accepts_dotted_filename() {
+        assert!(is_safe_segment("style.css"));
+        assert!(is_safe_relative_path("style.css"));
+    }
+
+    #[test]
+    fn accepts_nested_in_path_only() {
+        assert!(!is_safe_segment("css/style.css"));
+        assert!(is_safe_relative_path("css/style.css"));
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(!is_safe_segment(""));
+        assert!(!is_safe_relative_path(""));
+    }
+
+    #[test]
+    fn rejects_parent_ref() {
+        assert!(!is_safe_segment(".."));
+        assert!(!is_safe_relative_path(".."));
+    }
+
+    #[test]
+    fn rejects_parent_ref_nested() {
+        assert!(!is_safe_segment("a/../b"));
+        assert!(!is_safe_relative_path("a/../b"));
+    }
+
+    #[test]
+    fn rejects_current_dir() {
+        assert!(!is_safe_segment("."));
+        assert!(!is_safe_relative_path("."));
+    }
+
+    #[test]
+    fn rejects_absolute_unix() {
+        assert!(!is_safe_segment("/etc/passwd"));
+        assert!(!is_safe_relative_path("/etc/passwd"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_backslash_traversal_on_windows() {
+        assert!(!is_safe_segment("..\\foo"));
+        assert!(!is_safe_relative_path("..\\foo"));
+    }
+
+    #[test]
+    fn rejects_leading_double_slash() {
+        assert!(!is_safe_segment("//foo"));
+        assert!(!is_safe_relative_path("//foo"));
+    }
+
+    // -------- Group B: handler-level containment tests --------
+
+    use crate::archive::Archive;
+    use crate::cache::EditionCache;
+    use corre_core::config::{CorreConfig, GeneralConfig, LlmConfig, RegistryConfig, SafetyConfig};
+    use std::collections::HashMap;
+
+    fn make_state(data_dir: PathBuf) -> Arc<AppState> {
+        let config = CorreConfig {
+            general: GeneralConfig { data_dir: data_dir.to_string_lossy().into_owned(), log_level: "info".into() },
+            llm: LlmConfig {
+                provider: "openai-compatible".into(),
+                base_url: "http://localhost:0".into(),
+                model: "dummy".into(),
+                api_key: "dummy".into(),
+                temperature: 0.0,
+                max_concurrent: 1,
+                extra_body: HashMap::new(),
+            },
+            news: toml::Value::Table(Default::default()),
+            gym: toml::Value::Table(Default::default()),
+            apps: Vec::new(),
+            safety: SafetyConfig::default(),
+            registry: RegistryConfig::default(),
+        };
+        let cache = Arc::new(EditionCache::load(Archive::new(&data_dir)));
+        let config_path = data_dir.join("corre.toml");
+        Arc::new(AppState { cache, search: RwLock::new(None), config_path, config: Arc::new(RwLock::new(config)), data_dir })
+    }
+
+    async fn get(router: axum::Router, uri: &str) -> (axum::http::StatusCode, Vec<u8>) {
+        use tower::ServiceExt;
+        let resp =
+            router.oneshot(axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec();
+        (status, body)
+    }
+
+    fn write_plugin_static_file(data_dir: &std::path::Path, plugin: &str, rel: &str, content: &[u8]) {
+        let path = data_dir.join("plugins").join(plugin).join("static").join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+
+    #[tokio::test]
+    async fn serves_existing_plugin_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_plugin_static_file(tmp.path(), "foo", "style.css", b"body { color: red; }");
+        let state = make_state(tmp.path().to_path_buf());
+        let router = build_router(state);
+        let (status, body) = get(router, "/plugin/foo/static/style.css").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, b"body { color: red; }");
+    }
+
+    #[tokio::test]
+    async fn serves_nested_plugin_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_plugin_static_file(tmp.path(), "foo", "css/style.css", b".nested {}");
+        let state = make_state(tmp.path().to_path_buf());
+        let router = build_router(state);
+        let (status, body) = get(router, "/plugin/foo/static/css/style.css").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, b".nested {}");
+    }
+
+    #[tokio::test]
+    async fn missing_plugin_directory_returns_404() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let router = build_router(state);
+        let (status, _) = get(router, "/plugin/missing/static/x.css").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn missing_file_returns_404() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Create the static directory so canonicalize succeeds on the base
+        std::fs::create_dir_all(tmp.path().join("plugins").join("foo").join("static")).unwrap();
+        let state = make_state(tmp.path().to_path_buf());
+        let router = build_router(state);
+        let (status, _) = get(router, "/plugin/foo/static/missing.css").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_escaping_static_root_is_blocked() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Set up a real file outside the plugin's static tree
+        let outside = tmp.path().join("outside-secret.txt");
+        std::fs::write(&outside, b"secret").unwrap();
+        // Create the plugin static directory and a symlink inside it pointing outside
+        let static_dir = tmp.path().join("plugins").join("foo").join("static");
+        std::fs::create_dir_all(&static_dir).unwrap();
+        std::os::unix::fs::symlink(&outside, static_dir.join("evil")).unwrap();
+
+        let state = make_state(tmp.path().to_path_buf());
+        let router = build_router(state);
+        let (status, body) = get(router, "/plugin/foo/static/evil").await;
+        assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::NOT_FOUND, "got {status}, body={body:?}");
+        assert_ne!(body.as_slice(), b"secret");
+    }
 }
