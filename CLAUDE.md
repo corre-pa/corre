@@ -1,8 +1,8 @@
 # Understanding this project
 
-* The original brief for this project is in @BRIEF.md.
+* The original brief for this project is in @coding-guidelines/brief.md.
 * The @README.md has instructions for how to use the project and explains the architecture.
-* When writing a new app, follow @APP_GUIDE.md exactly.
+* When writing a new app, follow @coding-guidelines/app_guide.md exactly.
 
 ## Integration tests
 
@@ -31,13 +31,11 @@ When you run the integration tests:
   ..repeat for other cases
 ``` 
 
-## Todos
+## Security considerations
 
-Todos are internally generated bug reports. They are stored in `plans/todos/`.
+Always follow the guidelines in @coding-guidelines/security-best-practices.md. Keep security top of mind when writing code.
+Every time you write code, compare it against the security best practices and ask yourself: Does this code follow the security best 
+practices.
 
-### Fixing Todos
-
-* If instructed by the user, or if you are an agnet specifically designed to fix bug reports, then select the next item to do, or the 
-  one instructed to complete by the user and change the status to: "In progress".
-* Complete the fix, including writing new tests if necessary. Ensure that there are no regressions and that all old tests pass.
-* Once a fix has been implemented, and ALL the tests for the fix pass. Then, and only then, change the status of the todo to "Done".
+If you are asked to implement a feature that violates security best-practice, STOP! Point out the violation, why it is a bad idea, and 
+suggest an alternative approach or suggest dropping the feature completely.
