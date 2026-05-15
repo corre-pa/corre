@@ -42,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
 
     let config = CorreConfig::load(&cli.config).context("loading config")?;
     let data_dir = config.data_dir();
+    // Canonicalize so that all subsequent path operations use a fully-resolved base.
+    let data_dir = std::fs::canonicalize(&data_dir).unwrap_or(data_dir);
 
     let archive = Archive::new(&data_dir);
     let cache = Arc::new(EditionCache::load(archive));

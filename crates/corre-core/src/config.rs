@@ -364,9 +364,26 @@ pub fn load_mcp_configs(mcp_dir: &Path) -> anyhow::Result<HashMap<String, McpSer
     Ok(configs)
 }
 
+/// Validate `s` as a safe, single filesystem path component.
+///
+/// Accepts ASCII alphanumeric characters plus `-`, `_`, and `.` (not as the first
+/// character). Rejects empty strings, path separators, null bytes, and leading dots
+/// so that joining this value cannot produce path traversal.
+pub fn validate_path_component(s: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!s.is_empty(), "path component must not be empty");
+    anyhow::ensure!(!s.starts_with('.'), "path component must not start with '.'");
+    anyhow::ensure!(!s.contains(['/', '\\', '\0']), "path component contains path separator or null byte");
+    anyhow::ensure!(
+        s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        "path component `{s}` contains characters outside [a-zA-Z0-9._-]"
+    );
+    Ok(())
+}
+
 /// Load a single MCP config file *without* env var interpolation, so the
 /// caller can see raw `${VAR}` references (used by the configure modal).
 pub fn load_mcp_config_raw(mcp_dir: &Path, name: &str) -> anyhow::Result<McpServerConfig> {
+    validate_path_component(name).with_context(|| format!("invalid MCP server name `{name}`"))?;
     let path = mcp_dir.join(format!("{name}.toml"));
     let raw = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let cfg: McpServerConfig = toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
@@ -375,6 +392,7 @@ pub fn load_mcp_config_raw(mcp_dir: &Path, name: &str) -> anyhow::Result<McpServ
 
 /// Serialize and write a per-MCP config file.
 pub fn save_mcp_config(mcp_dir: &Path, name: &str, config: &McpServerConfig) -> anyhow::Result<()> {
+    validate_path_component(name).with_context(|| format!("invalid MCP server name `{name}`"))?;
     std::fs::create_dir_all(mcp_dir).with_context(|| format!("creating {}", mcp_dir.display()))?;
     let path = mcp_dir.join(format!("{name}.toml"));
     let content = toml::to_string_pretty(config)?;
@@ -385,6 +403,35 @@ pub fn save_mcp_config(mcp_dir: &Path, name: &str, config: &McpServerConfig) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_path_component_accepts_valid_ids() {
+        assert!(validate_path_component("brave-search").is_ok());
+        assert!(validate_path_component("my_app").is_ok());
+        assert!(validate_path_component("my.app.1").is_ok());
+        assert!(validate_path_component("abc123").is_ok());
+    }
+
+    #[test]
+    fn validate_path_component_rejects_traversal() {
+        assert!(validate_path_component("../etc/passwd").is_err());
+        assert!(validate_path_component("foo/bar").is_err());
+        assert!(validate_path_component("/etc/passwd").is_err());
+        assert!(validate_path_component("foo\\bar").is_err());
+        assert!(validate_path_component("foo\x00bar").is_err());
+    }
+
+    #[test]
+    fn validate_path_component_rejects_leading_dot() {
+        assert!(validate_path_component(".hidden").is_err());
+        assert!(validate_path_component("..").is_err());
+        assert!(validate_path_component(".").is_err());
+    }
+
+    #[test]
+    fn validate_path_component_rejects_empty() {
+        assert!(validate_path_component("").is_err());
+    }
 
     #[test]
     fn parse_default_config() {
