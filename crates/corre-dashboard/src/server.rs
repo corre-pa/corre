@@ -325,19 +325,25 @@ async fn sse_handler(State(state): State<Arc<DashboardState>>) -> Response<Body>
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))).into_response()
 }
 
-async fn historical_logs_handler(State(state): State<Arc<DashboardState>>, Path(date): Path<String>) -> Response<Body> {
-    // Validate date format: YYYY-MM-DD
-    if date.len() != 10
-        || date.as_bytes()[4] != b'-'
-        || date.as_bytes()[7] != b'-'
-        || !date[0..4].chars().all(|c| c.is_ascii_digit())
-        || !date[5..7].chars().all(|c| c.is_ascii_digit())
-        || !date[8..10].chars().all(|c| c.is_ascii_digit())
-    {
-        return (StatusCode::BAD_REQUEST, "Invalid date format, expected YYYY-MM-DD").into_response();
-    }
+/// Parse a `YYYY-MM-DD` URL segment and return its canonical re-formatted form.
+/// Returns `None` for malformed input or impossible calendar dates. The result is
+/// derived from a typed `chrono::NaiveDate`, so it cannot contain path separators
+/// or other characters that would enable path traversal. The canonical re-format is
+/// also compared against the original input to reject sloppy variants such as
+/// `2026-05-1` that chrono would otherwise accept.
+fn parse_log_date(raw: &str) -> Option<String> {
+    let date = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
+    let canonical = date.format("%Y-%m-%d").to_string();
+    (canonical == raw).then_some(canonical)
+}
 
-    let log_path = state.config.read().await.data_dir().join("app_logs").join(format!("app.log.{date}"));
+async fn historical_logs_handler(State(state): State<Arc<DashboardState>>, Path(date): Path<String>) -> Response<Body> {
+    let safe_date = match parse_log_date(&date) {
+        Some(d) => d,
+        None => return (StatusCode::BAD_REQUEST, "Invalid date format, expected YYYY-MM-DD").into_response(),
+    };
+
+    let log_path = state.config.read().await.data_dir().join("app_logs").join(format!("app.log.{safe_date}"));
 
     let contents = match tokio::fs::read_to_string(&log_path).await {
         Ok(c) => c,
@@ -1049,4 +1055,60 @@ pub fn spawn_metrics_broadcaster(tracker: Arc<ExecutionTracker>, mut shutdown: t
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_log_date;
+
+    #[test]
+    fn accepts_canonical_date() {
+        assert_eq!(parse_log_date("2026-05-12"), Some("2026-05-12".to_string()));
+    }
+
+    #[test]
+    fn rejects_empty_string() {
+        assert_eq!(parse_log_date(""), None);
+    }
+
+    #[test]
+    fn rejects_too_short() {
+        assert_eq!(parse_log_date("2026-05-1"), None);
+    }
+
+    #[test]
+    fn rejects_too_long() {
+        assert_eq!(parse_log_date("2026-05-123"), None);
+    }
+
+    #[test]
+    fn rejects_path_traversal() {
+        assert_eq!(parse_log_date("../etc/passwd"), None);
+    }
+
+    #[test]
+    fn rejects_absolute_path() {
+        assert_eq!(parse_log_date("/etc/passwd"), None);
+    }
+
+    #[test]
+    fn rejects_dots_in_place_of_digits() {
+        assert_eq!(parse_log_date("...0-05-12"), None);
+    }
+
+    #[test]
+    fn rejects_impossible_calendar_date() {
+        assert_eq!(parse_log_date("2026-13-40"), None);
+    }
+
+    #[test]
+    fn rejects_non_ascii_digit() {
+        // Arabic-Indic digits would have indexed mid-codepoint under the old byte-level check.
+        assert_eq!(parse_log_date("٢٠٢٦-٠٥-١٢"), None);
+    }
+
+    #[test]
+    fn rejects_wrong_separators() {
+        assert_eq!(parse_log_date("2026/05/12"), None);
+    }
 }

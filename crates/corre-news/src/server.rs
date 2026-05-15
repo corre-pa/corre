@@ -82,16 +82,31 @@ async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
 
 /// Serve a static asset from a plugin's `static/` directory.
 async fn plugin_static_handler(State(state): State<Arc<AppState>>, Path((name, path)): Path<(String, String)>) -> impl IntoResponse {
-    // Prevent path traversal
-    if name.contains("..") || path.contains("..") {
+    // Validate `name` is a safe single path component (no traversal, no separators).
+    if corre_core::config::validate_path_component(&name).is_err() {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    let file_path = state.data_dir.join("plugins").join(&name).join("static").join(&path);
-    if !file_path.exists() || !file_path.is_file() {
+
+    let base = state.data_dir.join("plugins").join(&name).join("static");
+    let candidate = base.join(&path);
+
+    // Canonicalize both paths to resolve symlinks, then verify the file stays
+    // inside `base`. This guards against all traversal techniques including
+    // symlinks, encoded separators, and OS-specific path tricks.
+    let canonical_base = match std::fs::canonicalize(&base) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let canonical = match std::fs::canonicalize(&candidate) {
+        Ok(p) => p,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if !canonical.starts_with(&canonical_base) || !canonical.is_file() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let mime = file_path.extension().and_then(|e| e.to_str()).map_or("application/octet-stream", mime_for_extension);
-    match std::fs::read(&file_path) {
+
+    let mime = canonical.extension().and_then(|e| e.to_str()).map_or("application/octet-stream", mime_for_extension);
+    match std::fs::read(&canonical) {
         Ok(data) => ([(header::CONTENT_TYPE, mime)], data).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

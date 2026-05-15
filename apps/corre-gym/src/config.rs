@@ -128,13 +128,21 @@ impl GymConfig {
         table.cloned().ok_or_else(|| anyhow::anyhow!("missing [gym] section in corre.toml")).and_then(|v| v.try_into().map_err(Into::into))
     }
 
-    /// Resolve `${VAR}` references in secret and URL fields.
+    /// Resolve `${VAR}` references in secret fields (the Telegram bot token).
     pub fn resolve_secrets(&mut self) -> anyhow::Result<()> {
         self.telegram_bot_token =
             corre_core::secret::resolve_value(&self.telegram_bot_token).context("resolving TELEGRAM_GYM_BOT_TOKEN")?;
+        Ok(())
+    }
+
+    /// Resolve `${VAR}` references in non-secret voice endpoint URLs.
+    ///
+    /// Service URLs are not secrets, so they are resolved through the plain
+    /// `resolve_env_ref` path rather than the secret resolver.
+    pub fn resolve_endpoints(&mut self) -> anyhow::Result<()> {
         if let Some(ref mut voice) = self.voice {
-            voice.stt_url = corre_core::secret::resolve_value(&voice.stt_url).context("resolving stt_url")?;
-            voice.tts_url = corre_core::secret::resolve_value(&voice.tts_url).context("resolving tts_url")?;
+            voice.stt_url = corre_core::config::resolve_env_ref(&voice.stt_url).context("resolving stt_url")?;
+            voice.tts_url = corre_core::config::resolve_env_ref(&voice.tts_url).context("resolving tts_url")?;
         }
         Ok(())
     }
@@ -234,6 +242,43 @@ mod tests {
             max_voice_duration_secs: 60,
         };
         assert!(voice.validate().is_err());
+    }
+
+    #[test]
+    fn resolve_endpoints_expands_env_refs_and_keeps_literals() {
+        unsafe { std::env::set_var("TEST_GYM_STT_URL", "https://stt.example.com") };
+        let val = minimal_gym_toml(
+            r#"
+            [voice]
+            stt_url = "${TEST_GYM_STT_URL}"
+            tts_url = "http://piper:5000"
+            "#,
+        );
+        let mut config: GymConfig = val.try_into().unwrap();
+        config.resolve_endpoints().unwrap();
+        let voice = config.voice.unwrap();
+        assert_eq!(voice.stt_url, "https://stt.example.com");
+        assert_eq!(voice.tts_url, "http://piper:5000");
+        unsafe { std::env::remove_var("TEST_GYM_STT_URL") };
+    }
+
+    #[test]
+    fn resolve_endpoints_missing_env_ref_errors() {
+        let val = minimal_gym_toml(
+            r#"
+            [voice]
+            stt_url = "${DEFINITELY_NOT_SET_GYM_XYZ_999}"
+            "#,
+        );
+        let mut config: GymConfig = val.try_into().unwrap();
+        assert!(config.resolve_endpoints().is_err());
+    }
+
+    #[test]
+    fn resolve_endpoints_noop_without_voice() {
+        let val = minimal_gym_toml("");
+        let mut config: GymConfig = val.try_into().unwrap();
+        assert!(config.resolve_endpoints().is_ok());
     }
 
     #[test]

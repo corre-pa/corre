@@ -80,6 +80,7 @@ async fn setup()
     tracing::debug!(raw_gym = %config.gym, "Raw [gym] table from config");
     let mut gym_config = GymConfig::from_toml_table(Some(&config.gym))?;
     gym_config.resolve_secrets()?;
+    gym_config.resolve_endpoints()?;
 
     // 5. Build LLM provider (with optional [gym.llm] overrides)
     tracing::debug!(gym_llm = ?gym_config.llm, "Gym LLM override");

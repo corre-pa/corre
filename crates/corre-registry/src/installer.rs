@@ -5,7 +5,7 @@
 //! `manifest.toml`, and auto-installing MCP dependencies).
 
 use crate::manifest::{AppEntry, InstallMethod, McpRegistryEntry};
-use corre_core::config::McpServerConfig;
+use corre_core::config::{validate_path_component, McpServerConfig};
 use corre_sdk::manifest::{PluginDefaults, PluginManifest, PluginMeta, PluginPermissions};
 use corre_sdk::types::ContentType;
 use std::collections::HashMap;
@@ -52,6 +52,8 @@ impl McpInstaller {
                 installed: true,
             }),
             InstallMethod::Binary { download_url_template, binary_name, sha256, command, args } => {
+                validate_path_component(binary_name).map_err(|e| InstallError::Io(e.to_string()))?;
+                validate_path_component(command).map_err(|e| InstallError::Io(e.to_string()))?;
                 let bin_dir = self.data_dir.join("bin");
                 tokio::fs::create_dir_all(&bin_dir).await?;
                 self.download_and_verify(download_url_template, sha256, &entry.version, &bin_dir, binary_name).await?;
@@ -79,9 +81,17 @@ impl McpInstaller {
     /// The per-MCP config file is handled by the caller (set `installed = false`).
     pub async fn uninstall(&self, server_name: &str, server_config: &McpServerConfig) -> Result<(), InstallError> {
         let bin_dir = self.data_dir.join("bin");
-        let binary_path = bin_dir.join(&server_config.command);
+        // Only join command into bin_dir when it looks like a bare binary name (single component).
+        // npx/uvx/pipx commands are handled by the branches below and never joined into a path.
+        let binary_path = if validate_path_component(&server_config.command).is_ok() {
+            bin_dir.join(&server_config.command)
+        } else {
+            // Command is not a bare filename (e.g. a full path, or npx). Skip the file-removal
+            // branch so the npm/pip fallbacks below handle cleanup instead.
+            std::path::PathBuf::new()
+        };
 
-        if binary_path.exists() {
+        if !binary_path.as_os_str().is_empty() && binary_path.exists() {
             tokio::fs::remove_file(&binary_path).await?;
         } else if server_config.command == "npx" {
             if let Some(pkg) = server_config.args.iter().find(|a| !a.starts_with('-')) {
@@ -117,6 +127,7 @@ impl McpInstaller {
     /// Returns `(plugin_dir, mcp_deps)` where `mcp_deps` is the list of MCP server IDs
     /// that this app depends on. The caller should install any that are missing.
     pub async fn install_app(&self, entry: &AppEntry) -> Result<(PathBuf, Vec<String>), InstallError> {
+        validate_path_component(&entry.id).map_err(|e| InstallError::Io(e.to_string()))?;
         let plugin_dir = self.data_dir.join("plugins").join(&entry.id);
         let bin_dir = plugin_dir.join("bin");
         tokio::fs::create_dir_all(&bin_dir).await?;
@@ -152,6 +163,7 @@ impl McpInstaller {
     ///
     /// Returns a list of MCP server IDs that were dependencies and may now be unused.
     pub async fn uninstall_app(&self, id: &str) -> Result<Vec<String>, InstallError> {
+        validate_path_component(id).map_err(|e| InstallError::Io(e.to_string()))?;
         let plugin_dir = self.data_dir.join("plugins").join(id);
 
         // Read the manifest before deleting so we can report MCP dependencies
