@@ -52,3 +52,37 @@ let path = mcp_dir.join(format!("{name}.toml"));
 
 Validate at the system boundary (HTTP handler, RPC dispatcher, config loader). Don't push validation responsibility into helpers that assume
 their caller already checked.
+
+# Cleartext Transmission of Sensitive Information
+
+Never send secrets (API keys, tokens, passwords) over unencrypted channels or in forms that leak into logs or proxies.
+
+## Pass secrets in headers, not URLs
+
+Query parameters and URL path segments appear in access logs, browser history, and proxy records. Always use the
+`Authorization: Bearer` header (via `.bearer_auth()`) — never embed a key in a query param or path segment.
+
+## Never disable TLS certificate validation
+
+```rust
+// BANNED
+reqwest::ClientBuilder::new().danger_accept_invalid_certs(true)
+```
+
+reqwest validates certificates against the system trust store by default — don't override it. If a self-signed cert is
+genuinely needed in development, add it to the trust store; don't disable validation globally.
+
+## Redact secrets before logging
+
+Call `redact_secrets()` (`corre-host/src/subprocess.rs`) on any JSON value that may contain config or request params
+before passing it to `tracing::debug!` or similar. Never log raw config structs that include `api_key` fields.
+
+## Store secrets as `${VAR}` references, never as literals
+
+Config files (`.toml`) must use `${ENV_VAR_NAME}` references resolved at runtime via `resolve_value()`. Hardcoded keys in
+config files get committed to version control and appear in plaintext on disk.
+
+## Enforce HTTPS for external endpoints
+
+Validate that any user-supplied `base_url` uses `https://` before making requests. `http://` is only acceptable for
+explicitly local services (loopback addresses only). See `corre-cli/src/setup/validate.rs` for the existing pattern.
