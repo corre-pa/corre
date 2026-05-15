@@ -9,6 +9,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Resolve a config value that may be a bare `${VAR}` env-var reference.
+///
+/// If `value` is exactly `${VAR_NAME}`, the env var is looked up and returned; a missing
+/// variable is an error. Any other string is returned unchanged, allowing literal values.
+/// Use for non-secret config such as endpoint URLs and paths.
+pub fn resolve_env_ref(value: &str) -> anyhow::Result<String> {
+    let trimmed = value.trim();
+    if let Some(inner) = trimmed.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
+        std::env::var(inner).map_err(|_| anyhow::anyhow!("environment variable `{inner}` is not set (referenced as `{value}`)"))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CorreConfig {
     pub general: GeneralConfig,

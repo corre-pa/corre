@@ -26,18 +26,15 @@ pub fn interpolate_env_vars(input: &str) -> String {
         .into_owned()
 }
 
-/// Resolve a config value that may contain an env-var reference.
+/// Resolve a config value holding a secret that may contain an env-var reference.
 ///
 /// If `value` matches the pattern `${VAR_NAME}`, the env var is looked up and
 /// its value returned. Otherwise the string is returned as-is, allowing literal
-/// API keys or other values.
+/// API keys or other values. Thin wrapper over [`crate::config::resolve_env_ref`];
+/// use this name for genuine secrets (API keys, tokens) and `resolve_env_ref` for
+/// non-secret config such as endpoint URLs.
 pub fn resolve_value(value: &str) -> anyhow::Result<String> {
-    let trimmed = value.trim();
-    if let Some(inner) = trimmed.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
-        std::env::var(inner).map_err(|_| anyhow::anyhow!("environment variable `{inner}` is not set (referenced as `{value}`)"))
-    } else {
-        Ok(value.to_string())
-    }
+    crate::config::resolve_env_ref(value)
 }
 
 #[cfg(test)]
