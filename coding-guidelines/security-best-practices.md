@@ -62,6 +62,11 @@ Never send secrets (API keys, tokens, passwords) over unencrypted channels or in
 Query parameters and URL path segments appear in access logs, browser history, and proxy records. Always use the
 `Authorization: Bearer` header (via `.bearer_auth()`) — never embed a key in a query param or path segment.
 
+**Documented exception — Telegram Bot API.** The Telegram Bot API mandates the bot token in the URL path
+(`https://api.telegram.org/bot<token>/<method>`); it cannot be moved to an `Authorization` header. This is acceptable
+only because the channel is a hardcoded `https://` endpoint, so the transmission itself is encrypted. Do not generalise
+this exception to any other API.
+
 ## Never disable TLS certificate validation
 
 ```rust
@@ -86,3 +91,9 @@ config files get committed to version control and appear in plaintext on disk.
 
 Validate that any user-supplied `base_url` uses `https://` before making requests. `http://` is only acceptable for
 explicitly local services (loopback addresses only). See `corre-cli/src/setup/validate.rs` for the existing pattern.
+
+**Documented exception — local sidecar services.** Services that run as co-located sidecars and are reached only over a
+private Docker network or loopback may use `http://`. The `corre-gym` voice pipeline is the current example: the whisper
+(STT) and piper (TTS) services run on the `corre-internal` bridge network and default to `http://whisper:5005` /
+`http://piper:5000`. Traffic stays on the host and never traverses the public internet, so plain `http://` is acceptable
+for these endpoints.
