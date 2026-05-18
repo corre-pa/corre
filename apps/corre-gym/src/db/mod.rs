@@ -14,4 +14,5 @@ mod schedules;
 mod users;
 
 pub use database::Database;
+pub use entries::{EntryReclassifyOutcome, SetEdit, SetEditError, SetEditOutcome};
 pub use models::*;

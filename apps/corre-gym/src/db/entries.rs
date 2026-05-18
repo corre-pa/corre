@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use rusqlite::{Row, params};
 
 use super::database::Database;
-use super::models::{Difficulty, ExerciseEntry, ExerciseSet, MeasurementType, Session, SessionSummary};
+use super::models::{Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, Session, SessionSummary};
 
 // ── Sessions ───────────────────────────────────────────────────────────────────
 
@@ -420,6 +420,231 @@ impl Database {
     }
 }
 
+// ── Set editing ─────────────────────────────────────────────────────────────────
+
+/// A partial edit to an existing set. Every field is optional; `None` means
+/// "leave unchanged". `exercise_type_id` holds a *resolved* id — name→id
+/// resolution happens in the caller (web layer or assistant catalogue lookup).
+/// `count` and `comment` are doubly-optional: the outer `None` means unchanged,
+/// the inner `None` clears the column.
+#[derive(Debug, Default, Clone)]
+pub struct SetEdit {
+    pub exercise_type_id: Option<i64>,
+    pub count: Option<Option<i32>>,
+    pub value: Option<f64>,
+    pub perceived_difficulty: Option<Difficulty>,
+    pub comment: Option<Option<String>>,
+}
+
+impl SetEdit {
+    pub fn is_empty(&self) -> bool {
+        self.exercise_type_id.is_none()
+            && self.count.is_none()
+            && self.value.is_none()
+            && self.perceived_difficulty.is_none()
+            && self.comment.is_none()
+    }
+}
+
+/// The set as it was before the edit and as it is after — returned so callers
+/// can build a human-readable before→after confirmation.
+#[derive(Debug, Clone)]
+pub struct SetEditOutcome {
+    pub before: ExerciseSet,
+    pub after: ExerciseSet,
+}
+
+/// Outcome of reclassifying a whole exercise_entry to a different exercise.
+#[derive(Debug, Clone)]
+pub struct EntryReclassifyOutcome {
+    pub entry_id: i64,
+    pub old_exercise_type_id: i64,
+    pub new_exercise_type_id: i64,
+    pub sets_updated: usize,
+}
+
+/// Failure modes of an edit. `NotFound`/`Forbidden` are deliberately distinct
+/// so callers can decide whether to collapse them (the REST layer does, to
+/// avoid leaking set-id existence).
+#[derive(Debug)]
+pub enum SetEditError {
+    NotFound(i64),
+    Forbidden(i64),
+    MeasurementTypeMismatch { from: String, to: String },
+    Empty,
+    Db(anyhow::Error),
+}
+
+impl std::fmt::Display for SetEditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(id) => write!(f, "set {id} not found"),
+            Self::Forbidden(id) => write!(f, "set {id} does not belong to the requesting user"),
+            Self::MeasurementTypeMismatch { from, to } => write!(
+                f,
+                "{from} and {to} are not measured the same way — supply the new value when changing the exercise"
+            ),
+            Self::Empty => write!(f, "no changes were supplied"),
+            Self::Db(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for SetEditError {}
+
+impl Database {
+    /// Owning user_id of a set (via `exercise_entry.user_id`), or `None` if the
+    /// set does not exist.
+    pub fn set_owner(&self, set_id: i64) -> anyhow::Result<Option<i64>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT ee.user_id FROM sets s \
+             JOIN exercise_entry ee ON s.exercise_entry_id = ee.id \
+             WHERE s.id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![set_id], |row| row.get::<_, i64>(0))?;
+        rows.next().transpose().context("Failed to read set owner")
+    }
+
+    /// Most recently logged set for `user_id`, optionally restricted to a single
+    /// exercise type. The `id DESC` tie-breaker is required: sets logged in one
+    /// batch can share an identical `logged_at` string.
+    pub fn most_recent_set_for_user(&self, user_id: i64, exercise_type_id: Option<i64>) -> anyhow::Result<Option<ExerciseSet>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT s.id, s.exercise_entry_id, s.exercise_type_id, s.order_idx, \
+                    s.measurement_type_id, s.count, s.value, s.perceived_difficulty, s.comment, s.logged_at \
+             FROM sets s \
+             JOIN exercise_entry ee ON s.exercise_entry_id = ee.id \
+             WHERE ee.user_id = ?1 AND (?2 IS NULL OR s.exercise_type_id = ?2) \
+             ORDER BY s.logged_at DESC, s.id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![user_id, exercise_type_id], row_to_set)?;
+        rows.next().transpose().context("Failed to read most recent set")
+    }
+
+    /// Re-point every set in an entry at a different exercise type and
+    /// measurement type. Returns the number of rows updated.
+    pub fn set_exercise_type_for_entry(&self, entry_id: i64, exercise_type_id: i64, mt: MeasurementType) -> anyhow::Result<usize> {
+        let rows = self.conn().execute(
+            "UPDATE sets SET exercise_type_id = ?2, measurement_type_id = ?3 WHERE exercise_entry_id = ?1",
+            params![entry_id, exercise_type_id, mt.id()],
+        )?;
+        Ok(rows)
+    }
+
+    /// Apply a partial edit to a single set. Verifies `requesting_user_id` owns
+    /// the set (own set, or `can_write` over the owner) and enforces that a
+    /// change of exercise type does not silently change the measurement type
+    /// unless a fresh `value` is supplied alongside.
+    pub fn edit_set(
+        &self,
+        set_id: i64,
+        requesting_user_id: i64,
+        catalogue: &[ExerciseTypeWithAncestry],
+        edit: &SetEdit,
+    ) -> Result<SetEditOutcome, SetEditError> {
+        if edit.is_empty() {
+            return Err(SetEditError::Empty);
+        }
+        let before = self.get_set(set_id).map_err(SetEditError::Db)?.ok_or(SetEditError::NotFound(set_id))?;
+        let owner = self.set_owner(set_id).map_err(SetEditError::Db)?.ok_or(SetEditError::NotFound(set_id))?;
+        if owner != requesting_user_id && !self.can_write(requesting_user_id, owner).map_err(SetEditError::Db)? {
+            return Err(SetEditError::Forbidden(set_id));
+        }
+
+        let mut after = before.clone();
+        if let Some(new_type_id) = edit.exercise_type_id
+            && new_type_id != before.exercise_type_id
+        {
+            let new_type = catalogue
+                .iter()
+                .find(|e| e.exercise_type.id == new_type_id)
+                .ok_or_else(|| SetEditError::Db(anyhow::anyhow!("exercise type {new_type_id} not found")))?;
+            let new_mt = new_type
+                .exercise_type
+                .measurement_type
+                .ok_or_else(|| SetEditError::Db(anyhow::anyhow!("exercise type {new_type_id} has no measurement type")))?;
+            if new_mt != before.measurement_type && edit.value.is_none() {
+                let from = exercise_name(catalogue, before.exercise_type_id);
+                return Err(SetEditError::MeasurementTypeMismatch { from, to: new_type.exercise_type.name.clone() });
+            }
+            after.exercise_type_id = new_type_id;
+            after.measurement_type = new_mt;
+            // A non-weight_reps measurement type has no rep count; drop a stale
+            // one unless the caller explicitly sets a new count.
+            if new_mt != MeasurementType::WeightReps {
+                after.count = None;
+            }
+        }
+        if let Some(c) = edit.count {
+            after.count = c;
+        }
+        if let Some(v) = edit.value {
+            after.value = v;
+        }
+        if let Some(d) = edit.perceived_difficulty {
+            after.perceived_difficulty = d;
+        }
+        if let Some(c) = &edit.comment {
+            after.comment = c.clone();
+        }
+
+        self.update_set(&after).map_err(SetEditError::Db)?;
+        Ok(SetEditOutcome { before, after })
+    }
+
+    /// Reclassify a whole exercise_entry (block of sets) to a different
+    /// exercise. Verifies ownership and rejects a change that would alter the
+    /// measurement type, since a bulk change cannot supply per-set values.
+    pub fn reclassify_entry_exercise(
+        &self,
+        entry_id: i64,
+        requesting_user_id: i64,
+        catalogue: &[ExerciseTypeWithAncestry],
+        new_exercise_type_id: i64,
+    ) -> Result<EntryReclassifyOutcome, SetEditError> {
+        let entry = self.get_entry(entry_id).map_err(SetEditError::Db)?.ok_or(SetEditError::NotFound(entry_id))?;
+        if entry.user_id != requesting_user_id && !self.can_write(requesting_user_id, entry.user_id).map_err(SetEditError::Db)? {
+            return Err(SetEditError::Forbidden(entry_id));
+        }
+        let sets = self.list_sets_for_entry(entry_id).map_err(SetEditError::Db)?;
+        let first = sets.first().ok_or(SetEditError::NotFound(entry_id))?;
+        let current_mt = first.measurement_type;
+        if sets.iter().any(|s| s.measurement_type != current_mt) {
+            return Err(SetEditError::Db(anyhow::anyhow!("entry {entry_id} has mixed measurement types")));
+        }
+
+        let new_type = catalogue
+            .iter()
+            .find(|e| e.exercise_type.id == new_exercise_type_id)
+            .ok_or_else(|| SetEditError::Db(anyhow::anyhow!("exercise type {new_exercise_type_id} not found")))?;
+        let new_mt = new_type
+            .exercise_type
+            .measurement_type
+            .ok_or_else(|| SetEditError::Db(anyhow::anyhow!("exercise type {new_exercise_type_id} has no measurement type")))?;
+        if new_mt != current_mt {
+            return Err(SetEditError::MeasurementTypeMismatch {
+                from: exercise_name(catalogue, first.exercise_type_id),
+                to: new_type.exercise_type.name.clone(),
+            });
+        }
+
+        let old_exercise_type_id = first.exercise_type_id;
+        let sets_updated = self
+            .set_exercise_type_for_entry(entry_id, new_exercise_type_id, new_mt)
+            .map_err(SetEditError::Db)?;
+        Ok(EntryReclassifyOutcome { entry_id, old_exercise_type_id, new_exercise_type_id, sets_updated })
+    }
+}
+
+/// Catalogue name of an exercise type id, falling back to a generic label.
+fn exercise_name(catalogue: &[ExerciseTypeWithAncestry], exercise_type_id: i64) -> String {
+    catalogue
+        .iter()
+        .find(|e| e.exercise_type.id == exercise_type_id)
+        .map(|e| e.exercise_type.name.clone())
+        .unwrap_or_else(|| "the previous exercise".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,5 +815,207 @@ mod tests {
         let open = db.list_open_entries_for_user(user_id).unwrap();
         let ids: Vec<i64> = open.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![id_a, id_b]);
+    }
+
+    // ── Set editing ────────────────────────────────────────────────────────────
+
+    fn catalogue(db: &Database) -> Vec<ExerciseTypeWithAncestry> {
+        db.list_exercise_types_with_ancestry().unwrap()
+    }
+
+    /// Insert a weight_reps set into a fresh standalone entry, returning the set id.
+    fn seed_set(db: &Database, user_id: i64, exercise_type_id: i64, weight: f64, reps: i32) -> i64 {
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        let mut s = new_exercise_set(entry_id, exercise_type_id, MeasurementType::WeightReps, weight);
+        s.count = Some(reps);
+        db.insert_set(&s).unwrap()
+    }
+
+    #[test]
+    fn set_owner_returns_owning_user() {
+        let (db, user_id, bp_id) = fixture();
+        let set_id = seed_set(&db, user_id, bp_id, 60.0, 5);
+        assert_eq!(db.set_owner(set_id).unwrap(), Some(user_id));
+        assert_eq!(db.set_owner(999_999).unwrap(), None);
+    }
+
+    #[test]
+    fn most_recent_set_orders_by_logged_at_then_id() {
+        let (db, user_id, bp_id) = fixture();
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        let mut last_id = 0;
+        // Identical logged_at on every set forces the id tie-breaker to decide.
+        for w in [60.0, 70.0, 80.0] {
+            let mut s = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, w);
+            s.count = Some(5);
+            s.logged_at = "2025-01-01 10:00:00".to_string();
+            last_id = db.insert_set(&s).unwrap();
+        }
+        let recent = db.most_recent_set_for_user(user_id, None).unwrap().unwrap();
+        assert_eq!(recent.id, last_id);
+        assert!((recent.value - 80.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn most_recent_set_filtered_by_exercise_type() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        let mut bench = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, 80.0);
+        bench.count = Some(5);
+        bench.logged_at = "2025-01-01 10:00:00".to_string();
+        let bench_id = db.insert_set(&bench).unwrap();
+        let mut squat = new_exercise_set(entry_id, squat_id, MeasurementType::WeightReps, 100.0);
+        squat.count = Some(5);
+        squat.logged_at = "2025-01-01 11:00:00".to_string();
+        db.insert_set(&squat).unwrap();
+
+        assert_eq!(db.most_recent_set_for_user(user_id, None).unwrap().unwrap().exercise_type_id, squat_id);
+        assert_eq!(db.most_recent_set_for_user(user_id, Some(bp_id)).unwrap().unwrap().id, bench_id);
+    }
+
+    #[test]
+    fn most_recent_set_only_returns_own_sets() {
+        let (db, user_id, bp_id) = fixture();
+        let other = db.insert_user(&new_user("Other", None, "UTC")).unwrap();
+        seed_set(&db, other, bp_id, 50.0, 5);
+        assert!(db.most_recent_set_for_user(user_id, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn edit_set_changes_value_only() {
+        let (db, user_id, bp_id) = fixture();
+        let set_id = seed_set(&db, user_id, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        let edit = SetEdit { value: Some(40.0), ..Default::default() };
+        let outcome = db.edit_set(set_id, user_id, &cat, &edit).unwrap();
+        assert!((outcome.after.value - 40.0).abs() < 1e-6);
+        assert_eq!(outcome.after.count, Some(8));
+        assert_eq!(outcome.after.exercise_type_id, bp_id);
+        let stored = db.get_set(set_id).unwrap().unwrap();
+        assert!((stored.value - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn edit_set_changes_exercise_same_measurement_type() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let set_id = seed_set(&db, user_id, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        let edit = SetEdit { exercise_type_id: Some(squat_id), ..Default::default() };
+        let outcome = db.edit_set(set_id, user_id, &cat, &edit).unwrap();
+        assert_eq!(outcome.after.exercise_type_id, squat_id);
+        assert_eq!(outcome.after.measurement_type, MeasurementType::WeightReps);
+        assert!((outcome.after.value - 30.0).abs() < 1e-6);
+        assert_eq!(outcome.after.count, Some(8));
+    }
+
+    #[test]
+    fn edit_set_rejects_cross_measurement_type_without_value() {
+        let (db, user_id, bp_id) = fixture();
+        let plank_id = db.get_exercise_type_by_name("Plank").unwrap().unwrap().id;
+        let set_id = seed_set(&db, user_id, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        let edit = SetEdit { exercise_type_id: Some(plank_id), ..Default::default() };
+        assert!(matches!(db.edit_set(set_id, user_id, &cat, &edit).unwrap_err(), SetEditError::MeasurementTypeMismatch { .. }));
+    }
+
+    #[test]
+    fn edit_set_accepts_cross_measurement_type_with_value() {
+        let (db, user_id, bp_id) = fixture();
+        let plank_id = db.get_exercise_type_by_name("Plank").unwrap().unwrap().id;
+        let set_id = seed_set(&db, user_id, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        let edit = SetEdit { exercise_type_id: Some(plank_id), value: Some(60.0), ..Default::default() };
+        let outcome = db.edit_set(set_id, user_id, &cat, &edit).unwrap();
+        assert_eq!(outcome.after.measurement_type, MeasurementType::TimeBased);
+        assert!((outcome.after.value - 60.0).abs() < 1e-6);
+        assert_eq!(outcome.after.count, None);
+    }
+
+    #[test]
+    fn edit_set_rejects_other_users_set() {
+        let (db, user_id, bp_id) = fixture();
+        let other = db.insert_user(&new_user("Other", None, "UTC")).unwrap();
+        let set_id = seed_set(&db, user_id, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        let edit = SetEdit { value: Some(40.0), ..Default::default() };
+        assert!(matches!(db.edit_set(set_id, other, &cat, &edit).unwrap_err(), SetEditError::Forbidden(_)));
+    }
+
+    #[test]
+    fn edit_set_allows_group_write_member() {
+        use crate::db::{AccessLevel, Group};
+        let (db, owner, bp_id) = fixture();
+        let editor = db.insert_user(&new_user("Editor", None, "UTC")).unwrap();
+        let group = db
+            .insert_group(&Group { id: 0, name: "Gym".into(), description: None, created_at: "2025-01-01 00:00:00".into() })
+            .unwrap();
+        db.add_member(editor, group, AccessLevel::Write).unwrap();
+        db.add_member(owner, group, AccessLevel::Read).unwrap();
+        let set_id = seed_set(&db, owner, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        let edit = SetEdit { value: Some(45.0), ..Default::default() };
+        let outcome = db.edit_set(set_id, editor, &cat, &edit).unwrap();
+        assert!((outcome.after.value - 45.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn edit_set_missing_set_returns_not_found() {
+        let (db, user_id, _) = fixture();
+        let cat = catalogue(&db);
+        let edit = SetEdit { value: Some(40.0), ..Default::default() };
+        assert!(matches!(db.edit_set(999_999, user_id, &cat, &edit).unwrap_err(), SetEditError::NotFound(_)));
+    }
+
+    #[test]
+    fn edit_set_empty_edit_rejected() {
+        let (db, user_id, bp_id) = fixture();
+        let set_id = seed_set(&db, user_id, bp_id, 30.0, 8);
+        let cat = catalogue(&db);
+        assert!(matches!(db.edit_set(set_id, user_id, &cat, &SetEdit::default()).unwrap_err(), SetEditError::Empty));
+    }
+
+    #[test]
+    fn reclassify_entry_exercise_updates_every_set() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        for w in [60.0, 70.0, 80.0] {
+            let mut s = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, w);
+            s.count = Some(5);
+            db.insert_set(&s).unwrap();
+        }
+        let cat = catalogue(&db);
+        let outcome = db.reclassify_entry_exercise(entry_id, user_id, &cat, squat_id).unwrap();
+        assert_eq!(outcome.sets_updated, 3);
+        assert_eq!(outcome.old_exercise_type_id, bp_id);
+        assert!(db.list_sets_for_entry(entry_id).unwrap().iter().all(|s| s.exercise_type_id == squat_id));
+    }
+
+    #[test]
+    fn reclassify_entry_exercise_rejects_measurement_type_change() {
+        let (db, user_id, bp_id) = fixture();
+        let plank_id = db.get_exercise_type_by_name("Plank").unwrap().unwrap().id;
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        let mut s = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, 60.0);
+        s.count = Some(5);
+        db.insert_set(&s).unwrap();
+        let cat = catalogue(&db);
+        let err = db.reclassify_entry_exercise(entry_id, user_id, &cat, plank_id).unwrap_err();
+        assert!(matches!(err, SetEditError::MeasurementTypeMismatch { .. }));
+    }
+
+    #[test]
+    fn reclassify_entry_exercise_rejects_other_users_entry() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let other = db.insert_user(&new_user("Other", None, "UTC")).unwrap();
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, None, None)).unwrap();
+        let mut s = new_exercise_set(entry_id, bp_id, MeasurementType::WeightReps, 60.0);
+        s.count = Some(5);
+        db.insert_set(&s).unwrap();
+        let cat = catalogue(&db);
+        assert!(matches!(db.reclassify_entry_exercise(entry_id, other, &cat, squat_id).unwrap_err(), SetEditError::Forbidden(_)));
     }
 }
