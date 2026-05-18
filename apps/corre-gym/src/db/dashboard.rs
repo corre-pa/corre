@@ -111,8 +111,8 @@ impl Database {
              LEFT JOIN exercise_entry ee ON ee.session_id = s.id \
              LEFT JOIN sets st ON st.exercise_entry_id = ee.id \
              WHERE s.user_id = ?1 \
-               AND s.started_at >= date('now', 'weekday 1', '-7 days') \
-               AND s.started_at < date('now', 'weekday 1')",
+               AND s.started_at >= date('now', '-6 days', 'weekday 1') \
+               AND s.started_at < date('now', '-6 days', 'weekday 1', '+7 days')",
             params![user_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -296,8 +296,16 @@ mod tests {
         s.count = Some(10);
         db.insert_set(&s).unwrap();
 
+        let old_date = chrono::Utc::now().date_naive() - chrono::Duration::days(10);
+        db.conn()
+            .execute(
+                "INSERT INTO sessions (user_id, started_at) VALUES (?1, ?2)",
+                params![user_id, format!("{old_date} 10:00:00")],
+            )
+            .unwrap();
+
         let summary = db.week_summary(user_id).unwrap();
-        assert!(summary.session_count >= 1);
+        assert_eq!(summary.session_count, 1);
     }
 
     #[test]
