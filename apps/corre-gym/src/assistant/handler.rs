@@ -7,8 +7,8 @@ use tokio::sync::Mutex;
 
 use crate::config::GymConfig;
 use crate::db::{
-    ConversationRole, Database, Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, Session, User,
-    new_conversation_message, new_exercise_entry_at, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
+    ConversationRole, Database, Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, Session, SetEdit,
+    SetEditError, User, new_conversation_message, new_exercise_entry_at, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
 };
 use crate::telegram::Message as TgMessage;
 
@@ -641,6 +641,9 @@ impl AssistantHandler {
                 self.db.lock().await.insert_goal(&goal)?;
                 Ok(None)
             }
+            AssistantAction::EditSet { exercise, new_exercise, new_reps, new_value, new_difficulty } => {
+                self.edit_set_action(user, exercise.as_deref(), new_exercise.as_deref(), *new_reps, *new_value, *new_difficulty).await
+            }
             AssistantAction::Unknown => {
                 tracing::debug!("Ignoring unknown action type from LLM");
                 Ok(None)
@@ -717,6 +720,93 @@ impl AssistantHandler {
         }
         db.end_entry(resolved.id)?;
         Ok(None)
+    }
+
+    /// Edit a recently-logged set. Resolves the target by recency, optionally
+    /// filtered by the named current exercise. A `new_exercise` reclassifies the
+    /// whole exercise block; value/reps/difficulty changes apply to the single
+    /// most-recent set. Returns a host-built before→after confirmation suffix.
+    async fn edit_set_action(
+        &self,
+        user: &User,
+        exercise: Option<&str>,
+        new_exercise: Option<&str>,
+        new_reps: Option<i32>,
+        new_value: Option<f64>,
+        new_difficulty: Option<Difficulty>,
+    ) -> anyhow::Result<Option<String>> {
+        let db = self.db.lock().await;
+
+        let filter_id = match exercise {
+            Some(name) => {
+                Some(find_exercise_type(&self.catalogue, name).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {name}"))?.exercise_type.id)
+            }
+            None => None,
+        };
+        let target = db
+            .most_recent_set_for_user(user.id, filter_id)?
+            .ok_or_else(|| anyhow::anyhow!("I couldn't find a recent set to edit."))?;
+
+        let mut parts: Vec<String> = Vec::new();
+
+        // Exercise change → reclassify the whole exercise block (entry).
+        if let Some(new_name) = new_exercise {
+            let new_et =
+                find_exercise_type(&self.catalogue, new_name).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {new_name}"))?;
+            match db.reclassify_entry_exercise(target.exercise_entry_id, user.id, &self.catalogue, new_et.exercise_type.id) {
+                Ok(outcome) => {
+                    let old_name = self
+                        .catalogue
+                        .iter()
+                        .find(|e| e.exercise_type.id == outcome.old_exercise_type_id)
+                        .map(|e| e.exercise_type.name.as_str())
+                        .unwrap_or("the previous exercise");
+                    parts.push(format!(
+                        "exercise {old_name} → {} ({} set{})",
+                        new_et.exercise_type.name,
+                        outcome.sets_updated,
+                        if outcome.sets_updated == 1 { "" } else { "s" },
+                    ));
+                }
+                Err(SetEditError::MeasurementTypeMismatch { from, to }) => {
+                    return Err(anyhow::anyhow!(
+                        "{from} and {to} aren't measured the same way, so I can't just swap them — re-log the set as {to} instead."
+                    ));
+                }
+                Err(e) => return Err(anyhow::anyhow!("{e}")),
+            }
+        }
+
+        // Value / reps / difficulty change → edit the single most-recent set.
+        if new_reps.is_some() || new_value.is_some() || new_difficulty.is_some() {
+            let edit = SetEdit {
+                exercise_type_id: None,
+                count: new_reps.map(Some),
+                value: new_value,
+                perceived_difficulty: new_difficulty,
+                comment: None,
+            };
+            let outcome = db.edit_set(target.id, user.id, &self.catalogue, &edit).map_err(|e| anyhow::anyhow!("{e}"))?;
+            if new_value.is_some() {
+                parts.push(format!(
+                    "{} {} → {}",
+                    value_label(outcome.before.measurement_type),
+                    format_value(outcome.before.measurement_type, outcome.before.value),
+                    format_value(outcome.after.measurement_type, outcome.after.value),
+                ));
+            }
+            if new_reps.is_some() {
+                parts.push(format!("reps {} → {}", opt_count(outcome.before.count), opt_count(outcome.after.count)));
+            }
+            if let Some(d) = new_difficulty {
+                parts.push(format!("difficulty → {d}"));
+            }
+        }
+
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(format!("Updated your last set — {}.", parts.join(", "))))
     }
 
     /// Set-count checkpoint: every time the user logs a set in an open entry that
@@ -974,6 +1064,33 @@ pub(crate) fn entry_exercise_name(db: &Database, catalogue: &[ExerciseTypeWithAn
         .map(|e| e.exercise_type.name.clone())
         .unwrap_or_else(|| "unknown".to_string());
     Ok(name)
+}
+
+/// Human-readable label for the measured value of a set, by measurement type.
+fn value_label(mt: MeasurementType) -> &'static str {
+    match mt {
+        MeasurementType::WeightReps => "weight",
+        MeasurementType::TimeBased => "duration",
+        MeasurementType::DistanceBased => "distance",
+        MeasurementType::LevelBased => "level",
+        MeasurementType::ScoreBased => "score",
+    }
+}
+
+/// Render a set's measured value with its unit, by measurement type.
+fn format_value(mt: MeasurementType, value: f64) -> String {
+    match mt {
+        MeasurementType::WeightReps => format!("{value:.1}kg"),
+        MeasurementType::TimeBased => format!("{value:.0}s"),
+        MeasurementType::DistanceBased => format!("{value:.0}m"),
+        MeasurementType::LevelBased => format!("level {value:.0}"),
+        MeasurementType::ScoreBased => format!("{value:.1}"),
+    }
+}
+
+/// Render an optional rep count, falling back to an em dash when absent.
+fn opt_count(c: Option<i32>) -> String {
+    c.map(|c| c.to_string()).unwrap_or_else(|| "—".to_string())
 }
 
 /// Encode an optional plan name into the session's `notes` field using the

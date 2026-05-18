@@ -108,6 +108,88 @@ pub async fn sets(auth: AuthUser, State(state): State<Arc<AppState>>, Query(q): 
     }
 }
 
+// ── Edit a logged set ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct EditSetBody {
+    /// New exercise, by name — resolved against the catalogue. Reclassifies just
+    /// this one set; whole-block reclassification is an assistant-only feature.
+    #[serde(default)]
+    pub exercise: Option<String>,
+    #[serde(default)]
+    pub reps: Option<i32>,
+    /// New measured value: weight_kg, duration_secs, or distance_m by type.
+    #[serde(default)]
+    pub value: Option<f64>,
+    #[serde(default)]
+    pub perceived_difficulty: Option<crate::db::Difficulty>,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// `PUT /api/sets/{id}` — edit a single logged set. Edits are restricted to the
+/// authenticated user's own sets (or sets they have group write access to);
+/// `Database::edit_set` enforces this. A non-existent set and a set owned by
+/// someone else both return 404 so set ids cannot be probed.
+pub async fn edit_set(
+    auth: AuthUser,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(body): Json<EditSetBody>,
+) -> impl IntoResponse {
+    use crate::db::{SetEdit, SetEditError};
+
+    if body.reps.is_some_and(|r| r < 0) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": "reps must be >= 0" }))).into_response();
+    }
+    if body.value.is_some_and(|v| !v.is_finite() || v < 0.0) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": "value must be a non-negative number" })))
+            .into_response();
+    }
+
+    let db = state.db.lock().await;
+    let catalogue = match db.list_exercise_types_with_ancestry() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to load exercise catalogue: {e:#}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let exercise_type_id = match &body.exercise {
+        Some(name) => match crate::assistant::matching::find_exercise_type(&catalogue, name) {
+            Some(et) => Some(et.exercise_type.id),
+            None => {
+                return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": format!("unknown exercise: {name}") })))
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
+    let edit = SetEdit {
+        exercise_type_id,
+        count: body.reps.map(Some),
+        value: body.value,
+        perceived_difficulty: body.perceived_difficulty,
+        comment: body.comment.clone().map(Some),
+    };
+
+    match db.edit_set(id, auth.user.id, &catalogue, &edit) {
+        Ok(outcome) => Json(outcome.after).into_response(),
+        Err(SetEditError::NotFound(_) | SetEditError::Forbidden(_)) => {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "set not found" }))).into_response()
+        }
+        Err(e @ (SetEditError::MeasurementTypeMismatch { .. } | SetEditError::Empty)) => {
+            (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+        }
+        Err(SetEditError::Db(e)) => {
+            tracing::error!("Failed to edit set {id}: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 // ── Progress: exercise time series ────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

@@ -106,6 +106,15 @@ duplicate the difficulty value into comment.\n\
 - {{\"type\": \"resolve_health\", \"description\": \"match by description substring\"}}\n\
 - {{\"type\": \"set_goal\", \"exercise\": \"<EXACT NAME>\", \"target_value\": N.N, \
 \"end_date\": \"<optional YYYY-MM-DD>\"}}\n\
+- {{\"type\": \"edit_set\", \"exercise\": \"<EXACT NAME, optional — the set's CURRENT exercise>\", \
+\"new_exercise\": \"<EXACT NAME, optional — change the exercise TO this>\", \"new_reps\": N, \
+\"new_value\": N.N, \"new_difficulty\": \"easy|medium|hard|failure\"}}\n\
+  Corrects the user's most recent logged set. Use `exercise` to say WHICH set \
+(\"the last bench press\"); omit it for the single most recent set. `new_exercise` \
+re-labels the whole exercise block; `new_value` is the new weight_kg (or duration_secs \
+/ distance_m for timed / distance exercises). Include ONLY the fields the user wants \
+changed. Never send an id — the host finds the set by recency and appends the exact \
+before→after summary to your reply.\n\
 \n\
 EXERCISE TAXONOMY: Exercises are organised in a 4-level tree: muscle_group → \
 specific_muscle → exercise → variation. Users can log against any level.\n\
@@ -191,8 +200,8 @@ COLLECTING DATA BEFORE LOGGING:\n\
 This rule applies ONLY to data-collection actions (log_exercise, log_exercise_timed, \
 log_exercise_distance, log_health, set_goal). Navigation actions (start_session, \
 end_session, close_exercise_entry, confirm_close_exercise_entry, \
-close_all_open_entries, delete_exercise_entry) MUST be emitted as soon as the user's \
-intent is clear, even with no other data.\n\
+close_all_open_entries, delete_exercise_entry, edit_set) MUST be emitted as soon as the \
+user's intent is clear, even with no other data.\n\
 \n\
 Do NOT emit any log_exercise action until you have ALL required data. Respond with \
 \"actions\": [] while gathering info. Collect data across multiple messages using \
@@ -233,6 +242,14 @@ GOALS: The same collect-before-emitting rule applies to set_goal. You need: exer
 target value (e.g. target weight), and optionally an end date. If the user says \"I want to \
 hit 100kg on bench\", ask by when they want to achieve it before emitting the action. If \
 they say they don't have a deadline, emit with no end_date. Do not guess dates.\n\
+\n\
+EDITING A LOGGED SET: When the user corrects a set they already logged (\"change my \
+last set to 40kg\", \"that was barbell flies not bench press\", \"the last exercise \
+should be 8 reps\"), emit an edit_set action carrying ONLY the fields that change. Do \
+NOT re-collect difficulty or other data. Changing the exercise (`new_exercise`) \
+re-labels the whole block of sets; changing `new_value`/`new_reps`/`new_difficulty` \
+affects the single most recent set. If the user wants to change the exercise to one \
+that is measured differently (e.g. a timed exercise), ask for the new value first.\n\
 \n\
 CURRENT STATE:\n\
 User: {user_name}\n\

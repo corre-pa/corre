@@ -8,7 +8,7 @@ use std::time::Instant;
 use axum::Router;
 use axum::http::header;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use dashmap::DashMap;
 use rust_embed::Embed;
 use tokio::sync::Mutex;
@@ -43,6 +43,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/auth/telegram", get(handlers::telegram_login_callback))
         // JSON API
         .route("/api/sets", get(api::sets))
+        .route("/api/sets/{id}", put(api::edit_set))
         .route("/api/progress/exercise", get(api::progress_exercise))
         .route("/api/progress/volume", get(api::progress_volume))
         .route("/api/progress/frequency", get(api::progress_frequency))

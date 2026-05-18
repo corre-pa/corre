@@ -89,6 +89,23 @@ pub enum AssistantAction {
         target_value: f64,
         end_date: Option<String>,
     },
+    /// Correct a previously-logged set. The host resolves WHICH set/entry by
+    /// recency, so no numeric id is carried. `exercise` is a resolution filter
+    /// (the set's CURRENT exercise); `new_exercise` is the target to change it
+    /// TO and reclassifies the whole exercise block. Value/reps/difficulty
+    /// changes target the single most-recent matching set.
+    EditSet {
+        #[serde(default)]
+        exercise: Option<String>,
+        #[serde(default)]
+        new_exercise: Option<String>,
+        #[serde(default)]
+        new_reps: Option<i32>,
+        #[serde(default, alias = "new_weight_kg")]
+        new_value: Option<f64>,
+        #[serde(default, alias = "difficulty")]
+        new_difficulty: Option<Difficulty>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -229,6 +246,48 @@ mod tests {
         let json = r#"{"type": "set_goal", "exercise": "Bench Press", "target_value": 100.0, "end_date": "2026-06-01"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         assert!(matches!(action, AssistantAction::SetGoal { target_value, .. } if target_value == 100.0));
+    }
+
+    #[test]
+    fn parse_edit_set_full() {
+        let json = r#"{"type": "edit_set", "exercise": "Bench Press", "new_exercise": "Cable Fly", "new_reps": 10, "new_value": 40.0, "new_difficulty": "hard"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::EditSet { exercise, new_exercise, new_reps, new_value, new_difficulty } => {
+                assert_eq!(exercise.as_deref(), Some("Bench Press"));
+                assert_eq!(new_exercise.as_deref(), Some("Cable Fly"));
+                assert_eq!(new_reps, Some(10));
+                assert_eq!(new_value, Some(40.0));
+                assert_eq!(new_difficulty, Some(Difficulty::Hard));
+            }
+            _ => panic!("expected EditSet"),
+        }
+    }
+
+    #[test]
+    fn parse_edit_set_minimal() {
+        let json = r#"{"type": "edit_set", "new_value": 40.0}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::EditSet { exercise, new_exercise, new_reps, new_value, new_difficulty } => {
+                assert_eq!(exercise, None);
+                assert_eq!(new_exercise, None);
+                assert_eq!(new_reps, None);
+                assert_eq!(new_value, Some(40.0));
+                assert_eq!(new_difficulty, None);
+            }
+            _ => panic!("expected EditSet"),
+        }
+    }
+
+    #[test]
+    fn parse_edit_set_weight_alias() {
+        let json = r#"{"type": "edit_set", "new_weight_kg": 50.0}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::EditSet { new_value, .. } => assert_eq!(new_value, Some(50.0)),
+            _ => panic!("expected EditSet"),
+        }
     }
 
     #[test]
