@@ -4,19 +4,38 @@ log_level = "warn"
 
 [llm]
 provider = "openai-compatible"
-base_url = "${CORRE_TEST_LLM_BASE_URL}"
-model = "${CORRE_TEST_LLM_MODEL}"
-api_key = "${CORRE_TEST_LLM_API_KEY}"
+base_url = "https://api.venice.ai/api/v1"
+model = "nvidia-nemotron-3-nano-30b-a3b"
+api_key = "${VENICE_API_KEY}"
 temperature = 0.1
 max_concurrent = 4
 
 [gym]
-bind = "127.0.0.1:0"
+bind = "127.0.0.1:5520"              # web dashboard (M3, unused in M1)
 telegram_bot_token = "test:fake-token"
 default_timezone = "UTC"
-db_path = ":memory:"
-max_message_length = 2000
-session_timeout_hours = 4
+# telegram_bot_token = "${CORRE_GYM_BOT_TOKEN}"
+telegram_allowed_ids = []             # empty = allow all (dev mode); set to restrict access
+conversation_history_limit = 20       # messages to include in LLM context
+db_path = ":memory:"            # relative to data_dir
+max_message_length = 2000             # truncate user messages beyond this before sending to LLM
+session_timeout_hours = 4             # auto-close stale sessions older than this
+
+[gym.voice]                        # optional voice pipeline (requires whisper + piper sidecars)
+stt_enabled = true                  # enable speech-to-text
+stt_url = "http://localhost:5005"   # whisper.cpp server endpoint
+stt_language = "en"                 # language hint for whisper
+tts_enabled = true                  # enable text-to-speech
+tts_url = "http://localhost:5000"    # piper HTTP server endpoint
+tts_voice = "en_GB-semaine-medium"  # piper voice model name
+tts_speaker = "prudence"            # semaine speakers: prudence, spike, obadiah, poppy
+tts_speed = 1.0                     # speaking speed: 1.0 = normal, 1.5 = 50% faster, 0.75 = slower
+response_mode = "both"              # "voice", "text", or "both"
+max_voice_duration_secs = 60        # reject voice messages longer than this
+
+[gym.llm]                          # optional per-service LLM overrides
+model = "gpt-4o"
+temperature = 0.3
 
 [safety]
 enabled = false
@@ -27,3 +46,24 @@ title = "unused"
 
 [registry]
 url = "http://localhost:5580"
+
+[[apps]]
+name = "daily-brief"
+description = "Researches topics and produces a daily news briefing"
+schedule = "0 0 5 * * *"
+mcp_servers = ["brave-search"]
+config_path = "config/topics.yml"
+enabled = true
+
+[apps.llm]
+# model = "gpt-4o"              # override the global model for this app
+# temperature = 0.7             # override temperature
+# max_concurrent = 5
+
+[apps.llm.extra_body]
+stream = false
+reasoning_effort = "minimal"
+
+[apps.llm.extra_body.venice_parameters]
+strip_thinking_reposne = true
+include_venice_system_prompt = false

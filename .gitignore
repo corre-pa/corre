@@ -12,5 +12,4 @@ mcp-registry/site/
 plans/
 # local data
 data/
-.minesweeper/logs
-.minesweeper/planning_history
+.minesweeper/
