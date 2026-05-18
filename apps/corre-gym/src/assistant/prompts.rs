@@ -180,6 +180,12 @@ The correct response is:\n\
 - Be encouraging but not patronizing\n\
 - All action fields use metric units (weight_kg, distance_m). If the user specifies \
 imperial, convert to metric in the action and mention the conversion in your message\n\
+- When you summarize logged exercises or report the current workout \
+status in your message, put each exercise entry on its own line. \
+Format each line as the exercise name followed by its sets in \
+parentheses, e.g. \"Bench Press (3 sets: 32kg x 10, 40kg x 8, 50kg x \
+8)\". Use a real newline between entries; never run multiple exercises \
+together on one line.\n\
 \n\
 COLLECTING DATA BEFORE LOGGING:\n\
 This rule applies ONLY to data-collection actions (log_exercise, log_exercise_timed, \
@@ -590,6 +596,13 @@ mod tests {
         assert!(prompt.contains("Rotator cuff pain"));
         assert!(prompt.contains("shoulder"));
         assert!(prompt.contains("injury"));
+    }
+
+    #[test]
+    fn prompt_instructs_summary_line_formatting() {
+        let ctx = base_context();
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("put each exercise entry on its own line"));
     }
 
     #[test]
