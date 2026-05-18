@@ -22,6 +22,11 @@ pub enum AssistantAction {
         perceived_difficulty: Option<Difficulty>,
         #[serde(default, alias = "notes")]
         comment: Option<String>,
+        /// Set by the LLM only to confirm a deliberate superset after the host
+        /// asked whether a taxonomy-related exercise is the same as one already
+        /// in progress. `true` suppresses the ambiguity prompt.
+        #[serde(default)]
+        superset: bool,
     },
     LogExerciseTimed {
         exercise: String,
@@ -30,6 +35,8 @@ pub enum AssistantAction {
         perceived_difficulty: Option<Difficulty>,
         #[serde(default, alias = "notes")]
         comment: Option<String>,
+        #[serde(default)]
+        superset: bool,
     },
     LogExerciseDistance {
         exercise: String,
@@ -39,6 +46,8 @@ pub enum AssistantAction {
         perceived_difficulty: Option<Difficulty>,
         #[serde(default, alias = "notes")]
         comment: Option<String>,
+        #[serde(default)]
+        superset: bool,
     },
     StartSession {
         notes: Option<String>,
@@ -302,12 +311,23 @@ mod tests {
         let json = r#"{"type": "log_exercise", "exercise": "Bench Press"}"#;
         let action: AssistantAction = serde_json::from_str(json).unwrap();
         match action {
-            AssistantAction::LogExercise { reps, weight_kg, perceived_difficulty, comment, .. } => {
+            AssistantAction::LogExercise { reps, weight_kg, perceived_difficulty, comment, superset, .. } => {
                 assert_eq!(reps, None);
                 assert_eq!(weight_kg, None);
                 assert_eq!(perceived_difficulty, None);
                 assert_eq!(comment, None);
+                assert!(!superset, "superset should default to false");
             }
+            _ => panic!("expected LogExercise"),
+        }
+    }
+
+    #[test]
+    fn parse_log_exercise_superset_flag() {
+        let json = r#"{"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "superset": true}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::LogExercise { superset, .. } => assert!(superset),
             _ => panic!("expected LogExercise"),
         }
     }

@@ -340,6 +340,15 @@ pub fn reply_asks_about_new_session(reply: &str) -> bool {
     needles.iter().any(|n| lower.contains(n))
 }
 
+/// Loose match against the assistant's last reply for a "same exercise or a
+/// superset?" disambiguation question. Intentionally permissive so prompt
+/// wording can drift; broaden the needle list rather than tightening the prompt.
+pub fn reply_asks_about_superset(reply: &str) -> bool {
+    let lower = reply.to_lowercase();
+    let needles = ["superset", "supersetting", "same exercise", "add it to", "separate exercise", "log it on its own"];
+    needles.iter().any(|n| lower.contains(n))
+}
+
 // ── Health & goal matchers (used by health_logging.feature, goals.feature) ────
 
 /// Most-recent active (unresolved) health entry for a user.

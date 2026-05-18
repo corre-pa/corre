@@ -365,3 +365,19 @@ Feature: Logging a workout to Corre gym
     # No session boundary; both sets land in the original session.
     Then there is an active session
     And the session has 2 sets recorded.
+
+  # ── Ambiguous exercise / superset detection ─────────────────────────────────
+
+  Scenario: Logging a related exercise prompts for superset vs same exercise
+    # "Barbell Bicep Curl" then "bicep curl" (its taxonomy parent) is ambiguous:
+    # the host suppresses the second log and asks before grouping or splitting.
+    When tester starts a new session
+    When tester sends a telegram message: "barbell bicep curl, 10kg, 8 reps, easy"
+    Then there is 1 open entry in the active session
+    When tester sends a telegram message: "bicep curl, 12kg, 8 reps, medium"
+    Then the assistant asks whether to merge or superset
+    # The ambiguous set was not logged — still one entry, one set.
+    And the session has 1 set recorded.
+    When tester sends a telegram message: "same exercise"
+    Then there is 1 open entry in the active session
+    And the session has 2 sets recorded.
