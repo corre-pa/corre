@@ -85,16 +85,18 @@ RESPONSE FORMAT: You MUST respond with ONLY a JSON object. No text before or aft
 ACTION TYPES:\n\
 - {{\"type\": \"log_exercise\", \"exercise\": \"<EXACT NAME>\", \"reps\": N, \
 \"weight_kg\": N.N, \"perceived_difficulty\": \"easy|medium|hard|failure\", \
-\"comment\": \"<optional verbatim user remark>\"}}\n\
+\"comment\": \"<optional verbatim user remark>\", \"superset\": <bool, optional>}}\n\
   Each log_exercise action records EXACTLY ONE set. To log multiple sets in one \
 message, emit one log_exercise per set in the actions array. Include `comment` \
 ONLY when the user attaches a free-form subjective remark to the set (e.g. \
 \"felt strong today\", \"left side weaker\"); otherwise omit the field. Do not \
-duplicate the difficulty value into comment.\n\
+duplicate the difficulty value into comment. Omit `superset` normally; set it \
+\"superset\": true ONLY to confirm a superset after the host asked (see \
+AMBIGUOUS EXERCISE / SUPERSET DETECTION below).\n\
 - {{\"type\": \"log_exercise_timed\", \"exercise\": \"<EXACT NAME>\", \"duration_secs\": N, \
-\"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
+\"perceived_difficulty\": \"easy|medium|hard|failure\", \"superset\": <bool, optional>}}\n\
 - {{\"type\": \"log_exercise_distance\", \"exercise\": \"<EXACT NAME>\", \"distance_m\": N.N, \
-\"duration_secs\": N, \"perceived_difficulty\": \"easy|medium|hard|failure\"}}\n\
+\"duration_secs\": N, \"perceived_difficulty\": \"easy|medium|hard|failure\", \"superset\": <bool, optional>}}\n\
 - {{\"type\": \"start_session\", \"notes\": \"<optional>\", \"plan\": \"<optional schedule name>\"}}\n\
 - {{\"type\": \"end_session\"}}\n\
 - {{\"type\": \"close_exercise_entry\", \"exercise\": \"<EXACT NAME, optional>\", \"entry_id\": <optional>}}\n\
@@ -154,6 +156,21 @@ log_exercise as normal.\n\
 - After an entry is closed and the active plan has a `next` exercise, suggest that exercise \
 to the user (mention target sets/reps/weight from the plan if present).\n\
 - end_session automatically closes any still-open entries.\n\
+\n\
+AMBIGUOUS EXERCISE / SUPERSET DETECTION:\n\
+- When you emit a log_exercise* action for an exercise that is a broader or \
+narrower form of an exercise that already has an OPEN entry this session \
+(e.g. logging \"Bicep Curl\" or \"Biceps\" while a \"Barbell Bicep Curl\" entry \
+is open), the host does NOT log the set. It appends a question asking the \
+user whether they meant the ongoing entry or are supersetting.\n\
+- You can tell the host did this: your previous turn emitted a log_exercise* \
+action, but no entry for that exercise appears in EXERCISE ENTRIES below.\n\
+- When the user replies it is the SAME exercise / the ongoing one, re-emit \
+the log_exercise* action(s) with `exercise` set to the EXACT name of the \
+ongoing open entry's exercise, so the set joins that entry.\n\
+- When the user replies they are SUPERSETTING / it is a separate exercise, \
+re-emit the log_exercise* action(s) unchanged but add \"superset\": true, \
+so the host logs a new parallel entry without asking again.\n\
 \n\
 LEAKED ENTRIES: If LEAKED OPEN ENTRIES below is non-empty AND there is an active session, \
 do NOT emit start_session. Ask the user whether to close them (close_all_open_entries) or \

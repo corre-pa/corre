@@ -41,6 +41,17 @@ pub struct AssistantHandler {
     catalogue: Vec<ExerciseTypeWithAncestry>,
 }
 
+/// Outcome of resolving which `exercise_entry` a logged set should join.
+enum LogEntryTarget {
+    /// Insert the set into this entry id (an exact-match open entry, or a freshly
+    /// created one).
+    Use(i64),
+    /// An open entry exists for a taxonomy-related exercise. The set is not
+    /// logged; the host asks the user whether they meant that ongoing entry or
+    /// are supersetting a separate exercise.
+    AskSuperset { ongoing_exercise: String },
+}
+
 impl AssistantHandler {
     pub async fn new(db: Arc<Mutex<Database>>, llm: Box<dyn LlmProvider>, config: GymConfig) -> anyhow::Result<Self> {
         let catalogue = db.lock().await.list_exercise_types_with_ancestry()?;
@@ -513,10 +524,15 @@ impl AssistantHandler {
     async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<Option<String>> {
         tracing::debug!(action = ?action, user_id = user.id, "Executing action");
         match action {
-            AssistantAction::LogExercise { exercise, reps, weight_kg, perceived_difficulty, comment, .. } => {
+            AssistantAction::LogExercise { exercise, reps, weight_kg, perceived_difficulty, comment, superset } => {
                 let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
-                let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
+                let entry_id = match self.resolve_entry_for_log(user.id, session.id, et.exercise_type.id, *superset).await? {
+                    LogEntryTarget::AskSuperset { ongoing_exercise } => {
+                        return Ok(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name)));
+                    }
+                    LogEntryTarget::Use(id) => id,
+                };
                 let weight = weight_kg.unwrap_or(0.0);
                 let pd = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 {
@@ -531,20 +547,30 @@ impl AssistantHandler {
                 }
                 Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
-            AssistantAction::LogExerciseTimed { exercise, duration_secs, perceived_difficulty, comment } => {
+            AssistantAction::LogExerciseTimed { exercise, duration_secs, perceived_difficulty, comment, superset } => {
                 let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
-                let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
+                let entry_id = match self.resolve_entry_for_log(user.id, session.id, et.exercise_type.id, *superset).await? {
+                    LogEntryTarget::AskSuperset { ongoing_exercise } => {
+                        return Ok(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name)));
+                    }
+                    LogEntryTarget::Use(id) => id,
+                };
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::TimeBased, *duration_secs as f64);
                 s.perceived_difficulty = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 s.comment = comment.clone();
                 self.db.lock().await.insert_set(&s)?;
                 Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
             }
-            AssistantAction::LogExerciseDistance { exercise, distance_m, duration_secs, perceived_difficulty, comment } => {
+            AssistantAction::LogExerciseDistance { exercise, distance_m, duration_secs, perceived_difficulty, comment, superset } => {
                 let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
-                let entry_id = self.ensure_entry_for_exercise(user.id, session.id, et.exercise_type.id).await?;
+                let entry_id = match self.resolve_entry_for_log(user.id, session.id, et.exercise_type.id, *superset).await? {
+                    LogEntryTarget::AskSuperset { ongoing_exercise } => {
+                        return Ok(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name)));
+                    }
+                    LogEntryTarget::Use(id) => id,
+                };
                 let value = distance_m.unwrap_or_else(|| duration_secs.unwrap_or(0) as f64);
                 let mt = if distance_m.is_some() { MeasurementType::DistanceBased } else { MeasurementType::TimeBased };
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, mt, value);
@@ -662,19 +688,40 @@ impl AssistantHandler {
         self.db.lock().await.start_session(user.id, None)
     }
 
-    /// Open exercise_entry whose sets match `exercise_type_id`, or insert a new
-    /// entry. The new entry's `start_timestamp` is computed once and reused as the
-    /// caller's reference, so the first set inserted into it can be given the same
-    /// `logged_at` value (matching the brief's "same start timestamp as the first
-    /// set" requirement).
-    async fn ensure_entry_for_exercise(&self, user_id: i64, session_id: i64, exercise_type_id: i64) -> anyhow::Result<i64> {
+    /// Decide which `exercise_entry` a logged set belongs to.
+    ///
+    /// 1. An open entry of the **exact** same exercise type is reused.
+    /// 2. Otherwise, unless `superset` is set, an open entry for a taxonomy
+    ///    ancestor or descendant of the exercise triggers an `AskSuperset`
+    ///    prompt — the set is ambiguous and is not logged this turn.
+    /// 3. Failing both, a fresh entry is created. Its `start_timestamp` is
+    ///    computed once so the first set can share the same `logged_at` value
+    ///    (the brief's "same start timestamp as the first set" requirement).
+    async fn resolve_entry_for_log(
+        &self,
+        user_id: i64,
+        session_id: i64,
+        exercise_type_id: i64,
+        superset: bool,
+    ) -> anyhow::Result<LogEntryTarget> {
         let db = self.db.lock().await;
         if let Some(open) = db.find_open_entry_for_exercise(user_id, session_id, exercise_type_id)? {
-            return Ok(open.id);
+            return Ok(LogEntryTarget::Use(open.id));
+        }
+        if !superset {
+            if let Some((_, related_type_id)) = db.find_open_related_entry(session_id, exercise_type_id)? {
+                let ongoing_exercise = self
+                    .catalogue
+                    .iter()
+                    .find(|e| e.exercise_type.id == related_type_id)
+                    .map(|e| e.exercise_type.name.clone())
+                    .unwrap_or_else(|| "that exercise".to_string());
+                return Ok(LogEntryTarget::AskSuperset { ongoing_exercise });
+            }
         }
         let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let entry = new_exercise_entry_at(user_id, Some(session_id), None, &now);
-        db.insert_entry(&entry)
+        Ok(LogEntryTarget::Use(db.insert_entry(&entry)?))
     }
 
     /// Resolve an entry to close (explicit id > exercise-name match > most recent
@@ -1093,6 +1140,17 @@ fn opt_count(c: Option<i32>) -> String {
     c.map(|c| c.to_string()).unwrap_or_else(|| "—".to_string())
 }
 
+/// Question appended to the assistant's reply when a logged set is a taxonomy
+/// relative of an exercise already in progress. The user resolves it on the next
+/// turn ("same exercise" → join the ongoing entry; "superset" → log separately).
+fn superset_prompt(ongoing_exercise: &str, logged_exercise: &str) -> String {
+    format!(
+        "You've already got an open {ongoing_exercise} entry going. Should I add this {logged_exercise} set \
+         to it, or are you supersetting a separate exercise? Reply \"same exercise\" to add it to \
+         {ongoing_exercise}, or \"superset\" to log it on its own."
+    )
+}
+
 /// Encode an optional plan name into the session's `notes` field using the
 /// `plan:<name>` sentinel prefix so the active plan can be recovered later
 /// without a schema change.
@@ -1337,6 +1395,122 @@ mod tests {
         assert_eq!(sets.len(), 3);
         assert!(sets.iter().all(|s| s.count == Some(8) && (s.value - 80.0).abs() < 1e-6));
         assert!(entries[0].end_timestamp.is_none(), "entry should still be open");
+    }
+
+    /// Register a user and log a Flat Barbell Bench Press set, opening one entry.
+    async fn open_variation_entry(handler: &AssistantHandler, llm: &MockLlm, msg: &TgMessage) {
+        let _ = handler.handle_text_message(msg, "hello").await.unwrap();
+        llm.set_response(
+            r#"{"message": "Logged it!", "actions": [
+                {"type": "log_exercise", "exercise": "Flat Barbell Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(msg, "flat barbell bench press 80kg 8 reps medium").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn related_exercise_log_prompts_for_superset() {
+        let (handler, llm) = setup_handler("").await;
+        let msg = make_message(12345, "hello");
+        open_variation_entry(&handler, &llm, &msg).await;
+
+        // Logging the parent exercise (a taxonomy ancestor of the open entry) is ambiguous.
+        llm.set_response(
+            r#"{"message": "Sure.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "bench press 80kg 8 reps medium").await.unwrap();
+        assert!(reply.text.contains("supersetting"), "expected a superset question, got: {}", reply.text);
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let entries = db.list_entries_for_session(session.id).unwrap();
+        assert_eq!(entries.len(), 1, "ambiguous set must not open a new entry");
+        assert_eq!(db.count_sets_for_entry(entries[0].id).unwrap(), 1, "ambiguous set must not be inserted");
+    }
+
+    #[tokio::test]
+    async fn superset_flag_logs_parallel_entry() {
+        let (handler, llm) = setup_handler("").await;
+        let msg = make_message(12345, "hello");
+        open_variation_entry(&handler, &llm, &msg).await;
+
+        // `superset: true` asserts a deliberate parallel exercise — log without asking.
+        llm.set_response(
+            r#"{"message": "Logged the superset.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium", "superset": true}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "actually superset, log bench press").await.unwrap();
+        assert!(!reply.text.contains("supersetting"), "superset flag should suppress the question");
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let open = db.list_open_entries_for_session(session.id).unwrap();
+        assert_eq!(open.len(), 2, "the superset must open a second parallel entry");
+        let total: i64 = open.iter().map(|e| db.count_sets_for_entry(e.id).unwrap()).sum();
+        assert_eq!(total, 2, "both sets must be logged");
+    }
+
+    #[tokio::test]
+    async fn same_exercise_resolution_groups_in() {
+        let (handler, llm) = setup_handler("").await;
+        let msg = make_message(12345, "hello");
+        open_variation_entry(&handler, &llm, &msg).await;
+
+        // Ambiguous log triggers the prompt.
+        llm.set_response(
+            r#"{"message": "Sure.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "bench press 80kg 8 reps medium").await.unwrap();
+
+        // "same exercise" → re-emit against the exact ongoing exercise name.
+        llm.set_response(
+            r#"{"message": "Added it.", "actions": [
+                {"type": "log_exercise", "exercise": "Flat Barbell Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "same exercise").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        let entries = db.list_entries_for_session(session.id).unwrap();
+        assert_eq!(entries.len(), 1, "the set must join the existing entry, not open a new one");
+        assert_eq!(db.count_sets_for_entry(entries[0].id).unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn unrelated_superset_logs_without_prompt() {
+        let (handler, llm) = setup_handler("").await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "Logged it!", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            ]}"#,
+        );
+        let _ = handler.handle_text_message(&msg, "bench press 80kg 8 reps medium").await.unwrap();
+
+        // Squat is a different taxonomy branch — a genuine superset, never ambiguous.
+        llm.set_response(
+            r#"{"message": "Logged it!", "actions": [
+                {"type": "log_exercise", "exercise": "Squat", "reps": 5, "weight_kg": 100.0, "perceived_difficulty": "hard"}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "squat 100kg 5 reps hard").await.unwrap();
+        assert!(!reply.text.contains("supersetting"), "unrelated exercises must not trigger the prompt");
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let session = db.get_active_session(user.id).unwrap().unwrap();
+        assert_eq!(db.list_entries_for_session(session.id).unwrap().len(), 2);
     }
 
     #[tokio::test]

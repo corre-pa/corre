@@ -191,6 +191,38 @@ impl Database {
         rows.next().transpose().context("Failed to read open entry for exercise")
     }
 
+    /// An open exercise_entry in `session_id` whose exercise type is a transitive
+    /// ancestor OR descendant of `exercise_type_id` (never the same type). Used to
+    /// detect that a logged set may belong to an exercise already in progress
+    /// rather than being a new superset. Returns the entry plus its own
+    /// exercise_type_id (taken from its sets). Most-recently-started first.
+    pub fn find_open_related_entry(&self, session_id: i64, exercise_type_id: i64) -> anyhow::Result<Option<(ExerciseEntry, i64)>> {
+        let mut stmt = self.conn().prepare(
+            "WITH RECURSIVE \
+             ancestors(id) AS ( \
+                 SELECT parent_id FROM exercise_types WHERE id = ?2 AND parent_id IS NOT NULL \
+                 UNION ALL \
+                 SELECT et.parent_id FROM exercise_types et JOIN ancestors a ON et.id = a.id \
+                 WHERE et.parent_id IS NOT NULL \
+             ), \
+             descendants(id) AS ( \
+                 SELECT id FROM exercise_types WHERE parent_id = ?2 \
+                 UNION ALL \
+                 SELECT et.id FROM exercise_types et JOIN descendants d ON et.parent_id = d.id \
+             ), \
+             related(id) AS (SELECT id FROM ancestors UNION SELECT id FROM descendants) \
+             SELECT ee.id, ee.user_id, ee.session_id, ee.start_timestamp, ee.end_timestamp, ee.comment, \
+                    s.exercise_type_id \
+             FROM exercise_entry ee \
+             JOIN sets s ON s.exercise_entry_id = ee.id \
+             WHERE ee.session_id = ?1 AND ee.end_timestamp IS NULL \
+               AND s.exercise_type_id IN (SELECT id FROM related) \
+             ORDER BY ee.start_timestamp DESC, s.order_idx ASC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![session_id, exercise_type_id], |row| Ok((row_to_entry(row)?, row.get::<_, i64>(6)?)))?;
+        rows.next().transpose().context("Failed to read open related entry")
+    }
+
     /// All open exercise_entries in a session, oldest first. >1 row = a superset.
     pub fn list_open_entries_for_session(&self, session_id: i64) -> anyhow::Result<Vec<ExerciseEntry>> {
         let sql = format!("{SELECT_ENTRY} WHERE session_id = ?1 AND end_timestamp IS NULL ORDER BY start_timestamp");
@@ -745,6 +777,73 @@ mod tests {
         db.end_entry(entry_id).unwrap();
 
         assert!(db.find_open_entry_for_exercise(user_id, session.id, bp_id).unwrap().is_none());
+    }
+
+    /// Open an entry in `session_id` and log one set of `exercise_type_id` into it.
+    fn open_entry_with_set(db: &Database, user_id: i64, session_id: i64, exercise_type_id: i64) -> i64 {
+        let entry_id = db.insert_entry(&new_exercise_entry(user_id, Some(session_id), None)).unwrap();
+        let mut s = new_exercise_set(entry_id, exercise_type_id, MeasurementType::WeightReps, 80.0);
+        s.count = Some(8);
+        db.insert_set(&s).unwrap();
+        entry_id
+    }
+
+    #[test]
+    fn find_open_related_entry_matches_descendant() {
+        let (db, user_id, bp_id) = fixture();
+        let flat_id = db.get_exercise_type_by_name("Flat Barbell Bench Press").unwrap().unwrap().id;
+        let session = db.start_session(user_id, None).unwrap();
+        let entry_id = open_entry_with_set(&db, user_id, session.id, flat_id);
+
+        // Querying the ancestor (Bench Press) finds the open descendant-variation entry.
+        let (found, matched_type) = db.find_open_related_entry(session.id, bp_id).unwrap().unwrap();
+        assert_eq!(found.id, entry_id);
+        assert_eq!(matched_type, flat_id);
+    }
+
+    #[test]
+    fn find_open_related_entry_matches_ancestor() {
+        let (db, user_id, bp_id) = fixture();
+        let flat_id = db.get_exercise_type_by_name("Flat Barbell Bench Press").unwrap().unwrap().id;
+        let session = db.start_session(user_id, None).unwrap();
+        let entry_id = open_entry_with_set(&db, user_id, session.id, bp_id);
+
+        // Querying the descendant (Flat Barbell Bench Press) finds the open ancestor entry.
+        let (found, matched_type) = db.find_open_related_entry(session.id, flat_id).unwrap().unwrap();
+        assert_eq!(found.id, entry_id);
+        assert_eq!(matched_type, bp_id);
+    }
+
+    #[test]
+    fn find_open_related_entry_ignores_exact_type() {
+        let (db, user_id, bp_id) = fixture();
+        let session = db.start_session(user_id, None).unwrap();
+        open_entry_with_set(&db, user_id, session.id, bp_id);
+
+        // An exact-type open entry is the exact-match path's job, not this one.
+        assert!(db.find_open_related_entry(session.id, bp_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn find_open_related_entry_ignores_unrelated() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let session = db.start_session(user_id, None).unwrap();
+        open_entry_with_set(&db, user_id, session.id, squat_id);
+
+        // Squat is a different taxonomy branch — a genuine superset, not ambiguous.
+        assert!(db.find_open_related_entry(session.id, bp_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn find_open_related_entry_ignores_closed_entries() {
+        let (db, user_id, bp_id) = fixture();
+        let flat_id = db.get_exercise_type_by_name("Flat Barbell Bench Press").unwrap().unwrap().id;
+        let session = db.start_session(user_id, None).unwrap();
+        let entry_id = open_entry_with_set(&db, user_id, session.id, flat_id);
+        db.end_entry(entry_id).unwrap();
+
+        assert!(db.find_open_related_entry(session.id, bp_id).unwrap().is_none());
     }
 
     #[test]

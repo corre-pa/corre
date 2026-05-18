@@ -9,7 +9,7 @@
 use cucumber::{given, then};
 
 use crate::corre_gym::assertions::{
-    EntryState, entry_state_for_exercise, open_entry_count, reply_asks_about_new_session, rewind_user_activity,
+    EntryState, entry_state_for_exercise, open_entry_count, reply_asks_about_new_session, reply_asks_about_superset, rewind_user_activity,
 };
 use crate::corre_gym::world::GymWorld;
 
@@ -71,6 +71,19 @@ async fn assistant_asks_new_session(world: &mut GymWorld) {
     assert!(
         reply_asks_about_new_session(&reply.text),
         "expected the assistant's reply to ask about a new session, but got: {:?}",
+        reply.text,
+    );
+}
+
+/// `Then the assistant asks whether to merge or superset`. Soft text match for
+/// the ambiguous-exercise disambiguation question; `reply_asks_about_superset`
+/// is the source of truth for what counts as "asking".
+#[then(regex = r"^the assistant asks whether to merge or superset$")]
+async fn assistant_asks_superset(world: &mut GymWorld) {
+    let reply = world.last_reply.as_ref().expect("no assistant reply yet — run a When step first");
+    assert!(
+        reply_asks_about_superset(&reply.text),
+        "expected the assistant's reply to ask about merging or supersetting, but got: {:?}",
         reply.text,
     );
 }
