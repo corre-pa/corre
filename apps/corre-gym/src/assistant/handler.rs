@@ -670,6 +670,8 @@ impl AssistantHandler {
             AssistantAction::EditSet { exercise, new_exercise, new_reps, new_value, new_difficulty } => {
                 self.edit_set_action(user, exercise.as_deref(), new_exercise.as_deref(), *new_reps, *new_value, *new_difficulty).await
             }
+            AssistantAction::QueryPersonalRecord { exercise } => self.query_personal_record_action(user, exercise).await,
+            AssistantAction::QueryLastEntryForExercise { exercise } => self.query_last_entry_action(user, exercise).await,
             AssistantAction::Unknown => {
                 tracing::debug!("Ignoring unknown action type from LLM");
                 Ok(None)
@@ -854,6 +856,40 @@ impl AssistantHandler {
             return Ok(None);
         }
         Ok(Some(format!("Updated your last set — {}.", parts.join(", "))))
+    }
+
+    /// Look up the user's personal record (highest-value set) for an exercise,
+    /// rolling up taxonomy descendants so a Bench Press query catches all
+    /// variations. Returns a short formatted line for the host to append to the
+    /// LLM's acknowledgement.
+    async fn query_personal_record_action(&self, user: &User, exercise: &str) -> anyhow::Result<Option<String>> {
+        let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+        let name = &et.exercise_type.name;
+        let db = self.db.lock().await;
+        let Some(pr) = db.personal_record(user.id, et.exercise_type.id, true)? else {
+            return Ok(Some(format!("You don't have any logged sets for {name} yet.")));
+        };
+        Ok(Some(format_personal_record_line(name, &pr)))
+    }
+
+    /// Look up the user's most recent exercise_entry for an exercise (rolling up
+    /// descendants), then render a markdown table of its sets with a "New PB!"
+    /// marker on each set that was a personal best at the moment it was logged.
+    async fn query_last_entry_action(&self, user: &User, exercise: &str) -> anyhow::Result<Option<String>> {
+        let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
+        let name = &et.exercise_type.name;
+        let db = self.db.lock().await;
+        let Some(entry) = db.most_recent_entry_for_exercise_type(user.id, et.exercise_type.id, true)? else {
+            return Ok(Some(format!("You don't have any logged entries for {name} yet.")));
+        };
+        let sets = db.list_sets_for_entry(entry.id)?;
+        // Running-max history across the user's full record for this exercise
+        // type (descendants included). Newest-first → reverse to chronological
+        // so we can walk forward and flag each set that set a fresh max.
+        let mut history = db.list_sets_for_exercise_type(user.id, et.exercise_type.id, 10_000, true)?;
+        history.reverse();
+        let pb_set_ids = compute_pb_set_ids(&history);
+        Ok(Some(format_last_entry_block(name, &entry, &sets, &pb_set_ids)))
     }
 
     /// Set-count checkpoint: every time the user logs a set in an open entry that
@@ -1175,6 +1211,123 @@ pub(crate) fn parse_plan_from_notes(notes: Option<&str>) -> (Option<String>, Opt
         }
     } else {
         (None, Some(text.to_string()))
+    }
+}
+
+/// One-line personal-record summary, e.g. `"Bench Press PB: 80.0kg (5 reps)"`.
+/// Drops the rep count for measurement types that don't use one.
+pub(crate) fn format_personal_record_line(exercise_name: &str, pr: &ExerciseSet) -> String {
+    let value = format_value(pr.measurement_type, pr.value);
+    match (pr.measurement_type, pr.count) {
+        (MeasurementType::WeightReps, Some(reps)) => format!("{exercise_name} PB: {value} ({reps} reps)"),
+        _ => format!("{exercise_name} PB: {value}"),
+    }
+}
+
+/// Walk a chronological (oldest → newest) slice of sets and return the ids of
+/// those that strictly exceeded every preceding `value`. Used to mark "New PB!"
+/// on the last-entry table at the historical moment a set was logged.
+pub(crate) fn compute_pb_set_ids(history_chronological: &[ExerciseSet]) -> std::collections::HashSet<i64> {
+    let mut pb_ids = std::collections::HashSet::new();
+    let mut running_max: Option<f64> = None;
+    for set in history_chronological {
+        let is_new_pb = running_max.is_none_or(|m| set.value > m);
+        if is_new_pb {
+            pb_ids.insert(set.id);
+            running_max = Some(set.value);
+        }
+    }
+    pb_ids
+}
+
+/// Header + markdown table rendering for `query_last_entry_action`. The table
+/// shape adapts to measurement type, but every row carries a `New PB!` column
+/// (blank when the set was not a fresh personal best at log time).
+pub(crate) fn format_last_entry_block(
+    exercise_name: &str,
+    entry: &ExerciseEntry,
+    sets: &[ExerciseSet],
+    pb_set_ids: &std::collections::HashSet<i64>,
+) -> String {
+    let header = format_last_entry_header(exercise_name, entry, sets.len());
+    if sets.is_empty() {
+        return header;
+    }
+    let table = format_sets_table(sets, pb_set_ids);
+    format!("{header}\n\n{table}")
+}
+
+fn format_last_entry_header(exercise_name: &str, entry: &ExerciseEntry, set_count: usize) -> String {
+    let (date_str, time_str, days_ago) = match parse_sqlite_datetime(&entry.start_timestamp) {
+        Some(t) => {
+            let date = t.format("%-d %b %Y").to_string();
+            let time = t.format("%H:%M").to_string();
+            let days = (Utc::now().naive_utc() - t).num_days().max(0);
+            (date, time, Some(days))
+        }
+        None => (entry.start_timestamp.clone(), String::new(), None),
+    };
+    let prefix = if time_str.is_empty() {
+        format!("Your last {exercise_name} entry was {date_str}")
+    } else {
+        format!("Your last {exercise_name} entry was {date_str}, {time_str}")
+    };
+    let header = match days_ago {
+        Some(0) => format!("{prefix} (today)"),
+        Some(1) => format!("{prefix} (1 day ago)"),
+        Some(d) => format!("{prefix} ({d} days ago)"),
+        None => prefix,
+    };
+    let sets_label = if set_count == 1 { "set" } else { "sets" };
+    format!("{header}.\n{set_count} {sets_label} total:")
+}
+
+fn format_sets_table(sets: &[ExerciseSet], pb_set_ids: &std::collections::HashSet<i64>) -> String {
+    let mt = sets[0].measurement_type;
+    let (value_header, value_align) = match mt {
+        MeasurementType::WeightReps => ("Weight", "------:"),
+        MeasurementType::TimeBased => ("Duration", "--------:"),
+        MeasurementType::DistanceBased => ("Distance", "--------:"),
+        MeasurementType::LevelBased => ("Level", "-----:"),
+        MeasurementType::ScoreBased => ("Score", "-----:"),
+    };
+    let show_reps = matches!(mt, MeasurementType::WeightReps);
+
+    let mut out = String::new();
+    if show_reps {
+        out.push_str(&format!("| {value_header} | Reps | Effort | Comment |\n"));
+        out.push_str(&format!("|{value_align}|-----:|--------|---------|\n"));
+    } else {
+        out.push_str(&format!("| {value_header} | Effort | Comment |\n"));
+        out.push_str(&format!("|{value_align}|--------|---------|\n"));
+    }
+    for set in sets {
+        let value = format_value(mt, set.value);
+        let effort = format_difficulty(set.perceived_difficulty);
+        let comment = set.comment.as_deref().unwrap_or("");
+        let pb_marker = if pb_set_ids.contains(&set.id) { "New PB!" } else { "" };
+        let comment_cell = match (comment.is_empty(), pb_marker.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => comment.to_string(),
+            (true, false) => pb_marker.to_string(),
+            (false, false) => format!("{comment} — {pb_marker}"),
+        };
+        if show_reps {
+            let reps = set.count.map(|c| c.to_string()).unwrap_or_default();
+            out.push_str(&format!("| {value} | {reps} | {effort} | {comment_cell} |\n"));
+        } else {
+            out.push_str(&format!("| {value} | {effort} | {comment_cell} |\n"));
+        }
+    }
+    out
+}
+
+fn format_difficulty(d: Difficulty) -> &'static str {
+    match d {
+        Difficulty::Easy => "Easy",
+        Difficulty::Medium => "Medium",
+        Difficulty::Hard => "Hard",
+        Difficulty::Failure => "Failure",
     }
 }
 
@@ -2040,5 +2193,119 @@ mod tests {
         let session = db.get_active_session(user_id).unwrap().unwrap();
         let notes = session.notes.unwrap();
         assert!(notes.starts_with("plan:Push Day"));
+    }
+
+    // ─── Lookup queries ────────────────────────────────────────────────────
+
+    /// Register the user and seed bench-press sets directly via the DB. Returns
+    /// the user's id and the bench-press exercise_type id.
+    async fn register_and_seed_bench(handler: &AssistantHandler, telegram_id: i64, weights_reps: &[(f64, i32, &str)]) -> (i64, i64) {
+        let msg = make_message(telegram_id, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id(&telegram_id.to_string()).unwrap().unwrap();
+        let bp = db.get_exercise_type_by_name("Bench Press").unwrap().unwrap();
+        let entry_id = db.insert_entry(&crate::db::new_exercise_entry(user.id, None, None)).unwrap();
+        for (w, reps, ts) in weights_reps {
+            let mut s = new_exercise_set(entry_id, bp.id, MeasurementType::WeightReps, *w);
+            s.count = Some(*reps);
+            s.logged_at = (*ts).to_string();
+            db.insert_set(&s).unwrap();
+        }
+        (user.id, bp.id)
+    }
+
+    #[tokio::test]
+    async fn query_personal_record_action_formats_weight_reps_pb() {
+        let (handler, llm) = setup_handler(r#"{"message": "hi", "actions": []}"#).await;
+        let _ = register_and_seed_bench(&handler, 12345, &[(60.0, 8, "2025-01-01 10:00:00"), (80.0, 5, "2025-01-01 10:05:00")]).await;
+
+        llm.set_response(
+            r#"{"message": "Here's your bench press PB:", "actions": [{"type": "query_personal_record", "exercise": "Bench Press"}]}"#,
+        );
+        let msg = make_message(12345, "hello");
+        let reply = handler.handle_text_message(&msg, "What's my PB for bench press?").await.unwrap();
+
+        assert!(reply.text.contains("Bench Press PB: 80.0kg (5 reps)"), "reply was: {}", reply.text);
+        assert!(reply.text.starts_with("Here's your bench press PB:"));
+    }
+
+    #[tokio::test]
+    async fn query_personal_record_action_handles_no_record() {
+        let (handler, llm) = setup_handler(r#"{"message": "hi", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "Looking up your bench:", "actions": [{"type": "query_personal_record", "exercise": "Bench Press"}]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "what's my bench pb").await.unwrap();
+        assert!(reply.text.contains("don't have any logged sets for Bench Press yet"), "reply was: {}", reply.text);
+    }
+
+    #[tokio::test]
+    async fn query_last_entry_action_renders_table_with_new_pb_marker() {
+        let (handler, llm) = setup_handler(r#"{"message": "hi", "actions": []}"#).await;
+        // Older entry sets the running max at 70kg. The newer entry's 100kg set
+        // is the first to strictly exceed it and should be flagged "New PB!".
+        // The second 100kg set in the same entry is NOT a new PB (not strictly greater).
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        {
+            let db = handler.db.lock().await;
+            let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+            let bp = db.get_exercise_type_by_name("Bench Press").unwrap().unwrap();
+
+            // Older entry: 60kg x 10 (PB at log time), 70kg x 8 (PB at log time).
+            let older = db.insert_entry(&crate::db::new_exercise_entry(user.id, None, None)).unwrap();
+            db.conn()
+                .execute("UPDATE exercise_entry SET start_timestamp = ?1 WHERE id = ?2", rusqlite::params!["2025-01-01 10:00:00", older])
+                .unwrap();
+            for (w, reps, ts) in [(60.0, 10, "2025-01-01 10:00:00"), (70.0, 8, "2025-01-01 10:05:00")] {
+                let mut s = new_exercise_set(older, bp.id, MeasurementType::WeightReps, w);
+                s.count = Some(reps);
+                s.logged_at = ts.to_string();
+                db.insert_set(&s).unwrap();
+            }
+            // Newer entry: 80kg x 6 (PB), 100kg x 5 (PB), 100kg x 5 (NOT PB).
+            let newer = db.insert_entry(&crate::db::new_exercise_entry(user.id, None, None)).unwrap();
+            db.conn()
+                .execute("UPDATE exercise_entry SET start_timestamp = ?1 WHERE id = ?2", rusqlite::params!["2025-02-01 12:00:00", newer])
+                .unwrap();
+            for (w, reps, ts) in [(80.0, 6, "2025-02-01 12:00:00"), (100.0, 5, "2025-02-01 12:05:00"), (100.0, 5, "2025-02-01 12:10:00")] {
+                let mut s = new_exercise_set(newer, bp.id, MeasurementType::WeightReps, w);
+                s.count = Some(reps);
+                s.logged_at = ts.to_string();
+                db.insert_set(&s).unwrap();
+            }
+        }
+
+        llm.set_response(
+            r#"{"message": "Here's your last bench session:", "actions": [{"type": "query_last_entry_for_exercise", "exercise": "Bench Press"}]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "what did I do last time for bench?").await.unwrap();
+
+        assert!(reply.text.contains("Your last Bench Press entry was"), "reply was: {}", reply.text);
+        assert!(reply.text.contains("3 sets total"), "reply was: {}", reply.text);
+        assert!(reply.text.contains("| Weight | Reps | Effort | Comment |"), "reply was: {}", reply.text);
+        // Newer-entry rows are 80, 100, 100. Full history running max is
+        // 60→70→80→100→100, so 80 (first time over 70) and the first 100 are
+        // PBs at log time; the duplicate 100 is not.
+        let pb_count = reply.text.matches("New PB!").count();
+        assert_eq!(pb_count, 2, "expected New PB on 80kg and first 100kg only, reply was: {}", reply.text);
+    }
+
+    #[tokio::test]
+    async fn query_last_entry_action_unknown_exercise_returns_error_suffix() {
+        let (handler, llm) = setup_handler(r#"{"message": "hi", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        llm.set_response(
+            r#"{"message": "Looking it up:", "actions": [{"type": "query_last_entry_for_exercise", "exercise": "Quidditch"}]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "what about quidditch").await.unwrap();
+        assert!(reply.text.contains("(Note: some actions failed"), "reply was: {}", reply.text);
+        assert!(reply.text.contains("Unknown exercise: Quidditch"), "reply was: {}", reply.text);
     }
 }
