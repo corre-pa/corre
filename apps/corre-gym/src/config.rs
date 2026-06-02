@@ -24,6 +24,50 @@ pub struct GymConfig {
     pub llm: Option<AppLlmConfig>,
     #[serde(default)]
     pub voice: Option<VoiceConfig>,
+    #[serde(default)]
+    pub minesweeper: Option<MinesweeperConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct MinesweeperConfig {
+    /// Path to (or name on `$PATH` of) the `minesweeper` binary used to file issues.
+    #[serde(default = "default_minesweeper_binary")]
+    pub binary: String,
+    /// Maximum wall-clock seconds to wait for `minesweeper issue new` to complete.
+    #[serde(default = "default_minesweeper_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Maximum byte length of the user-supplied issue body. Inputs longer than
+    /// this are rejected before the subprocess is spawned.
+    #[serde(default = "default_minesweeper_max_input")]
+    pub max_input_length: usize,
+    /// Telegram numeric user IDs whose corresponding `users.beta_tester` flag is
+    /// flipped to `true` on first sight. Removing an ID from this list does not
+    /// demote a previously-flipped flag — the DB is the source of truth.
+    #[serde(default)]
+    pub beta_tester_telegram_ids: Vec<i64>,
+}
+
+impl Default for MinesweeperConfig {
+    fn default() -> Self {
+        Self {
+            binary: default_minesweeper_binary(),
+            timeout_secs: default_minesweeper_timeout_secs(),
+            max_input_length: default_minesweeper_max_input(),
+            beta_tester_telegram_ids: Vec::new(),
+        }
+    }
+}
+
+fn default_minesweeper_binary() -> String {
+    "minesweeper".into()
+}
+
+fn default_minesweeper_timeout_secs() -> u64 {
+    300
+}
+
+fn default_minesweeper_max_input() -> usize {
+    4096
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -279,6 +323,43 @@ mod tests {
         let val = minimal_gym_toml("");
         let mut config: GymConfig = val.try_into().unwrap();
         assert!(config.resolve_endpoints().is_ok());
+    }
+
+    #[test]
+    fn minesweeper_config_absent() {
+        let val = minimal_gym_toml("");
+        let config: GymConfig = val.try_into().unwrap();
+        assert!(config.minesweeper.is_none());
+    }
+
+    #[test]
+    fn minesweeper_config_defaults() {
+        let val = minimal_gym_toml("[minesweeper]");
+        let config: GymConfig = val.try_into().unwrap();
+        let ms = config.minesweeper.unwrap();
+        assert_eq!(ms.binary, "minesweeper");
+        assert_eq!(ms.timeout_secs, 300);
+        assert_eq!(ms.max_input_length, 4096);
+        assert!(ms.beta_tester_telegram_ids.is_empty());
+    }
+
+    #[test]
+    fn minesweeper_config_custom() {
+        let val = minimal_gym_toml(
+            r#"
+            [minesweeper]
+            binary = "/opt/bin/minesweeper"
+            timeout_secs = 60
+            max_input_length = 1024
+            beta_tester_telegram_ids = [111, 222]
+            "#,
+        );
+        let config: GymConfig = val.try_into().unwrap();
+        let ms = config.minesweeper.unwrap();
+        assert_eq!(ms.binary, "/opt/bin/minesweeper");
+        assert_eq!(ms.timeout_secs, 60);
+        assert_eq!(ms.max_input_length, 1024);
+        assert_eq!(ms.beta_tester_telegram_ids, vec![111, 222]);
     }
 
     #[test]

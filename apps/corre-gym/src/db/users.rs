@@ -11,19 +11,21 @@ pub(super) fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         telegram_id: row.get(2)?,
         signal_id: row.get(3)?,
         timezone: row.get(4)?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        beta_tester: row.get::<_, i64>(5)? != 0,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
     })
 }
 
-const SELECT_USER: &str = "SELECT id, name, telegram_id, signal_id, timezone, created_at, updated_at FROM users";
+const SELECT_USER: &str =
+    "SELECT id, name, telegram_id, signal_id, timezone, beta_tester, created_at, updated_at FROM users";
 
 impl Database {
     /// Insert a user. Returns the generated id.
     pub fn insert_user(&self, user: &User) -> anyhow::Result<i64> {
         self.conn().execute(
-            "INSERT INTO users (name, telegram_id, signal_id, timezone) VALUES (?1, ?2, ?3, ?4)",
-            params![user.name, user.telegram_id, user.signal_id, user.timezone],
+            "INSERT INTO users (name, telegram_id, signal_id, timezone, beta_tester) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![user.name, user.telegram_id, user.signal_id, user.timezone, user.beta_tester as i64],
         )?;
         let id = self.conn().last_insert_rowid();
         tracing::debug!(id, name = %user.name, telegram_id = ?user.telegram_id, "DB: inserted user");
@@ -54,11 +56,21 @@ impl Database {
     pub fn update_user(&self, user: &User) -> anyhow::Result<()> {
         let rows = self.conn().execute(
             "UPDATE users SET name = ?1, telegram_id = ?2, signal_id = ?3, timezone = ?4, \
-             updated_at = datetime('now') WHERE id = ?5",
-            params![user.name, user.telegram_id, user.signal_id, user.timezone, user.id],
+             beta_tester = ?5, updated_at = datetime('now') WHERE id = ?6",
+            params![user.name, user.telegram_id, user.signal_id, user.timezone, user.beta_tester as i64, user.id],
         )?;
         anyhow::ensure!(rows > 0, "User with id {} not found", user.id);
         tracing::debug!(id = user.id, "DB: updated user");
+        Ok(())
+    }
+
+    pub fn set_beta_tester(&self, user_id: i64, value: bool) -> anyhow::Result<()> {
+        let rows = self.conn().execute(
+            "UPDATE users SET beta_tester = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![value as i64, user_id],
+        )?;
+        anyhow::ensure!(rows > 0, "User with id {user_id} not found");
+        tracing::debug!(user_id, value, "DB: set beta_tester flag");
         Ok(())
     }
 
@@ -96,6 +108,7 @@ mod tests {
         assert_eq!(fetched.name, "Alice");
         assert_eq!(fetched.telegram_id.as_deref(), Some("alice_tg"));
         assert_eq!(fetched.timezone, "Europe/London");
+        assert!(!fetched.beta_tester, "new users default to beta_tester = false");
     }
 
     #[test]
@@ -131,6 +144,43 @@ mod tests {
         let after = db.get_user(id).unwrap().unwrap();
         assert_eq!(after.name, "Alicia");
         assert_eq!(after.telegram_id.as_deref(), Some("alicia_tg"));
+    }
+
+    #[test]
+    fn set_beta_tester_toggles_flag() {
+        let db = test_db();
+        let user = new_user("Alice", None, "UTC");
+        let id = db.insert_user(&user).unwrap();
+        assert!(!db.get_user(id).unwrap().unwrap().beta_tester);
+
+        db.set_beta_tester(id, true).unwrap();
+        assert!(db.get_user(id).unwrap().unwrap().beta_tester);
+
+        db.set_beta_tester(id, false).unwrap();
+        assert!(!db.get_user(id).unwrap().unwrap().beta_tester);
+    }
+
+    #[test]
+    fn set_beta_tester_errors_for_missing_user() {
+        let db = test_db();
+        assert!(db.set_beta_tester(9999, true).is_err());
+    }
+
+    #[test]
+    fn update_user_preserves_beta_tester() {
+        let db = test_db();
+        let user = new_user("Alice", None, "UTC");
+        let id = db.insert_user(&user).unwrap();
+        db.set_beta_tester(id, true).unwrap();
+
+        let mut fetched = db.get_user(id).unwrap().unwrap();
+        assert!(fetched.beta_tester);
+        fetched.name = "Alicia".into();
+        db.update_user(&fetched).unwrap();
+
+        let after = db.get_user(id).unwrap().unwrap();
+        assert_eq!(after.name, "Alicia");
+        assert!(after.beta_tester, "update_user must round-trip the beta_tester flag");
     }
 
     #[test]

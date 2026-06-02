@@ -11,6 +11,7 @@ use corre_core::config::CorreConfig;
 use corre_gym::assistant::AssistantHandler;
 use corre_gym::config::GymConfig;
 use corre_gym::db::Database;
+use corre_gym::minesweeper::{IssueFiler, MinesweeperBinary};
 use corre_gym::telegram::{Message, TelegramClient, Voice};
 use corre_gym::voice::VoicePipeline;
 use corre_gym::web;
@@ -111,7 +112,17 @@ async fn setup()
     let allowed_ids = gym_config.telegram_allowed_ids.clone();
 
     // 8. Create handler
-    let handler = AssistantHandler::new(db.clone(), llm, gym_config.clone()).await?;
+    let issue_filer: Option<Arc<dyn IssueFiler>> = match gym_config.minesweeper.as_ref() {
+        Some(ms_cfg) => {
+            tracing::info!(binary = %ms_cfg.binary, beta_testers = ms_cfg.beta_tester_telegram_ids.len(), "/issue command enabled");
+            Some(Arc::new(MinesweeperBinary::new(ms_cfg.clone())))
+        }
+        None => {
+            tracing::info!("/issue command disabled (no [gym.minesweeper] section)");
+            None
+        }
+    };
+    let handler = AssistantHandler::with_issue_filer(db.clone(), llm, gym_config.clone(), issue_filer).await?;
 
     // 9. Voice pipeline (optional)
     let voice_pipeline = match &gym_config.voice {

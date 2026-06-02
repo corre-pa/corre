@@ -24,7 +24,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         MIGRATIONS.to_latest(&mut conn).expect("up to latest failed");
         let after_up: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(after_up, 2);
+        assert_eq!(after_up, 3);
 
         MIGRATIONS.to_version(&mut conn, 0).expect("down to 0 failed");
         let after_down: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
@@ -36,7 +36,17 @@ mod tests {
 
         MIGRATIONS.to_latest(&mut conn).expect("re-apply up failed");
         let after_redo: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(after_redo, 2);
+        assert_eq!(after_redo, 3);
+    }
+
+    #[test]
+    fn beta_tester_column_defaults_zero() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        MIGRATIONS.to_latest(&mut conn).expect("up to latest failed");
+
+        conn.execute("INSERT INTO users (name, telegram_id, timezone) VALUES ('Alice', 'a', 'UTC')", []).unwrap();
+        let beta: i64 = conn.query_row("SELECT beta_tester FROM users WHERE name = 'Alice'", [], |r| r.get(0)).unwrap();
+        assert_eq!(beta, 0, "newly inserted users must default to beta_tester = 0");
     }
 
     #[test]

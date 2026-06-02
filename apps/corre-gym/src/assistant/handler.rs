@@ -10,6 +10,7 @@ use crate::db::{
     ConversationRole, Database, Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, Session, SetEdit,
     SetEditError, User, new_conversation_message, new_exercise_entry_at, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
 };
+use crate::minesweeper::IssueFiler;
 use crate::telegram::Message as TgMessage;
 
 use super::actions::AssistantAction;
@@ -39,6 +40,7 @@ pub struct AssistantHandler {
     llm: Box<dyn LlmProvider>,
     config: GymConfig,
     catalogue: Vec<ExerciseTypeWithAncestry>,
+    issue_filer: Option<Arc<dyn IssueFiler>>,
 }
 
 /// Outcome of resolving which `exercise_entry` a logged set should join.
@@ -54,8 +56,17 @@ enum LogEntryTarget {
 
 impl AssistantHandler {
     pub async fn new(db: Arc<Mutex<Database>>, llm: Box<dyn LlmProvider>, config: GymConfig) -> anyhow::Result<Self> {
+        Self::with_issue_filer(db, llm, config, None).await
+    }
+
+    pub async fn with_issue_filer(
+        db: Arc<Mutex<Database>>,
+        llm: Box<dyn LlmProvider>,
+        config: GymConfig,
+        issue_filer: Option<Arc<dyn IssueFiler>>,
+    ) -> anyhow::Result<Self> {
         let catalogue = db.lock().await.list_exercise_types_with_ancestry()?;
-        Ok(Self { db, llm, config, catalogue })
+        Ok(Self { db, llm, config, catalogue, issue_filer })
     }
 
     /// Process an incoming Telegram text message and return a reply.
@@ -151,7 +162,12 @@ impl AssistantHandler {
         let telegram_id = from.id.to_string();
 
         let db = self.db.lock().await;
-        if let Some(user) = db.get_user_by_telegram_id(&telegram_id)? {
+        if let Some(mut user) = db.get_user_by_telegram_id(&telegram_id)? {
+            if !user.beta_tester && self.is_beta_tester_telegram_id(from.id) {
+                db.set_beta_tester(user.id, true)?;
+                tracing::info!("Promoted user {} to beta tester (telegram_id: {telegram_id})", user.name);
+                user.beta_tester = true;
+            }
             return Ok((user, false));
         }
 
@@ -159,11 +175,16 @@ impl AssistantHandler {
             Some(last) => format!("{} {last}", from.first_name),
             None => from.first_name.clone(),
         };
-        let draft = new_user(&name, Some(&telegram_id), &self.config.default_timezone);
+        let mut draft = new_user(&name, Some(&telegram_id), &self.config.default_timezone);
+        draft.beta_tester = self.is_beta_tester_telegram_id(from.id);
         let user_id = db.insert_user(&draft)?;
         let user = db.get_user(user_id)?.context("user disappeared after insert")?;
         tracing::info!("Registered new user: {} (telegram_id: {telegram_id})", user.name);
         Ok((user, true))
+    }
+
+    fn is_beta_tester_telegram_id(&self, telegram_id: i64) -> bool {
+        self.config.minesweeper.as_ref().is_some_and(|ms| ms.beta_tester_telegram_ids.contains(&telegram_id))
     }
 
     fn welcome_message(&self, user: &User) -> String {
@@ -186,17 +207,18 @@ impl AssistantHandler {
         let cmd = text.split_whitespace().next().unwrap_or("").to_lowercase();
         match cmd.as_str() {
             "/start" => Ok(Some(Reply::new(self.cmd_start(user)))),
-            "/help" => Ok(Some(Reply::new(Self::cmd_help()))),
+            "/help" => Ok(Some(Reply::new(self.cmd_help(user)))),
             "/status" => Ok(Some(self.cmd_status(user).await?)),
             "/history" => Ok(Some(Reply::new(self.cmd_history(user).await?))),
             "/exercises" => Ok(Some(self.cmd_exercises())),
             "/clear" => Ok(Some(Reply::new(self.cmd_clear(user, platform).await?))),
+            "/issue" if user.beta_tester => Ok(Some(Reply::new(self.cmd_issue(text, user, platform).await?))),
             _ => Ok(None),
         }
     }
 
     fn cmd_start(&self, user: &User) -> String {
-        format!(
+        let mut out = format!(
             "You're already registered, {}! Here's what I can help with:\n\
              - Tell me about your exercises and I'll log them\n\
              - /status -- see your current session\n\
@@ -205,24 +227,65 @@ impl AssistantHandler {
              - /clear -- clear conversation context\n\
              - /help -- all commands",
             user.name
-        )
+        );
+        if user.beta_tester {
+            out.push_str("\n             - /issue <text> -- file a bug or feature request");
+        }
+        out
     }
 
-    fn cmd_help() -> String {
-        "Available commands:\n\
-         /start -- Introduction and registration\n\
-         /status -- Current session and today's stats\n\
-         /history -- Last 5 workout summaries\n\
-         /exercises -- List available exercises by muscle group\n\
-         /clear -- Clear conversation context (fresh start)\n\
-         /help -- This message\n\n\
-         You can also just chat naturally:\n\
-         - \"3 sets of bench press, 80kg, 8 reps\"\n\
-         - \"I ran 5km in 25 minutes\"\n\
-         - \"My shoulder is sore\"\n\
-         - \"End my session\"\n\
-         - \"What did I do today?\""
-            .to_string()
+    fn cmd_help(&self, user: &User) -> String {
+        let mut out = String::from(
+            "Available commands:\n\
+             /start -- Introduction and registration\n\
+             /status -- Current session and today's stats\n\
+             /history -- Last 5 workout summaries\n\
+             /exercises -- List available exercises by muscle group\n\
+             /clear -- Clear conversation context (fresh start)\n",
+        );
+        if user.beta_tester {
+            out.push_str("/issue <text> -- File a bug or feature request via Minesweeper\n");
+        }
+        out.push_str(
+            "/help -- This message\n\n\
+             You can also just chat naturally:\n\
+             - \"3 sets of bench press, 80kg, 8 reps\"\n\
+             - \"I ran 5km in 25 minutes\"\n\
+             - \"My shoulder is sore\"\n\
+             - \"End my session\"\n\
+             - \"What did I do today?\"",
+        );
+        out
+    }
+
+    async fn cmd_issue(&self, text: &str, user: &User, platform: &str) -> anyhow::Result<String> {
+        // Strip the leading "/issue" token (case-insensitive, leading-whitespace tolerant).
+        let body = text.trim().split_once(char::is_whitespace).map(|(_, rest)| rest).unwrap_or("").trim();
+
+        if body.is_empty() {
+            let usage = "Usage: /issue <describe the bug or feature request>".to_string();
+            self.store_excluded_conversation_on_platform(user.id, platform, text, &usage).await?;
+            return Ok(usage);
+        }
+
+        let Some(filer) = self.issue_filer.clone() else {
+            let msg = "Issue filing is not configured on this server.".to_string();
+            self.store_excluded_conversation_on_platform(user.id, platform, text, &msg).await?;
+            return Ok(msg);
+        };
+
+        tracing::info!(user_id = user.id, body_len = body.len(), "Filing issue via minesweeper");
+        let reply = match filer.file_issue(body).await {
+            Ok(url) => format!("Issue filed: {url}"),
+            Err(e) => {
+                tracing::warn!("Issue filing failed: {e:#}");
+                "I couldn't file that issue right now -- please try again later.".to_string()
+            }
+        };
+        // Store excluded from context so the LLM doesn't pick up the raw bug-report
+        // text on subsequent turns.
+        self.store_excluded_conversation_on_platform(user.id, platform, text, &reply).await?;
+        Ok(reply)
     }
 
     async fn cmd_status(&self, user: &User) -> anyhow::Result<Reply> {
@@ -1335,6 +1398,7 @@ mod tests {
             session_timeout_hours: 4,
             llm: None,
             voice: None,
+            minesweeper: None,
         }
     }
 
@@ -1343,6 +1407,59 @@ mod tests {
         let db = Arc::new(Mutex::new(db));
         let llm = Arc::new(MockLlm::new(response));
         let handler = AssistantHandler::new(db, Box::new(MockLlmWrapper(llm.clone())), test_config()).await.unwrap();
+        (handler, llm)
+    }
+
+    /// In-memory `IssueFiler` for `/issue` command tests. Records every call and
+    /// returns either a canned URL or a canned error.
+    struct MockFiler {
+        calls: std::sync::Mutex<Vec<String>>,
+        outcome: std::sync::Mutex<Result<String, String>>,
+    }
+
+    impl MockFiler {
+        fn ok(url: &str) -> Arc<Self> {
+            Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()), outcome: std::sync::Mutex::new(Ok(url.to_string())) })
+        }
+
+        fn err(msg: &str) -> Arc<Self> {
+            Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()), outcome: std::sync::Mutex::new(Err(msg.to_string())) })
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::minesweeper::IssueFiler for MockFiler {
+        async fn file_issue(&self, text: &str) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push(text.to_string());
+            match &*self.outcome.lock().unwrap() {
+                Ok(url) => Ok(url.clone()),
+                Err(msg) => Err(anyhow::anyhow!("{msg}")),
+            }
+        }
+    }
+
+    async fn setup_handler_with_filer(
+        response: &str,
+        filer: Option<Arc<dyn crate::minesweeper::IssueFiler>>,
+        beta_tester_ids: Vec<i64>,
+    ) -> (AssistantHandler, Arc<MockLlm>) {
+        let db = Database::open_in_memory().unwrap();
+        let db = Arc::new(Mutex::new(db));
+        let llm = Arc::new(MockLlm::new(response));
+        let mut cfg = test_config();
+        if !beta_tester_ids.is_empty() {
+            cfg.minesweeper = Some(crate::config::MinesweeperConfig {
+                binary: "minesweeper".into(),
+                timeout_secs: 30,
+                max_input_length: 4096,
+                beta_tester_telegram_ids: beta_tester_ids,
+            });
+        }
+        let handler = AssistantHandler::with_issue_filer(db, Box::new(MockLlmWrapper(llm.clone())), cfg, filer).await.unwrap();
         (handler, llm)
     }
 
@@ -2040,5 +2157,161 @@ mod tests {
         let session = db.get_active_session(user_id).unwrap().unwrap();
         let notes = session.notes.unwrap();
         assert!(notes.starts_with("plan:Push Day"));
+    }
+
+    // ─── /issue command tests ─────────────────────────────────────────────
+
+    /// Promote a user to beta_tester after registration; mirrors the bootstrap
+    /// path in `ensure_user` without relying on its config-driven branch.
+    async fn promote_beta(handler: &AssistantHandler, telegram_id: &str) {
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id(telegram_id).unwrap().unwrap();
+        db.set_beta_tester(user.id, true).unwrap();
+    }
+
+    #[tokio::test]
+    async fn slash_help_omits_issue_for_non_beta() {
+        let (handler, _) = setup_handler(r#"{"message": "x", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
+        assert!(!reply.text.contains("/issue"), "non-beta /help must not advertise /issue: {}", reply.text);
+    }
+
+    #[tokio::test]
+    async fn slash_help_includes_issue_for_beta() {
+        let filer = MockFiler::ok("https://example.com/issues/1");
+        let (handler, _) = setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
+        assert!(reply.text.contains("/issue"), "beta /help must list /issue, got: {}", reply.text);
+    }
+
+    #[tokio::test]
+    async fn slash_start_omits_issue_for_non_beta() {
+        let (handler, _) = setup_handler(r#"{"message": "x", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "/start").await.unwrap();
+        assert!(!reply.text.contains("/issue"));
+    }
+
+    #[tokio::test]
+    async fn slash_start_includes_issue_for_beta() {
+        let filer = MockFiler::ok("https://example.com/issues/1");
+        let (handler, _) = setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/start").await.unwrap();
+        assert!(reply.text.contains("/issue"));
+    }
+
+    #[tokio::test]
+    async fn slash_issue_unauthorised_falls_through() {
+        let filer = MockFiler::ok("https://example.com/issues/1");
+        let (handler, llm) =
+            setup_handler_with_filer(r#"{"message": "LLM saw it", "actions": []}"#, Some(filer.clone()), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        let reply = handler.handle_text_message(&msg, "/issue something is broken").await.unwrap();
+        // Non-beta user: the slash command must NOT execute. The message falls
+        // through to the LLM, which produces the canned response.
+        assert_eq!(reply.text, "LLM saw it");
+        assert!(filer.calls().is_empty(), "filer must not be called for non-beta user");
+        // And the LLM did process it — exactly one call beyond the registration phase.
+        assert_eq!(llm.recorded_requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn slash_issue_beta_files_and_returns_url() {
+        let filer = MockFiler::ok("https://example.com/issues/42");
+        let (handler, _) =
+            setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer.clone()), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/issue dashboard crashes on Safari").await.unwrap();
+        assert!(reply.text.contains("https://example.com/issues/42"), "reply must echo the issue URL: {}", reply.text);
+        assert_eq!(filer.calls(), vec!["dashboard crashes on Safari".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn slash_issue_empty_body_returns_usage() {
+        let filer = MockFiler::ok("https://example.com/issues/1");
+        let (handler, _) =
+            setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer.clone()), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/issue").await.unwrap();
+        assert!(reply.text.to_lowercase().contains("usage"));
+        assert!(filer.calls().is_empty(), "empty /issue must not invoke the filer");
+    }
+
+    #[tokio::test]
+    async fn slash_issue_subprocess_error_returns_friendly_message_and_excludes_from_context() {
+        let filer = MockFiler::err("network down");
+        let (handler, _) = setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/issue boom").await.unwrap();
+        assert!(reply.text.contains("couldn't file"), "expected a friendly error, got: {}", reply.text);
+
+        // The bug-report text must be excluded from LLM context so subsequent
+        // turns don't surface it.
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        let ctx = db.get_recent_messages_for_platform(user.id, "telegram", 100).unwrap();
+        assert!(ctx.iter().all(|m| !m.content.contains("/issue boom")), "issue body must not appear in LLM context");
+    }
+
+    #[tokio::test]
+    async fn slash_issue_no_filer_returns_not_configured() {
+        let (handler, _) = setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, None, vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/issue feature pls").await.unwrap();
+        assert!(reply.text.contains("not configured"));
+    }
+
+    #[tokio::test]
+    async fn ensure_user_promotes_configured_beta_tester() {
+        let filer = MockFiler::ok("https://example.com/issues/1");
+        let (handler, _) = setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer), vec![12345]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        assert!(user.beta_tester, "user with telegram_id in beta_tester_telegram_ids must be flagged on registration");
+    }
+
+    #[tokio::test]
+    async fn ensure_user_does_not_demote_known_beta_tester() {
+        // Telegram id is NOT in the bootstrap list, but the user is already a
+        // beta tester in the DB — the flag must stick.
+        let filer = MockFiler::ok("https://example.com/issues/1");
+        let (handler, _) = setup_handler_with_filer(r#"{"message": "x", "actions": []}"#, Some(filer), vec![]).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_beta(&handler, "12345").await;
+
+        // Second sight — bootstrap list still empty, but flag must persist.
+        let _ = handler.handle_text_message(&msg, "another message").await.unwrap();
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id("12345").unwrap().unwrap();
+        assert!(user.beta_tester);
     }
 }

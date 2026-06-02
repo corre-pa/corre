@@ -321,6 +321,7 @@ pub struct User {
     pub telegram_id: Option<String>,
     pub signal_id: Option<String>,
     pub timezone: String,
+    pub beta_tester: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -516,6 +517,7 @@ pub fn new_user(name: &str, telegram_id: Option<&str>, timezone: &str) -> User {
         telegram_id: telegram_id.map(String::from),
         signal_id: None,
         timezone: timezone.to_string(),
+        beta_tester: false,
         created_at: now.clone(),
         updated_at: now,
     }

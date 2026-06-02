@@ -41,6 +41,14 @@ session_timeout_hours = 4             # auto-close stale sessions older than thi
  model = "gpt-4o"
  temperature = 0.3
 
+ # [gym.minesweeper]                # optional /issue slash command (beta-tester-gated)
+ # binary = "minesweeper"           # path or PATH name of the minesweeper CLI
+ # timeout_secs = 300               # max wall-clock seconds for `minesweeper issue new`
+ # max_input_length = 4096          # reject /issue bodies longer than this (bytes)
+ # beta_tester_telegram_ids = []    # Telegram numeric IDs auto-promoted on first sight.
+                                    # Removing an ID does NOT demote a flag already set
+                                    # — the DB is the source of truth.
+
  [safety]
  enabled = true                    # toggle the prompt-injection defense layer
  max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size
