@@ -248,8 +248,10 @@ mod tests {
     #[test]
     fn volume_by_muscle_group_weekly_aggregates() {
         let (db, user_id, bp_id) = fixture();
-        for day in [1, 2, 3] {
-            log_weight_set(&db, user_id, bp_id, &format!("2025-06-{day:02} 10:00:00"), 10, 80.0);
+        let today = chrono::Utc::now().date_naive();
+        for offset in [2i64, 1, 0] {
+            let date = today - chrono::Duration::days(offset);
+            log_weight_set(&db, user_id, bp_id, &format!("{date} 10:00:00"), 10, 80.0);
         }
         let volumes = db.volume_by_muscle_group_weekly(user_id, "-365 days").unwrap();
         assert!(!volumes.is_empty());
