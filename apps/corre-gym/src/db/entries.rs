@@ -423,6 +423,40 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().context("Failed to list recent sets")
     }
 
+    /// Most recent `ExerciseEntry` for a given `(user_id, exercise_type_id)`,
+    /// optionally rolling up taxonomy descendants. Membership is decided by the
+    /// entry's sets — an entry "is" an exercise type when at least one of its
+    /// sets references that type. The `id DESC` tie-breaker matches
+    /// `most_recent_set_for_user` for batches that share a start timestamp.
+    pub fn most_recent_entry_for_exercise_type(
+        &self,
+        user_id: i64,
+        exercise_type_id: i64,
+        include_descendants: bool,
+    ) -> anyhow::Result<Option<ExerciseEntry>> {
+        let sql = if include_descendants {
+            "WITH RECURSIVE tree(id) AS ( \
+                 SELECT id FROM exercise_types WHERE id = ?1 \
+                 UNION ALL \
+                 SELECT et.id FROM exercise_types et JOIN tree t ON et.parent_id = t.id \
+             ) \
+             SELECT DISTINCT ee.id, ee.user_id, ee.session_id, ee.start_timestamp, ee.end_timestamp, ee.comment \
+             FROM exercise_entry ee \
+             JOIN sets s ON s.exercise_entry_id = ee.id \
+             WHERE ee.user_id = ?2 AND s.exercise_type_id IN (SELECT id FROM tree) \
+             ORDER BY ee.start_timestamp DESC, ee.id DESC LIMIT 1"
+        } else {
+            "SELECT DISTINCT ee.id, ee.user_id, ee.session_id, ee.start_timestamp, ee.end_timestamp, ee.comment \
+             FROM exercise_entry ee \
+             JOIN sets s ON s.exercise_entry_id = ee.id \
+             WHERE ee.user_id = ?2 AND s.exercise_type_id = ?1 \
+             ORDER BY ee.start_timestamp DESC, ee.id DESC LIMIT 1"
+        };
+        let mut stmt = self.conn().prepare(sql)?;
+        let mut rows = stmt.query_map(params![exercise_type_id, user_id], row_to_entry)?;
+        rows.next().transpose().context("Failed to read most recent entry for exercise type")
+    }
+
     /// Personal record (max value) for a given exercise_type, optionally rolling up
     /// descendants. Returns the best `ExerciseSet`.
     pub fn personal_record(&self, user_id: i64, exercise_type_id: i64, include_descendants: bool) -> anyhow::Result<Option<ExerciseSet>> {
@@ -979,6 +1013,68 @@ mod tests {
         let other = db.insert_user(&new_user("Other", None, "UTC")).unwrap();
         seed_set(&db, other, bp_id, 50.0, 5);
         assert!(db.most_recent_set_for_user(user_id, None).unwrap().is_none());
+    }
+
+    /// Open an entry with explicit `start_timestamp` and log one set of
+    /// `exercise_type_id` into it. Returns the entry id.
+    fn seed_entry_at(db: &Database, user_id: i64, exercise_type_id: i64, started_at: &str) -> i64 {
+        let mut entry = new_exercise_entry(user_id, None, None);
+        entry.start_timestamp = started_at.to_string();
+        let entry_id = db.insert_entry(&entry).unwrap();
+        let mut s = new_exercise_set(entry_id, exercise_type_id, MeasurementType::WeightReps, 60.0);
+        s.count = Some(5);
+        db.insert_set(&s).unwrap();
+        entry_id
+    }
+
+    #[test]
+    fn most_recent_entry_for_exercise_type_returns_latest_by_start_timestamp() {
+        let (db, user_id, bp_id) = fixture();
+        let older = seed_entry_at(&db, user_id, bp_id, "2025-01-01 10:00:00");
+        let newer = seed_entry_at(&db, user_id, bp_id, "2025-02-01 10:00:00");
+        let found = db.most_recent_entry_for_exercise_type(user_id, bp_id, false).unwrap().unwrap();
+        assert_eq!(found.id, newer);
+        assert_ne!(found.id, older);
+    }
+
+    #[test]
+    fn most_recent_entry_for_exercise_type_uses_id_tiebreaker() {
+        let (db, user_id, bp_id) = fixture();
+        let first = seed_entry_at(&db, user_id, bp_id, "2025-01-01 10:00:00");
+        let second = seed_entry_at(&db, user_id, bp_id, "2025-01-01 10:00:00");
+        let found = db.most_recent_entry_for_exercise_type(user_id, bp_id, false).unwrap().unwrap();
+        assert!(second > first);
+        assert_eq!(found.id, second);
+    }
+
+    #[test]
+    fn most_recent_entry_for_exercise_type_filters_by_exercise_type() {
+        let (db, user_id, bp_id) = fixture();
+        let squat_id = db.get_exercise_type_by_name("Squat").unwrap().unwrap().id;
+        let bench_entry = seed_entry_at(&db, user_id, bp_id, "2025-01-01 10:00:00");
+        let _squat_entry = seed_entry_at(&db, user_id, squat_id, "2025-02-01 10:00:00");
+        // Squat entry is newer, but we filter to bench press only.
+        let found = db.most_recent_entry_for_exercise_type(user_id, bp_id, false).unwrap().unwrap();
+        assert_eq!(found.id, bench_entry);
+    }
+
+    #[test]
+    fn most_recent_entry_for_exercise_type_descendants_rollup() {
+        let (db, user_id, bp_id) = fixture();
+        let flat_id = db.get_exercise_type_by_name("Flat Barbell Bench Press").unwrap().unwrap().id;
+        let _flat_entry = seed_entry_at(&db, user_id, flat_id, "2025-01-01 10:00:00");
+        // Without descendants → no entry directly tagged as Bench Press.
+        assert!(db.most_recent_entry_for_exercise_type(user_id, bp_id, false).unwrap().is_none());
+        // With descendants → finds the variation's entry.
+        assert!(db.most_recent_entry_for_exercise_type(user_id, bp_id, true).unwrap().is_some());
+    }
+
+    #[test]
+    fn most_recent_entry_for_exercise_type_other_users_excluded() {
+        let (db, user_id, bp_id) = fixture();
+        let other = db.insert_user(&new_user("Other", None, "UTC")).unwrap();
+        seed_entry_at(&db, other, bp_id, "2025-01-01 10:00:00");
+        assert!(db.most_recent_entry_for_exercise_type(user_id, bp_id, false).unwrap().is_none());
     }
 
     #[test]

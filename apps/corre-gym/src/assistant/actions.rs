@@ -115,6 +115,18 @@ pub enum AssistantAction {
         #[serde(default, alias = "difficulty")]
         new_difficulty: Option<Difficulty>,
     },
+    /// Read-only lookup: returns the user's personal record (best single set) for
+    /// the named exercise. The host appends a formatted answer; the LLM's
+    /// `message` should be a brief acknowledgement only.
+    QueryPersonalRecord {
+        exercise: String,
+    },
+    /// Read-only lookup: returns the most recent exercise_entry (block of sets)
+    /// for the named exercise. The host appends a formatted answer; the LLM's
+    /// `message` should be a brief acknowledgement only.
+    QueryLastEntryForExercise {
+        exercise: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -296,6 +308,26 @@ mod tests {
         match action {
             AssistantAction::EditSet { new_value, .. } => assert_eq!(new_value, Some(50.0)),
             _ => panic!("expected EditSet"),
+        }
+    }
+
+    #[test]
+    fn parse_query_personal_record() {
+        let json = r#"{"type": "query_personal_record", "exercise": "Bench Press"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::QueryPersonalRecord { exercise } => assert_eq!(exercise, "Bench Press"),
+            _ => panic!("expected QueryPersonalRecord"),
+        }
+    }
+
+    #[test]
+    fn parse_query_last_entry_for_exercise() {
+        let json = r#"{"type": "query_last_entry_for_exercise", "exercise": "Squat"}"#;
+        let action: AssistantAction = serde_json::from_str(json).unwrap();
+        match action {
+            AssistantAction::QueryLastEntryForExercise { exercise } => assert_eq!(exercise, "Squat"),
+            _ => panic!("expected QueryLastEntryForExercise"),
         }
     }
 
