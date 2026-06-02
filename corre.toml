@@ -41,6 +41,13 @@ session_timeout_hours = 4             # auto-close stale sessions older than thi
  model = "gpt-4o"
  temperature = 0.3
 
+ # [gym.github]                                 # optional /feedback target
+ # repo = "owner/repo"                          # GitHub "owner/repo" slug
+ # token = "${GITHUB_REPORT_TOKEN}"             # PAT with `public_repo` scope
+ # labels = ["beta-feedback"]                   # labels applied to filed issues
+ # The /feedback slash command is gated by the per-user `beta_tester` flag.
+ # Flip `users.beta_tester = 1` (via SQL) to authorise an account.
+
  [safety]
  enabled = true                    # toggle the prompt-injection defense layer
  max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size

@@ -13,17 +13,18 @@ pub(super) fn row_to_user(row: &rusqlite::Row) -> rusqlite::Result<User> {
         timezone: row.get(4)?,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
+        beta_tester: row.get::<_, i64>(7)? != 0,
     })
 }
 
-const SELECT_USER: &str = "SELECT id, name, telegram_id, signal_id, timezone, created_at, updated_at FROM users";
+const SELECT_USER: &str = "SELECT id, name, telegram_id, signal_id, timezone, created_at, updated_at, beta_tester FROM users";
 
 impl Database {
     /// Insert a user. Returns the generated id.
     pub fn insert_user(&self, user: &User) -> anyhow::Result<i64> {
         self.conn().execute(
-            "INSERT INTO users (name, telegram_id, signal_id, timezone) VALUES (?1, ?2, ?3, ?4)",
-            params![user.name, user.telegram_id, user.signal_id, user.timezone],
+            "INSERT INTO users (name, telegram_id, signal_id, timezone, beta_tester) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![user.name, user.telegram_id, user.signal_id, user.timezone, user.beta_tester as i64],
         )?;
         let id = self.conn().last_insert_rowid();
         tracing::debug!(id, name = %user.name, telegram_id = ?user.telegram_id, "DB: inserted user");
@@ -53,12 +54,24 @@ impl Database {
 
     pub fn update_user(&self, user: &User) -> anyhow::Result<()> {
         let rows = self.conn().execute(
-            "UPDATE users SET name = ?1, telegram_id = ?2, signal_id = ?3, timezone = ?4, \
-             updated_at = datetime('now') WHERE id = ?5",
-            params![user.name, user.telegram_id, user.signal_id, user.timezone, user.id],
+            "UPDATE users SET name = ?1, telegram_id = ?2, signal_id = ?3, timezone = ?4, beta_tester = ?5, \
+             updated_at = datetime('now') WHERE id = ?6",
+            params![user.name, user.telegram_id, user.signal_id, user.timezone, user.beta_tester as i64, user.id],
         )?;
         anyhow::ensure!(rows > 0, "User with id {} not found", user.id);
         tracing::debug!(id = user.id, "DB: updated user");
+        Ok(())
+    }
+
+    /// Flip the `beta_tester` flag on a user. Intended for operator/CLI use to
+    /// grant or revoke access to beta-only commands such as `/feedback`.
+    pub fn set_beta_tester(&self, user_id: i64, is_beta: bool) -> anyhow::Result<()> {
+        let rows = self.conn().execute(
+            "UPDATE users SET beta_tester = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![is_beta as i64, user_id],
+        )?;
+        anyhow::ensure!(rows > 0, "User with id {user_id} not found");
+        tracing::debug!(user_id, is_beta, "DB: set beta_tester");
         Ok(())
     }
 
@@ -131,6 +144,28 @@ mod tests {
         let after = db.get_user(id).unwrap().unwrap();
         assert_eq!(after.name, "Alicia");
         assert_eq!(after.telegram_id.as_deref(), Some("alicia_tg"));
+    }
+
+    #[test]
+    fn beta_tester_defaults_false() {
+        let db = test_db();
+        let user = new_user("Alice", Some("alice_tg"), "UTC");
+        let id = db.insert_user(&user).unwrap();
+        let fetched = db.get_user(id).unwrap().unwrap();
+        assert!(!fetched.beta_tester);
+    }
+
+    #[test]
+    fn set_beta_tester_toggles_flag() {
+        let db = test_db();
+        let user = new_user("Alice", Some("alice_tg"), "UTC");
+        let id = db.insert_user(&user).unwrap();
+
+        db.set_beta_tester(id, true).unwrap();
+        assert!(db.get_user(id).unwrap().unwrap().beta_tester);
+
+        db.set_beta_tester(id, false).unwrap();
+        assert!(!db.get_user(id).unwrap().unwrap().beta_tester);
     }
 
     #[test]

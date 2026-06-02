@@ -187,6 +187,7 @@ mod tests {
                 session_timeout_hours: 4,
                 llm: None,
                 voice: None,
+                github: None,
             },
             bot_username: "test_bot".to_string(),
             session_secret: None,
