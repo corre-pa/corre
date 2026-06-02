@@ -41,6 +41,14 @@ session_timeout_hours = 4             # auto-close stale sessions older than thi
  model = "gpt-4o"
  temperature = 0.3
 
+ [gym.rest_timer]                   # rest-period countdown after each logged set
+ enabled = true                     # set to false to disable rest-timer notifications
+ easy_secs = 120                    # rest after an Easy set (2 min)
+ medium_secs = 180                  # rest after a Medium set (3 min)
+ hard_secs = 300                    # rest after a Hard set (5 min)
+ failure_secs = 300                 # rest after a Failure set (5 min)
+ superset_secs = 60                 # rest when supersetting (≥2 open entries)
+
  [safety]
  enabled = true                    # toggle the prompt-injection defense layer
  max_output_bytes = 100000         # truncate MCP tool outputs exceeding this size

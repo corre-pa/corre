@@ -24,6 +24,57 @@ pub struct GymConfig {
     pub llm: Option<AppLlmConfig>,
     #[serde(default)]
     pub voice: Option<VoiceConfig>,
+    #[serde(default)]
+    pub rest_timer: Option<RestTimerConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct RestTimerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_easy_secs")]
+    pub easy_secs: u32,
+    #[serde(default = "default_medium_secs")]
+    pub medium_secs: u32,
+    #[serde(default = "default_hard_secs")]
+    pub hard_secs: u32,
+    #[serde(default = "default_failure_secs")]
+    pub failure_secs: u32,
+    #[serde(default = "default_superset_secs")]
+    pub superset_secs: u32,
+}
+
+impl Default for RestTimerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            easy_secs: default_easy_secs(),
+            medium_secs: default_medium_secs(),
+            hard_secs: default_hard_secs(),
+            failure_secs: default_failure_secs(),
+            superset_secs: default_superset_secs(),
+        }
+    }
+}
+
+fn default_easy_secs() -> u32 {
+    120
+}
+
+fn default_medium_secs() -> u32 {
+    180
+}
+
+fn default_hard_secs() -> u32 {
+    300
+}
+
+fn default_failure_secs() -> u32 {
+    300
+}
+
+fn default_superset_secs() -> u32 {
+    60
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -145,6 +196,11 @@ impl GymConfig {
             voice.tts_url = corre_core::config::resolve_env_ref(&voice.tts_url).context("resolving tts_url")?;
         }
         Ok(())
+    }
+
+    /// Returns the configured rest-timer block, or the defaults when omitted.
+    pub fn rest_timer_effective(&self) -> RestTimerConfig {
+        self.rest_timer.clone().unwrap_or_default()
     }
 }
 
@@ -279,6 +335,53 @@ mod tests {
         let val = minimal_gym_toml("");
         let mut config: GymConfig = val.try_into().unwrap();
         assert!(config.resolve_endpoints().is_ok());
+    }
+
+    #[test]
+    fn rest_timer_absent_uses_defaults() {
+        let val = minimal_gym_toml("");
+        let config: GymConfig = val.try_into().unwrap();
+        assert!(config.rest_timer.is_none());
+        let effective = config.rest_timer_effective();
+        assert!(effective.enabled);
+        assert_eq!(effective.easy_secs, 120);
+        assert_eq!(effective.medium_secs, 180);
+        assert_eq!(effective.hard_secs, 300);
+        assert_eq!(effective.failure_secs, 300);
+        assert_eq!(effective.superset_secs, 60);
+    }
+
+    #[test]
+    fn rest_timer_partial_inherits_defaults() {
+        let val = minimal_gym_toml(
+            r#"
+            [rest_timer]
+            hard_secs = 240
+            "#,
+        );
+        let config: GymConfig = val.try_into().unwrap();
+        let rt = config.rest_timer.unwrap();
+        assert!(rt.enabled);
+        assert_eq!(rt.easy_secs, 120);
+        assert_eq!(rt.medium_secs, 180);
+        assert_eq!(rt.hard_secs, 240);
+        assert_eq!(rt.failure_secs, 300);
+        assert_eq!(rt.superset_secs, 60);
+    }
+
+    #[test]
+    fn rest_timer_disabled() {
+        let val = minimal_gym_toml(
+            r#"
+            [rest_timer]
+            enabled = false
+            "#,
+        );
+        let config: GymConfig = val.try_into().unwrap();
+        let rt = config.rest_timer.unwrap();
+        assert!(!rt.enabled);
+        // Other defaults still populated so a later flip back to enabled has sensible values.
+        assert_eq!(rt.easy_secs, 120);
     }
 
     #[test]
