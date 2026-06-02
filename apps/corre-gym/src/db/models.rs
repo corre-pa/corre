@@ -323,6 +323,8 @@ pub struct User {
     pub timezone: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub beta_tester: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -518,6 +520,7 @@ pub fn new_user(name: &str, telegram_id: Option<&str>, timezone: &str) -> User {
         timezone: timezone.to_string(),
         created_at: now.clone(),
         updated_at: now,
+        beta_tester: false,
     }
 }
 

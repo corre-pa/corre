@@ -1,5 +1,8 @@
+use std::sync::LazyLock;
+
 use anyhow::Context as _;
 use corre_core::config::AppLlmConfig;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -24,6 +27,36 @@ pub struct GymConfig {
     pub llm: Option<AppLlmConfig>,
     #[serde(default)]
     pub voice: Option<VoiceConfig>,
+    #[serde(default)]
+    pub github: Option<GithubConfig>,
+}
+
+/// Configuration for filing GitHub issues via the `/feedback` slash command.
+///
+/// The endpoint host is hardcoded to `https://api.github.com`; only the
+/// `owner/repo` slug is configurable. The token must be passed as a `${VAR}`
+/// reference and is resolved through the secret resolver at startup.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct GithubConfig {
+    /// "owner/repo" — restricted by allowlist to alphanumeric + `._-`.
+    pub repo: String,
+    pub token: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+static REPO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$").unwrap());
+
+impl GithubConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(REPO_RE.is_match(&self.repo), "invalid github.repo (expected 'owner/repo'): {}", self.repo);
+        let (owner, name) = self.repo.split_once('/').expect("regex guarantees exactly one slash");
+        for component in [owner, name] {
+            anyhow::ensure!(component != "." && component != "..", "invalid github.repo component: {component:?}");
+        }
+        anyhow::ensure!(!self.token.is_empty(), "github.token is empty");
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -128,10 +161,15 @@ impl GymConfig {
         table.cloned().ok_or_else(|| anyhow::anyhow!("missing [gym] section in corre.toml")).and_then(|v| v.try_into().map_err(Into::into))
     }
 
-    /// Resolve `${VAR}` references in secret fields (the Telegram bot token).
+    /// Resolve `${VAR}` references in secret fields (the Telegram bot token,
+    /// and the GitHub PAT used by `/feedback` when configured).
     pub fn resolve_secrets(&mut self) -> anyhow::Result<()> {
         self.telegram_bot_token =
             corre_core::secret::resolve_value(&self.telegram_bot_token).context("resolving TELEGRAM_GYM_BOT_TOKEN")?;
+        if let Some(ref mut github) = self.github {
+            github.token = corre_core::secret::resolve_value(&github.token).context("resolving github.token")?;
+            github.validate()?;
+        }
         Ok(())
     }
 
@@ -279,6 +317,49 @@ mod tests {
         let val = minimal_gym_toml("");
         let mut config: GymConfig = val.try_into().unwrap();
         assert!(config.resolve_endpoints().is_ok());
+    }
+
+    #[test]
+    fn github_config_parses_and_resolves_secret() {
+        unsafe { std::env::set_var("TEST_GH_TOKEN_XYZ", "ghp_resolved") };
+        let val = minimal_gym_toml(
+            r#"
+            [github]
+            repo = "corre-pa/corre"
+            token = "${TEST_GH_TOKEN_XYZ}"
+            labels = ["beta-feedback", "triage"]
+            "#,
+        );
+        let mut config: GymConfig = val.try_into().unwrap();
+        config.resolve_secrets().unwrap();
+        let gh = config.github.unwrap();
+        assert_eq!(gh.repo, "corre-pa/corre");
+        assert_eq!(gh.token, "ghp_resolved");
+        assert_eq!(gh.labels, vec!["beta-feedback".to_string(), "triage".to_string()]);
+        unsafe { std::env::remove_var("TEST_GH_TOKEN_XYZ") };
+    }
+
+    #[test]
+    fn github_config_rejects_invalid_repo() {
+        for repo in &["no-slash", "../etc", "owner/repo/extra", "owner /repo", ""] {
+            let cfg = GithubConfig { repo: (*repo).to_string(), token: "x".into(), labels: vec![] };
+            assert!(cfg.validate().is_err(), "repo {repo:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn github_config_accepts_valid_repos() {
+        for repo in &["owner/repo", "Owner.Name/repo_1", "a-b/c.d-e_f", "Org/Project.Name"] {
+            let cfg = GithubConfig { repo: (*repo).to_string(), token: "x".into(), labels: vec![] };
+            assert!(cfg.validate().is_ok(), "repo {repo:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn github_config_absent_by_default() {
+        let val = minimal_gym_toml("");
+        let config: GymConfig = val.try_into().unwrap();
+        assert!(config.github.is_none());
     }
 
     #[test]

@@ -10,6 +10,7 @@ use crate::db::{
     ConversationRole, Database, Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, Session, SetEdit,
     SetEditError, User, new_conversation_message, new_exercise_entry_at, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
 };
+use crate::github::IssueReporter;
 use crate::telegram::Message as TgMessage;
 
 use super::actions::AssistantAction;
@@ -39,6 +40,7 @@ pub struct AssistantHandler {
     llm: Box<dyn LlmProvider>,
     config: GymConfig,
     catalogue: Vec<ExerciseTypeWithAncestry>,
+    issue_reporter: Option<Arc<dyn IssueReporter>>,
 }
 
 /// Outcome of resolving which `exercise_entry` a logged set should join.
@@ -54,8 +56,17 @@ enum LogEntryTarget {
 
 impl AssistantHandler {
     pub async fn new(db: Arc<Mutex<Database>>, llm: Box<dyn LlmProvider>, config: GymConfig) -> anyhow::Result<Self> {
+        Self::new_with_reporter(db, llm, config, None).await
+    }
+
+    pub async fn new_with_reporter(
+        db: Arc<Mutex<Database>>,
+        llm: Box<dyn LlmProvider>,
+        config: GymConfig,
+        issue_reporter: Option<Arc<dyn IssueReporter>>,
+    ) -> anyhow::Result<Self> {
         let catalogue = db.lock().await.list_exercise_types_with_ancestry()?;
-        Ok(Self { db, llm, config, catalogue })
+        Ok(Self { db, llm, config, catalogue, issue_reporter })
     }
 
     /// Process an incoming Telegram text message and return a reply.
@@ -186,43 +197,54 @@ impl AssistantHandler {
         let cmd = text.split_whitespace().next().unwrap_or("").to_lowercase();
         match cmd.as_str() {
             "/start" => Ok(Some(Reply::new(self.cmd_start(user)))),
-            "/help" => Ok(Some(Reply::new(Self::cmd_help()))),
+            "/help" => Ok(Some(Reply::new(Self::cmd_help(user)))),
             "/status" => Ok(Some(self.cmd_status(user).await?)),
             "/history" => Ok(Some(Reply::new(self.cmd_history(user).await?))),
             "/exercises" => Ok(Some(self.cmd_exercises())),
             "/clear" => Ok(Some(Reply::new(self.cmd_clear(user, platform).await?))),
+            "/feedback" => self.cmd_feedback(user, text).await,
             _ => Ok(None),
         }
     }
 
     fn cmd_start(&self, user: &User) -> String {
-        format!(
+        let mut msg = format!(
             "You're already registered, {}! Here's what I can help with:\n\
              - Tell me about your exercises and I'll log them\n\
              - /status -- see your current session\n\
              - /history -- recent workout summaries\n\
              - /exercises -- available exercises\n\
-             - /clear -- clear conversation context\n\
-             - /help -- all commands",
+             - /clear -- clear conversation context\n",
             user.name
-        )
+        );
+        if user.beta_tester {
+            msg.push_str("- /feedback -- file a bug report or feature request\n");
+        }
+        msg.push_str("- /help -- all commands");
+        msg
     }
 
-    fn cmd_help() -> String {
-        "Available commands:\n\
+    fn cmd_help(user: &User) -> String {
+        let mut msg = "Available commands:\n\
          /start -- Introduction and registration\n\
          /status -- Current session and today's stats\n\
          /history -- Last 5 workout summaries\n\
          /exercises -- List available exercises by muscle group\n\
-         /clear -- Clear conversation context (fresh start)\n\
-         /help -- This message\n\n\
-         You can also just chat naturally:\n\
-         - \"3 sets of bench press, 80kg, 8 reps\"\n\
-         - \"I ran 5km in 25 minutes\"\n\
-         - \"My shoulder is sore\"\n\
-         - \"End my session\"\n\
-         - \"What did I do today?\""
-            .to_string()
+         /clear -- Clear conversation context (fresh start)\n"
+            .to_string();
+        if user.beta_tester {
+            msg.push_str("/feedback <text> -- File a bug report or feature request\n");
+        }
+        msg.push_str(
+            "/help -- This message\n\n\
+             You can also just chat naturally:\n\
+             - \"3 sets of bench press, 80kg, 8 reps\"\n\
+             - \"I ran 5km in 25 minutes\"\n\
+             - \"My shoulder is sore\"\n\
+             - \"End my session\"\n\
+             - \"What did I do today?\"",
+        );
+        msg
     }
 
     async fn cmd_status(&self, user: &User) -> anyhow::Result<Reply> {
@@ -905,6 +927,52 @@ impl AssistantHandler {
         Ok("Conversation context cleared. I'll start fresh from here.".to_string())
     }
 
+    /// Handle `/feedback <text>` — file a GitHub issue on behalf of a beta tester.
+    ///
+    /// Non-beta users return `Ok(None)` so the dispatcher behaves exactly as if
+    /// the command did not exist; the message then flows to the LLM path,
+    /// preventing the existence of `/feedback` from leaking via a discriminating
+    /// "permission denied" error.
+    async fn cmd_feedback(&self, user: &User, raw_text: &str) -> anyhow::Result<Option<Reply>> {
+        if !user.beta_tester {
+            return Ok(None);
+        }
+        let Some(reporter) = self.issue_reporter.as_ref() else {
+            return Ok(Some(Reply::new("Feedback submission isn't configured on this server.")));
+        };
+
+        let body_raw = raw_text.strip_prefix("/feedback").or_else(|| raw_text.strip_prefix("/FEEDBACK")).unwrap_or(raw_text);
+        let body_raw = body_raw.trim();
+        if body_raw.is_empty() {
+            return Ok(Some(Reply::new("Please include a description, e.g. \"/feedback the bench-press timer never stops\".")));
+        }
+
+        let max_len = self.config.max_message_length;
+        let body_capped = if body_raw.len() > max_len {
+            let mut end = max_len;
+            while end > 0 && !body_raw.is_char_boundary(end) {
+                end -= 1;
+            }
+            &body_raw[..end]
+        } else {
+            body_raw
+        };
+
+        let title = build_feedback_title(body_capped);
+        let body = build_feedback_body(user, body_capped);
+
+        match reporter.create_issue(&title, &body).await {
+            Ok(url) => {
+                tracing::info!(user_id = user.id, %url, "feedback issue filed");
+                Ok(Some(Reply::new(format!("Filed: {url}"))))
+            }
+            Err(e) => {
+                tracing::error!(user_id = user.id, "feedback issue submission failed: {e:#}");
+                Ok(Some(Reply::new("Sorry, I couldn't file that right now. Please try again later.")))
+            }
+        }
+    }
+
     /// Hard server-side enforcement of the SESSION CONTINUITY ask-window. If
     /// there is an active session whose last activity was between 0.5 and 12
     /// hours ago, and we have not already asked the user about it on the
@@ -1095,6 +1163,25 @@ fn is_refusal_response(text: &str) -> bool {
 
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+const FEEDBACK_TITLE_MAX_CHARS: usize = 80;
+
+fn build_feedback_title(body: &str) -> String {
+    let summary: String = body.lines().next().unwrap_or(body).trim().to_string();
+    let truncated = if summary.chars().count() <= FEEDBACK_TITLE_MAX_CHARS {
+        summary
+    } else {
+        let mut s: String = summary.chars().take(FEEDBACK_TITLE_MAX_CHARS.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    };
+    format!("[corre-gym] {truncated}")
+}
+
+fn build_feedback_body(user: &User, body: &str) -> String {
+    let tg = user.telegram_id.as_deref().unwrap_or("-");
+    format!("{body}\n\n---\nReported by: {name} (telegram_id: {tg}) via /feedback", name = user.name)
 }
 
 /// Resolve the exercise an entry "belongs to" via its first set. Returns
@@ -1335,15 +1422,65 @@ mod tests {
             session_timeout_hours: 4,
             llm: None,
             voice: None,
+            github: None,
         }
     }
 
     async fn setup_handler(response: &str) -> (AssistantHandler, Arc<MockLlm>) {
+        setup_handler_with_reporter(response, None).await
+    }
+
+    async fn setup_handler_with_reporter(
+        response: &str,
+        reporter: Option<Arc<dyn IssueReporter>>,
+    ) -> (AssistantHandler, Arc<MockLlm>) {
         let db = Database::open_in_memory().unwrap();
         let db = Arc::new(Mutex::new(db));
         let llm = Arc::new(MockLlm::new(response));
-        let handler = AssistantHandler::new(db, Box::new(MockLlmWrapper(llm.clone())), test_config()).await.unwrap();
+        let handler = AssistantHandler::new_with_reporter(db, Box::new(MockLlmWrapper(llm.clone())), test_config(), reporter)
+            .await
+            .unwrap();
         (handler, llm)
+    }
+
+    struct MockIssueReporter {
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+        result: std::sync::Mutex<Result<String, String>>,
+    }
+
+    impl MockIssueReporter {
+        fn ok(url: &str) -> Arc<Self> {
+            Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()), result: std::sync::Mutex::new(Ok(url.to_string())) })
+        }
+
+        fn err(msg: &str) -> Arc<Self> {
+            Arc::new(Self { calls: std::sync::Mutex::new(Vec::new()), result: std::sync::Mutex::new(Err(msg.to_string())) })
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+
+        fn last_call(&self) -> Option<(String, String)> {
+            self.calls.lock().unwrap().last().cloned()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl IssueReporter for MockIssueReporter {
+        async fn create_issue(&self, title: &str, body: &str) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push((title.to_string(), body.to_string()));
+            match self.result.lock().unwrap().clone() {
+                Ok(url) => Ok(url),
+                Err(msg) => Err(anyhow::anyhow!(msg)),
+            }
+        }
+    }
+
+    async fn promote_to_beta(handler: &AssistantHandler, telegram_id: &str) {
+        let db = handler.db.lock().await;
+        let user = db.get_user_by_telegram_id(telegram_id).unwrap().unwrap();
+        db.set_beta_tester(user.id, true).unwrap();
     }
 
     struct MockLlmWrapper(Arc<MockLlm>);
@@ -2040,5 +2177,133 @@ mod tests {
         let session = db.get_active_session(user_id).unwrap().unwrap();
         let notes = session.notes.unwrap();
         assert!(notes.starts_with("plan:Push Day"));
+    }
+
+    // ─── /feedback command (beta-tester gated) ─────────────────────────────
+
+    #[tokio::test]
+    async fn slash_feedback_hidden_from_non_beta_help() {
+        let (handler, _) = setup_handler(r#"{"message": "x", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
+        assert!(!reply.text.contains("/feedback"), "non-beta /help must not advertise /feedback");
+    }
+
+    #[tokio::test]
+    async fn slash_feedback_visible_in_beta_help() {
+        let (handler, _) = setup_handler(r#"{"message": "x", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_to_beta(&handler, "12345").await;
+        let reply = handler.handle_text_message(&msg, "/help").await.unwrap();
+        assert!(reply.text.contains("/feedback"), "beta /help must advertise /feedback, got: {}", reply.text);
+    }
+
+    #[tokio::test]
+    async fn slash_feedback_non_beta_falls_through_to_llm() {
+        let reporter = MockIssueReporter::ok("https://github.com/x/y/issues/1");
+        let (handler, llm) = setup_handler_with_reporter(
+            r#"{"message": "I don't know that command.", "actions": []}"#,
+            Some(reporter.clone() as Arc<dyn IssueReporter>),
+        )
+        .await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+
+        let initial_calls = llm.recorded_requests().len();
+        let _ = handler.handle_text_message(&msg, "/feedback the squat rack is broken").await.unwrap();
+
+        assert!(
+            llm.recorded_requests().len() > initial_calls,
+            "non-beta /feedback should fall through to the LLM (no special handling)"
+        );
+        assert_eq!(reporter.call_count(), 0, "non-beta /feedback must not call the issue reporter");
+    }
+
+    #[tokio::test]
+    async fn slash_feedback_empty_body_reply() {
+        let reporter = MockIssueReporter::ok("https://github.com/x/y/issues/1");
+        let (handler, _) =
+            setup_handler_with_reporter(r#"{"message": "x", "actions": []}"#, Some(reporter.clone() as Arc<dyn IssueReporter>)).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_to_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/feedback").await.unwrap();
+        assert!(reply.text.to_lowercase().contains("include a description"), "got: {}", reply.text);
+        assert_eq!(reporter.call_count(), 0, "empty body must not reach the reporter");
+
+        let reply = handler.handle_text_message(&msg, "/feedback    ").await.unwrap();
+        assert!(reply.text.to_lowercase().contains("include a description"));
+        assert_eq!(reporter.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn slash_feedback_creates_issue_and_returns_url() {
+        let reporter = MockIssueReporter::ok("https://github.com/x/y/issues/42");
+        let (handler, _) =
+            setup_handler_with_reporter(r#"{"message": "x", "actions": []}"#, Some(reporter.clone() as Arc<dyn IssueReporter>)).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_to_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/feedback the bench-press timer never stops counting").await.unwrap();
+        assert!(reply.text.contains("https://github.com/x/y/issues/42"), "reply must echo issue URL, got: {}", reply.text);
+        assert_eq!(reporter.call_count(), 1);
+
+        let (title, body) = reporter.last_call().unwrap();
+        assert!(title.starts_with("[corre-gym] "), "title must be tagged: {title}");
+        assert!(title.contains("bench-press timer"));
+        assert!(body.contains("bench-press timer never stops counting"));
+        assert!(body.contains("Reported by:"));
+        assert!(body.contains("12345"), "footer must record the telegram_id for triage");
+    }
+
+    #[tokio::test]
+    async fn slash_feedback_no_reporter_configured_replies_gracefully() {
+        let (handler, _) = setup_handler(r#"{"message": "x", "actions": []}"#).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_to_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/feedback something broken").await.unwrap();
+        assert!(reply.text.to_lowercase().contains("isn't configured"), "got: {}", reply.text);
+    }
+
+    #[tokio::test]
+    async fn slash_feedback_reporter_error_replies_with_user_safe_message() {
+        let reporter = MockIssueReporter::err("github API 401: Bad credentials");
+        let (handler, _) =
+            setup_handler_with_reporter(r#"{"message": "x", "actions": []}"#, Some(reporter.clone() as Arc<dyn IssueReporter>)).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        promote_to_beta(&handler, "12345").await;
+
+        let reply = handler.handle_text_message(&msg, "/feedback whatever").await.unwrap();
+        assert!(reply.text.to_lowercase().contains("couldn't file"), "got: {}", reply.text);
+        assert!(!reply.text.contains("401"), "must not leak status code: {}", reply.text);
+        assert!(!reply.text.to_lowercase().contains("github"), "must not leak integration name: {}", reply.text);
+        assert_eq!(reporter.call_count(), 1);
+    }
+
+    #[test]
+    fn build_feedback_title_caps_and_tags() {
+        let long_body = "x".repeat(500);
+        let title = build_feedback_title(&long_body);
+        assert!(title.starts_with("[corre-gym] "));
+        assert!(title.chars().count() <= "[corre-gym] ".chars().count() + FEEDBACK_TITLE_MAX_CHARS);
+        assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn build_feedback_body_appends_reporter_footer() {
+        let user =
+            User { id: 7, name: "Alice".into(), telegram_id: Some("999".into()), signal_id: None, timezone: "UTC".into(),
+                created_at: String::new(), updated_at: String::new(), beta_tester: true };
+        let body = build_feedback_body(&user, "the squat rack is broken");
+        assert!(body.starts_with("the squat rack is broken"));
+        assert!(body.contains("Reported by: Alice"));
+        assert!(body.contains("telegram_id: 999"));
     }
 }

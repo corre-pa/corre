@@ -11,6 +11,7 @@ use corre_core::config::CorreConfig;
 use corre_gym::assistant::AssistantHandler;
 use corre_gym::config::GymConfig;
 use corre_gym::db::Database;
+use corre_gym::github::{GithubIssueReporter, IssueReporter};
 use corre_gym::telegram::{Message, TelegramClient, Voice};
 use corre_gym::voice::VoicePipeline;
 use corre_gym::web;
@@ -110,10 +111,20 @@ async fn setup()
 
     let allowed_ids = gym_config.telegram_allowed_ids.clone();
 
-    // 8. Create handler
-    let handler = AssistantHandler::new(db.clone(), llm, gym_config.clone()).await?;
+    // 8. Optional feedback reporter (gated by [gym.github] config + per-user beta flag)
+    let issue_reporter: Option<Arc<dyn IssueReporter>> = match &gym_config.github {
+        Some(github_cfg) => {
+            let reporter = GithubIssueReporter::new(github_cfg).context("constructing GitHub issue reporter")?;
+            tracing::info!(repo = %github_cfg.repo, "Feedback target configured");
+            Some(Arc::new(reporter))
+        }
+        None => None,
+    };
 
-    // 9. Voice pipeline (optional)
+    // 9. Create handler
+    let handler = AssistantHandler::new_with_reporter(db.clone(), llm, gym_config.clone(), issue_reporter).await?;
+
+    // 10. Voice pipeline (optional)
     let voice_pipeline = match &gym_config.voice {
         Some(voice_config) if voice_config.stt_enabled => {
             voice_config.validate()?;
