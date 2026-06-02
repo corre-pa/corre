@@ -365,7 +365,23 @@ pub async fn chat_send(auth: AuthUser, State(state): State<Arc<AppState>>, Json(
     };
 
     match handler.handle_message_for_user(&auth.user, &body.message, "web").await {
-        Ok(reply) => Json(serde_json::json!({ "reply": reply.text })).into_response(),
+        Ok(reply) => {
+            // Surface the rest-timer directive to the API consumer. The web UI
+            // currently ignores it; the e2e harness uses it to assert timer
+            // behaviour without poking the Telegram-side task plumbing.
+            let mut body = serde_json::json!({ "reply": reply.text });
+            if let Some(timer) = reply.rest_timer {
+                body["rest_timer"] = serde_json::json!({
+                    "duration_secs": timer.duration_secs,
+                    "exercise_name": timer.exercise_name,
+                    "is_superset": timer.is_superset,
+                });
+            }
+            if reply.cancel_rest_timer {
+                body["cancel_rest_timer"] = serde_json::Value::Bool(true);
+            }
+            Json(body).into_response()
+        }
         Err(e) => {
             tracing::error!("Chat error: {e:#}");
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Processing failed" }))).into_response()

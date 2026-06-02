@@ -5,7 +5,7 @@ use chrono::{NaiveDateTime, Utc};
 use corre_core::app::{LlmMessage, LlmProvider, LlmRequest, LlmRole};
 use tokio::sync::Mutex;
 
-use crate::config::GymConfig;
+use crate::config::{GymConfig, RestTimerConfig};
 use crate::db::{
     ConversationRole, Database, Difficulty, ExerciseEntry, ExerciseSet, ExerciseTypeWithAncestry, MeasurementType, Session, SetEdit,
     SetEditError, User, new_conversation_message, new_exercise_entry_at, new_exercise_goal, new_exercise_set, new_health_entry, new_user,
@@ -22,15 +22,65 @@ use super::prompts::{
 pub struct Reply {
     pub text: String,
     pub parse_mode: Option<&'static str>,
+    /// When set, the transport (Telegram) should arm a rest timer for this chat.
+    pub rest_timer: Option<RestTimer>,
+    /// When set, any pending rest timer for this chat should be cancelled.
+    pub cancel_rest_timer: bool,
 }
 
 impl Reply {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into(), parse_mode: None }
+        Self { text: text.into(), parse_mode: None, rest_timer: None, cancel_rest_timer: false }
     }
 
     pub fn as_html(&mut self) {
         self.parse_mode = Some("HTML");
+    }
+}
+
+/// Directive emitted alongside a successful set log: arm a rest countdown so the
+/// transport can ping the user as the rest period elapses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestTimer {
+    pub duration_secs: u32,
+    pub exercise_name: String,
+    pub is_superset: bool,
+}
+
+/// Maps a difficulty (and superset state) onto the configured rest duration.
+fn rest_duration_for(cfg: &RestTimerConfig, difficulty: Difficulty, is_superset: bool) -> u32 {
+    if is_superset {
+        return cfg.superset_secs;
+    }
+    match difficulty {
+        Difficulty::Easy => cfg.easy_secs,
+        Difficulty::Medium => cfg.medium_secs,
+        Difficulty::Hard => cfg.hard_secs,
+        Difficulty::Failure => cfg.failure_secs,
+    }
+}
+
+/// Outcome of a single `execute_action` call. The original return was an
+/// optional suffix; we extend it so action handlers can also describe a
+/// rest-timer directive (either "arm this" or "cancel any pending").
+#[derive(Default)]
+struct ActionOutcome {
+    suffix: Option<String>,
+    rest_timer: Option<RestTimer>,
+    cancel_rest_timer: bool,
+}
+
+impl ActionOutcome {
+    fn empty() -> Self {
+        Self::default()
+    }
+
+    fn with_suffix(suffix: Option<String>) -> Self {
+        Self { suffix, rest_timer: None, cancel_rest_timer: false }
+    }
+
+    fn cancel() -> Self {
+        Self { suffix: None, rest_timer: None, cancel_rest_timer: true }
     }
 }
 
@@ -115,10 +165,22 @@ impl AssistantHandler {
 
         let mut failures: Vec<String> = Vec::new();
         let mut suffixes: Vec<String> = Vec::new();
+        let mut last_timer: Option<RestTimer> = None;
+        let mut cancel_timer = false;
         for action in &parsed.actions {
             match self.execute_action(action, user).await {
-                Ok(Some(suffix)) => suffixes.push(suffix),
-                Ok(None) => {}
+                Ok(outcome) => {
+                    if let Some(s) = outcome.suffix {
+                        suffixes.push(s);
+                    }
+                    if outcome.cancel_rest_timer {
+                        cancel_timer = true;
+                        last_timer = None;
+                    }
+                    if let Some(t) = outcome.rest_timer {
+                        last_timer = Some(t);
+                    }
+                }
                 Err(e) => {
                     tracing::warn!("Action execution failed: {e:#}");
                     failures.push(format!("{e:#}"));
@@ -126,13 +188,13 @@ impl AssistantHandler {
             }
         }
 
-        let mut reply = parsed.message.clone();
+        let mut reply_text = parsed.message.clone();
         for s in &suffixes {
-            reply.push_str("\n\n");
-            reply.push_str(s);
+            reply_text.push_str("\n\n");
+            reply_text.push_str(s);
         }
         if !failures.is_empty() {
-            reply.push_str(&format!("\n\n(Note: some actions failed: {})", failures.join("; ")));
+            reply_text.push_str(&format!("\n\n(Note: some actions failed: {})", failures.join("; ")));
         }
 
         if is_refusal {
@@ -143,7 +205,10 @@ impl AssistantHandler {
 
         self.db.lock().await.prune_old_messages(user.id, self.config.conversation_history_limit * 2)?;
 
-        Ok(Reply::new(reply))
+        let mut reply = Reply::new(reply_text);
+        reply.rest_timer = last_timer;
+        reply.cancel_rest_timer = cancel_timer;
+        Ok(reply)
     }
 
     async fn ensure_user(&self, message: &TgMessage) -> anyhow::Result<(User, bool)> {
@@ -519,9 +584,11 @@ impl AssistantHandler {
         Ok(response.content)
     }
 
-    /// Returns an optional suffix appended to the assistant's reply (set-count
-    /// checkpoint, premature-close pushback, leaked-entry warning).
-    async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<Option<String>> {
+    /// Returns an `ActionOutcome` describing any suffix appended to the assistant's
+    /// reply (set-count checkpoint, premature-close pushback, leaked-entry warning),
+    /// any rest timer to arm after a successful log, and any cancellation directive
+    /// for previously-armed rest timers.
+    async fn execute_action(&self, action: &AssistantAction, user: &User) -> anyhow::Result<ActionOutcome> {
         tracing::debug!(action = ?action, user_id = user.id, "Executing action");
         match action {
             AssistantAction::LogExercise { exercise, reps, weight_kg, perceived_difficulty, comment, superset } => {
@@ -529,7 +596,7 @@ impl AssistantHandler {
                 let session = self.ensure_session(user).await?;
                 let entry_id = match self.resolve_entry_for_log(user.id, session.id, et.exercise_type.id, *superset).await? {
                     LogEntryTarget::AskSuperset { ongoing_exercise } => {
-                        return Ok(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name)));
+                        return Ok(ActionOutcome::with_suffix(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name))));
                     }
                     LogEntryTarget::Use(id) => id,
                 };
@@ -545,39 +612,47 @@ impl AssistantHandler {
                     s.comment = comment.clone();
                     db.insert_set(&s)?;
                 }
-                Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
+                let suffix = self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?;
+                let rest_timer = self.build_rest_timer(session.id, &et.exercise_type.name, pd).await?;
+                Ok(ActionOutcome { suffix, rest_timer, cancel_rest_timer: false })
             }
             AssistantAction::LogExerciseTimed { exercise, duration_secs, perceived_difficulty, comment, superset } => {
                 let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
                 let entry_id = match self.resolve_entry_for_log(user.id, session.id, et.exercise_type.id, *superset).await? {
                     LogEntryTarget::AskSuperset { ongoing_exercise } => {
-                        return Ok(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name)));
+                        return Ok(ActionOutcome::with_suffix(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name))));
                     }
                     LogEntryTarget::Use(id) => id,
                 };
+                let pd = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, MeasurementType::TimeBased, *duration_secs as f64);
-                s.perceived_difficulty = perceived_difficulty.unwrap_or(Difficulty::Medium);
+                s.perceived_difficulty = pd;
                 s.comment = comment.clone();
                 self.db.lock().await.insert_set(&s)?;
-                Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
+                let suffix = self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?;
+                let rest_timer = self.build_rest_timer(session.id, &et.exercise_type.name, pd).await?;
+                Ok(ActionOutcome { suffix, rest_timer, cancel_rest_timer: false })
             }
             AssistantAction::LogExerciseDistance { exercise, distance_m, duration_secs, perceived_difficulty, comment, superset } => {
                 let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
                 let session = self.ensure_session(user).await?;
                 let entry_id = match self.resolve_entry_for_log(user.id, session.id, et.exercise_type.id, *superset).await? {
                     LogEntryTarget::AskSuperset { ongoing_exercise } => {
-                        return Ok(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name)));
+                        return Ok(ActionOutcome::with_suffix(Some(superset_prompt(&ongoing_exercise, &et.exercise_type.name))));
                     }
                     LogEntryTarget::Use(id) => id,
                 };
                 let value = distance_m.unwrap_or_else(|| duration_secs.unwrap_or(0) as f64);
                 let mt = if distance_m.is_some() { MeasurementType::DistanceBased } else { MeasurementType::TimeBased };
+                let pd = perceived_difficulty.unwrap_or(Difficulty::Medium);
                 let mut s = new_exercise_set(entry_id, et.exercise_type.id, mt, value);
-                s.perceived_difficulty = perceived_difficulty.unwrap_or(Difficulty::Medium);
+                s.perceived_difficulty = pd;
                 s.comment = comment.clone();
                 self.db.lock().await.insert_set(&s)?;
-                Ok(self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?)
+                let suffix = self.set_count_checkpoint_suffix(entry_id, &et.exercise_type.name).await?;
+                let rest_timer = self.build_rest_timer(session.id, &et.exercise_type.name, pd).await?;
+                Ok(ActionOutcome { suffix, rest_timer, cancel_rest_timer: false })
             }
             AssistantAction::StartSession { notes, plan } => {
                 let db = self.db.lock().await;
@@ -592,10 +667,10 @@ impl AssistantHandler {
                             entries = if open.len() == 1 { "entry" } else { "entries" },
                             list = names.join(", "),
                         );
-                        return Ok(Some(suffix));
+                        return Ok(ActionOutcome::with_suffix(Some(suffix)));
                     }
                     tracing::debug!("Session already active, skipping start");
-                    return Ok(None);
+                    return Ok(ActionOutcome::empty());
                 }
                 // No active session — clean up any leaked open entries from previously
                 // ended sessions before starting fresh.
@@ -605,7 +680,7 @@ impl AssistantHandler {
                 let combined_notes = combine_plan_with_notes(plan.as_deref(), notes.as_deref());
                 let session = db.start_session(user.id, combined_notes.as_deref())?;
                 tracing::debug!(id = session.id, plan = ?plan, "Started session");
-                Ok(None)
+                Ok(ActionOutcome::empty())
             }
             AssistantAction::EndSession => {
                 let db = self.db.lock().await;
@@ -615,7 +690,7 @@ impl AssistantHandler {
                 } else {
                     tracing::debug!("No active session to end");
                 }
-                Ok(None)
+                Ok(ActionOutcome::cancel())
             }
             AssistantAction::CloseExerciseEntry { exercise, entry_id } => {
                 self.close_exercise_entry_action(user, exercise.as_deref(), *entry_id, false).await
@@ -628,7 +703,7 @@ impl AssistantHandler {
                 let entry = db.get_entry(*entry_id)?.ok_or_else(|| anyhow::anyhow!("entry {entry_id} not found"))?;
                 anyhow::ensure!(entry.user_id == user.id, "entry {entry_id} does not belong to user");
                 db.delete_entry(*entry_id)?;
-                Ok(None)
+                Ok(ActionOutcome::cancel())
             }
             AssistantAction::CloseAllOpenEntries => {
                 let db = self.db.lock().await;
@@ -636,7 +711,7 @@ impl AssistantHandler {
                     let n = db.close_open_entries_for_session(session.id, None)?;
                     tracing::debug!(session_id = session.id, closed = n, "Closed all open entries");
                 }
-                Ok(None)
+                Ok(ActionOutcome::cancel())
             }
             AssistantAction::LogHealth { entry_type, body_part, severity, description } => {
                 let mut entry = new_health_entry(user.id, *entry_type, description);
@@ -646,7 +721,7 @@ impl AssistantHandler {
                 }
                 tracing::debug!(entry_type = ?entry_type, body_part = ?body_part, severity = ?severity, "Inserting health entry");
                 self.db.lock().await.insert_health_entry(&entry)?;
-                Ok(None)
+                Ok(ActionOutcome::empty())
             }
             AssistantAction::ResolveHealth { description } => {
                 let db = self.db.lock().await;
@@ -657,7 +732,7 @@ impl AssistantHandler {
                 } else {
                     tracing::debug!(search = %description, "No matching health entry found to resolve");
                 }
-                Ok(None)
+                Ok(ActionOutcome::empty())
             }
             AssistantAction::SetGoal { exercise, target_value, end_date } => {
                 let et = find_exercise_type(&self.catalogue, exercise).ok_or_else(|| anyhow::anyhow!("Unknown exercise: {exercise}"))?;
@@ -665,16 +740,36 @@ impl AssistantHandler {
                 goal.end_date = end_date.clone();
                 tracing::debug!(exercise = %et.exercise_type.name, target = %target_value, end_date = ?end_date, "Inserting goal");
                 self.db.lock().await.insert_goal(&goal)?;
-                Ok(None)
+                Ok(ActionOutcome::empty())
             }
             AssistantAction::EditSet { exercise, new_exercise, new_reps, new_value, new_difficulty } => {
                 self.edit_set_action(user, exercise.as_deref(), new_exercise.as_deref(), *new_reps, *new_value, *new_difficulty).await
             }
             AssistantAction::Unknown => {
                 tracing::debug!("Ignoring unknown action type from LLM");
-                Ok(None)
+                Ok(ActionOutcome::empty())
             }
         }
+    }
+
+    /// Compute a `RestTimer` directive for a just-logged set. Returns `None`
+    /// when the rest-timer feature is disabled in config.
+    ///
+    /// "Is this a superset?" is decided by checking how many open entries the
+    /// active session has *right now*: ≥2 means we're mid-superset, which gets
+    /// the short rest. This matches the existing canonical signal used by
+    /// `/status` (see `cmd_status_renders_superset_label_when_two_open`).
+    async fn build_rest_timer(&self, session_id: i64, exercise_name: &str, difficulty: Difficulty) -> anyhow::Result<Option<RestTimer>> {
+        let cfg = self.config.rest_timer_effective();
+        if !cfg.enabled {
+            return Ok(None);
+        }
+        let is_superset = {
+            let db = self.db.lock().await;
+            db.list_open_entries_for_session(session_id)?.len() >= 2
+        };
+        let duration_secs = rest_duration_for(&cfg, difficulty, is_superset);
+        Ok(Some(RestTimer { duration_secs, exercise_name: exercise_name.to_string(), is_superset }))
     }
 
     async fn ensure_session(&self, user: &User) -> anyhow::Result<crate::db::Session> {
@@ -727,14 +822,14 @@ impl AssistantHandler {
     /// Resolve an entry to close (explicit id > exercise-name match > most recent
     /// open in the active session). When `confirm` is false and the resolved entry
     /// has fewer than 3 sets, returns the pushback suffix and leaves the entry
-    /// open.
+    /// open. On a successful close, signals rest-timer cancellation.
     async fn close_exercise_entry_action(
         &self,
         user: &User,
         exercise: Option<&str>,
         entry_id: Option<i64>,
         confirm: bool,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> anyhow::Result<ActionOutcome> {
         let db = self.db.lock().await;
         let active = db.get_active_session(user.id)?;
         let resolved = if let Some(id) = entry_id {
@@ -763,10 +858,10 @@ impl AssistantHandler {
                 "You've only done {count} {sets} of {name}. You should really push for one more! Should we keep going?",
                 sets = if count == 1 { "set" } else { "sets" },
             );
-            return Ok(Some(suffix));
+            return Ok(ActionOutcome::with_suffix(Some(suffix)));
         }
         db.end_entry(resolved.id)?;
-        Ok(None)
+        Ok(ActionOutcome::cancel())
     }
 
     /// Edit a recently-logged set. Resolves the target by recency, optionally
@@ -781,7 +876,7 @@ impl AssistantHandler {
         new_reps: Option<i32>,
         new_value: Option<f64>,
         new_difficulty: Option<Difficulty>,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> anyhow::Result<ActionOutcome> {
         let db = self.db.lock().await;
 
         let filter_id = match exercise {
@@ -851,9 +946,9 @@ impl AssistantHandler {
         }
 
         if parts.is_empty() {
-            return Ok(None);
+            return Ok(ActionOutcome::empty());
         }
-        Ok(Some(format!("Updated your last set — {}.", parts.join(", "))))
+        Ok(ActionOutcome::with_suffix(Some(format!("Updated your last set — {}.", parts.join(", ")))))
     }
 
     /// Set-count checkpoint: every time the user logs a set in an open entry that
@@ -1335,6 +1430,7 @@ mod tests {
             session_timeout_hours: 4,
             llm: None,
             voice: None,
+            rest_timer: None,
         }
     }
 
@@ -2040,5 +2136,155 @@ mod tests {
         let session = db.get_active_session(user_id).unwrap().unwrap();
         let notes = session.notes.unwrap();
         assert!(notes.starts_with("plan:Push Day"));
+    }
+
+    // ─── Rest-timer behaviour ──────────────────────────────────────────────
+
+    async fn setup_handler_with_rest_timer(response: &str, rest_timer: Option<RestTimerConfig>) -> (AssistantHandler, Arc<MockLlm>) {
+        let db = Database::open_in_memory().unwrap();
+        let db = Arc::new(Mutex::new(db));
+        let llm = Arc::new(MockLlm::new(response));
+        let mut cfg = test_config();
+        cfg.rest_timer = rest_timer;
+        let handler = AssistantHandler::new(db, Box::new(MockLlmWrapper(llm.clone())), cfg).await.unwrap();
+        (handler, llm)
+    }
+
+    #[tokio::test]
+    async fn rest_timer_easy_set_returns_120s() {
+        let response = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "easy"}
+        ]}"#;
+        let (handler, _) = setup_handler(response).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "bench 80kg 8 easy").await.unwrap();
+        let timer = reply.rest_timer.expect("expected a rest timer");
+        assert_eq!(timer.duration_secs, 120);
+        assert_eq!(timer.exercise_name, "Bench Press");
+        assert!(!timer.is_superset);
+        assert!(!reply.cancel_rest_timer);
+    }
+
+    #[tokio::test]
+    async fn rest_timer_medium_default_when_difficulty_omitted() {
+        let response = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0}
+        ]}"#;
+        let (handler, _) = setup_handler(response).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "bench 80kg 8").await.unwrap();
+        let timer = reply.rest_timer.expect("expected a rest timer");
+        assert_eq!(timer.duration_secs, 180, "missing difficulty defaults to Medium → 180s");
+    }
+
+    #[tokio::test]
+    async fn rest_timer_failure_returns_300s() {
+        let response = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 1, "weight_kg": 100.0, "perceived_difficulty": "failure"}
+        ]}"#;
+        let (handler, _) = setup_handler(response).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "bench 100kg failure").await.unwrap();
+        let timer = reply.rest_timer.expect("expected a rest timer");
+        assert_eq!(timer.duration_secs, 300);
+    }
+
+    #[tokio::test]
+    async fn rest_timer_superset_overrides_difficulty() {
+        // First, log a Bench Press set to open one entry.
+        let (handler, llm) = setup_handler(
+            r#"{"message": "Logged.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "hard"}
+            ]}"#,
+        )
+        .await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench 80kg 8 hard").await.unwrap();
+
+        // Now log a Pull-Up — that opens a second concurrent entry. Even with
+        // `hard` difficulty, the superset short-rest must dominate.
+        llm.set_response(
+            r#"{"message": "Logged.", "actions": [
+                {"type": "log_exercise", "exercise": "Pull-Up", "reps": 8, "perceived_difficulty": "hard"}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "pull-ups 8 hard").await.unwrap();
+        let timer = reply.rest_timer.expect("expected a rest timer");
+        assert!(timer.is_superset);
+        assert_eq!(timer.duration_secs, 60);
+    }
+
+    #[tokio::test]
+    async fn rest_timer_omitted_when_disabled() {
+        let response = r#"{"message": "Logged.", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "easy"}
+        ]}"#;
+        let disabled = RestTimerConfig { enabled: false, ..RestTimerConfig::default() };
+        let (handler, _) = setup_handler_with_rest_timer(response, Some(disabled)).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "bench 80kg 8 easy").await.unwrap();
+        assert!(reply.rest_timer.is_none());
+    }
+
+    #[tokio::test]
+    async fn rest_timer_only_last_set_kept_when_batched() {
+        // Three log_exercise actions in a single envelope. The reply must carry
+        // exactly one timer — the final one.
+        let response = r#"{"message": "Done!", "actions": [
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 60.0, "perceived_difficulty": "easy"},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 6, "weight_kg": 70.0, "perceived_difficulty": "medium"},
+            {"type": "log_exercise", "exercise": "Bench Press", "reps": 4, "weight_kg": 80.0, "perceived_difficulty": "hard"}
+        ]}"#;
+        let (handler, _) = setup_handler(response).await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let reply = handler.handle_text_message(&msg, "drop set bench").await.unwrap();
+        let timer = reply.rest_timer.expect("expected a rest timer");
+        // Last set was Hard → 300 s.
+        assert_eq!(timer.duration_secs, 300);
+        assert_eq!(timer.exercise_name, "Bench Press");
+    }
+
+    #[tokio::test]
+    async fn rest_timer_absent_for_ambiguous_superset_prompt() {
+        // Open a Flat Barbell Bench Press entry.
+        let (handler, llm) = setup_handler("").await;
+        let msg = make_message(12345, "hello");
+        open_variation_entry(&handler, &llm, &msg).await;
+
+        // Logging the parent "Bench Press" triggers the AskSuperset prompt:
+        // the set is not logged → no timer should be emitted.
+        llm.set_response(
+            r#"{"message": "Sure.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "medium"}
+            ]}"#,
+        );
+        let reply = handler.handle_text_message(&msg, "bench press 80kg 8 reps medium").await.unwrap();
+        assert!(reply.rest_timer.is_none(), "ambiguous (un-logged) set must not emit a rest timer");
+    }
+
+    #[tokio::test]
+    async fn end_session_cancels_pending_timer() {
+        // Log a set first so a timer is conceptually pending.
+        let (handler, llm) = setup_handler(
+            r#"{"message": "Logged.", "actions": [
+                {"type": "log_exercise", "exercise": "Bench Press", "reps": 8, "weight_kg": 80.0, "perceived_difficulty": "easy"}
+            ]}"#,
+        )
+        .await;
+        let msg = make_message(12345, "hello");
+        let _ = handler.handle_text_message(&msg, "hello").await.unwrap();
+        let _ = handler.handle_text_message(&msg, "bench 80kg 8 easy").await.unwrap();
+
+        // EndSession must signal cancel_rest_timer.
+        llm.set_response(r#"{"message": "Ending.", "actions": [{"type": "end_session"}]}"#);
+        let reply = handler.handle_text_message(&msg, "end session").await.unwrap();
+        assert!(reply.cancel_rest_timer);
+        assert!(reply.rest_timer.is_none());
     }
 }

@@ -562,6 +562,27 @@ MCP servers are configured as individual files under `config/mcp/` (see the MCP 
 section above). To add a new app, either install a plugin through the dashboard or append
 an `[[apps]]` entry referencing the MCP servers it needs.
 
+### Corre gym: rest timer (`[gym.rest_timer]`)
+
+After each logged set, the gym bot can ping you over Telegram as the rest period elapses
+— a 10-second warning, a 5-second warning, then a "rest complete" message. Logging
+another set restarts the countdown; ending the session or closing/deleting the entry
+cancels it. Rest duration is chosen from the set's `perceived_difficulty`, with a short
+override when you are mid-superset (two or more open exercise entries):
+
+```toml
+[gym.rest_timer]
+enabled = true        # default; set to false to disable rest-timer notifications
+easy_secs = 120       # rest after an Easy set (2 min)
+medium_secs = 180     # rest after a Medium set (3 min)
+hard_secs = 300       # rest after a Hard set (5 min)
+failure_secs = 300    # rest after a Failure set (5 min)
+superset_secs = 60    # rest when supersetting (≥2 open entries)
+```
+
+Defaults are baked in, so omitting `[gym.rest_timer]` is equivalent to declaring it
+with the values shown above.
+
 ## License
 
 [MPL-2.0](LICENSE.md)

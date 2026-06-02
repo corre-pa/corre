@@ -35,9 +35,21 @@ impl fmt::Debug for RegisteredUser {
 }
 
 /// Reply from `POST /api/chat`. Just the assistant's text — actions live in the DB.
+///
+/// `rest_timer` and `cancel_rest_timer` mirror the optional sibling fields the
+/// API emits when a logged set arms a rest countdown or ends one.
 #[derive(Debug, Clone)]
 pub struct ChatReply {
     pub text: String,
+    pub rest_timer: Option<RestTimerView>,
+    pub cancel_rest_timer: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestTimerView {
+    pub duration_secs: u32,
+    pub exercise_name: String,
+    pub is_superset: bool,
 }
 
 /// Per-scenario state. A fresh `GymWorld` is created for every scenario, which means a

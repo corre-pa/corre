@@ -7,5 +7,6 @@ pub mod chat;
 pub mod entries;
 pub mod goals;
 pub mod health;
+pub mod rest_timer;
 pub mod session;
 pub mod sets;

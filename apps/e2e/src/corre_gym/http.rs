@@ -3,7 +3,7 @@
 use anyhow::{Context as _, anyhow};
 use reqwest::StatusCode;
 
-use super::world::{ChatReply, GymWorld};
+use super::world::{ChatReply, GymWorld, RestTimerView};
 
 /// POST `/api/chat` as the given user alias. Returns the parsed `{ "reply": "…" }`.
 ///
@@ -28,8 +28,15 @@ pub async fn send_chat(world: &GymWorld, alias: &str, message: &str) -> anyhow::
     }
     let text =
         body.get("reply").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("/api/chat response missing `reply` string: {body}"))?.to_string();
-    tracing::debug!(reply_len = text.len(), "received /api/chat reply");
-    Ok(ChatReply { text })
+    let rest_timer = body.get("rest_timer").and_then(|v| {
+        let duration = v.get("duration_secs")?.as_u64()? as u32;
+        let exercise_name = v.get("exercise_name")?.as_str()?.to_string();
+        let is_superset = v.get("is_superset")?.as_bool().unwrap_or(false);
+        Some(RestTimerView { duration_secs: duration, exercise_name, is_superset })
+    });
+    let cancel_rest_timer = body.get("cancel_rest_timer").and_then(|v| v.as_bool()).unwrap_or(false);
+    tracing::debug!(reply_len = text.len(), rest_timer = ?rest_timer, cancel_rest_timer, "received /api/chat reply");
+    Ok(ChatReply { text, rest_timer, cancel_rest_timer })
 }
 
 /// Like [`send_chat`] but returns the status code instead of bailing on non-2xx.
