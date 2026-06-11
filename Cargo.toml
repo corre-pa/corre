@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 license = "MPL-2"
 description = "a platform for agentic applications"
@@ -29,18 +29,18 @@ repository = "https://github.com/corre-pa/corre"
 
 [workspace.dependencies]
 # Internal crates
-corre-sdk = { version = "0.20",  path = "crates/corre-sdk" }
-corre-core = { version = "0.20",  path = "crates/corre-core" }
-corre-mcp = { version = "0.20",  path = "crates/corre-mcp" }
-corre-llm = { version = "0.20",  path = "crates/corre-llm" }
-corre-news = { version = "0.20",  path = "crates/corre-news" }
-corre-plugin = { version = "0.20",  path = "crates/corre-plugin" }
-corre-safety = { version = "0.20",  path = "crates/corre-safety" }
-corre-dashboard = { version = "0.20",  path = "crates/corre-dashboard" }
-corre-registry = { version = "0.20",  path = "crates/corre-registry" }
-corre-host = { version = "0.20",  path = "crates/corre-host" }
-daily-brief = { version = "0.20",  path = "apps/daily-brief" }
-corre-gym = { version = "0.20",  path = "apps/corre-gym" }
+corre-sdk = { version = "0.21",  path = "crates/corre-sdk" }
+corre-core = { version = "0.21",  path = "crates/corre-core" }
+corre-mcp = { version = "0.21",  path = "crates/corre-mcp" }
+corre-llm = { version = "0.21",  path = "crates/corre-llm" }
+corre-news = { version = "0.21",  path = "crates/corre-news" }
+corre-plugin = { version = "0.21",  path = "crates/corre-plugin" }
+corre-safety = { version = "0.21",  path = "crates/corre-safety" }
+corre-dashboard = { version = "0.21",  path = "crates/corre-dashboard" }
+corre-registry = { version = "0.21",  path = "crates/corre-registry" }
+corre-host = { version = "0.21",  path = "crates/corre-host" }
+daily-brief = { version = "0.21",  path = "apps/daily-brief" }
+corre-gym = { version = "0.21",  path = "apps/corre-gym" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
