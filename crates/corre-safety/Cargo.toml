@@ -2,6 +2,9 @@
 name = "corre-safety"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Prompt injection defense and content sanitization middleware for Corre"
 
 [dependencies]
 corre-core = { workspace = true }

@@ -2,6 +2,9 @@
 name = "mcp-smtp"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server for sending email via SMTP"
 
 [[bin]]
 name = "mcp-smtp"

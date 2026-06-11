@@ -2,6 +2,9 @@
 name = "corre-news"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CorreNews web server for browsing and searching archived editions"
 
 [[bin]]
 name = "corre-news"
@@ -10,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 corre-sdk = { workspace = true }
 corre-core = { workspace = true }
-daily-brief = { path = "../../apps/daily-brief" }
+daily-brief = { workspace = true }
 axum = { workspace = true }
 askama = { workspace = true, features = ["serde_json"] }
 tantivy = { workspace = true }

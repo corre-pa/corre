@@ -2,6 +2,8 @@
 name = "rolodex"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Automated personal contact engagement app for Corre"
 
 [lib]

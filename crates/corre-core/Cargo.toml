@@ -2,6 +2,9 @@
 name = "corre-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core types, traits, config, and scheduler for Corre"
 
 [dependencies]
 corre-sdk = { workspace = true }

@@ -2,6 +2,9 @@
 name = "corre-plugin"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Built-in app plugin loader and runner for Corre"
 
 [dependencies]
 corre-sdk = { workspace = true }

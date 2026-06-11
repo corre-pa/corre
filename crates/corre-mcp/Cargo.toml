@@ -2,6 +2,9 @@
 name = "corre-mcp"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server pool manager for Corre"
 
 [dependencies]
 corre-core = { workspace = true }

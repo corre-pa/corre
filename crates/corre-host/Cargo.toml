@@ -2,7 +2,9 @@
 name = "corre-host"
 version.workspace = true
 edition.workspace = true
-description = "Subprocess app host and registry for Corre"
+license.workspace = true
+repository.workspace = true
+description = "Subprocess app host and CCPP protocol handler for Corre"
 
 [dependencies]
 corre-sdk = { workspace = true }

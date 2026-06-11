@@ -2,6 +2,8 @@
 name = "daily-brief"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Standalone daily research brief app binary"
 
 [lib]
